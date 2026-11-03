@@ -1867,16 +1867,21 @@ export default function App() {
   const [nouvelAdmin, setNouvelAdmin] = useState({ nom: "", tel: "" });
   const CODE_DEV = "5544894";
 
-  // Chargement automatique des comptes enregistrés en ligne sur Supabase
+  // Chargement et initialisation automatique des comptes enregistrés sur Supabase
   useEffect(() => {
     async function chargerComptesSupabase() {
       try {
         const { data, error } = await supabase.from("users").select("*");
         if (!error && data && data.length > 0) {
           setComptes(data);
+        } else {
+          // Si la table est vide, insérer les comptes par défaut dans Supabase
+          for (const c of COMPTES_PAR_DEFAUT) {
+            await synchroniserCompteSupabase(c);
+          }
         }
       } catch (e) {
-        console.warn("Notice chargement comptes Supabase:", e);
+        console.warn("Notice initialisation comptes Supabase:", e);
       }
     }
     chargerComptesSupabase();
