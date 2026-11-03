@@ -1805,6 +1805,11 @@ function VueAdmin({ produits, setProduits, marques, setMarques, ventes, genererM
   );
 }
 
+const COMPTES_PAR_DEFAUT = [
+  { id: 1, nom: "Administrateur Principal", tel: "+225 07 00 00 00 00", pin: "1234", role: "admin" },
+  { id: 2, nom: "Vendeur Exemple", tel: "+225 05 00 00 00 00", pin: "0000", role: "vendeur" }
+];
+
 // ---------- App ----------
 
 export default function App() {
@@ -1840,7 +1845,7 @@ export default function App() {
     try { const s = localStorage.getItem("motopieces_ventes"); return s ? JSON.parse(s) : []; } catch { return []; }
   });
   const [comptes, setComptes] = useState(() => {
-    try { const s = localStorage.getItem("motopieces_comptes"); return s ? JSON.parse(s) : []; } catch { return []; }
+    try { const s = localStorage.getItem("motopieces_comptes"); return s ? JSON.parse(s) : COMPTES_PAR_DEFAUT; } catch { return COMPTES_PAR_DEFAUT; }
   });
   const [entreprise, setEntreprise] = useState(() => {
     try { const s = localStorage.getItem("motopieces_entreprise"); if (s) return JSON.parse(s); } catch {}
@@ -1872,6 +1877,41 @@ export default function App() {
     }
   }, [supabaseUser]);
 
+  // Persistence automatique via localStorage
+  useEffect(() => {
+    try {
+      if (role) localStorage.setItem("motopieces_role", role);
+      else localStorage.removeItem("motopieces_role");
+    } catch {}
+  }, [role]);
+
+  useEffect(() => {
+    try {
+      if (userActif) localStorage.setItem("motopieces_user", JSON.stringify(userActif));
+      else localStorage.removeItem("motopieces_user");
+    } catch {}
+  }, [userActif]);
+
+  useEffect(() => {
+    try { localStorage.setItem("motopieces_comptes", JSON.stringify(comptes)); } catch {}
+  }, [comptes]);
+
+  useEffect(() => {
+    try { localStorage.setItem("motopieces_ventes", JSON.stringify(ventes)); } catch {}
+  }, [ventes]);
+
+  useEffect(() => {
+    try { localStorage.setItem("motopieces_produits", JSON.stringify(produits)); } catch {}
+  }, [produits]);
+
+  useEffect(() => {
+    try { localStorage.setItem("motopieces_entreprise", JSON.stringify(entreprise)); } catch {}
+  }, [entreprise]);
+
+  useEffect(() => {
+    try { localStorage.setItem("motopieces_next_vente", String(nextVente)); } catch {}
+  }, [nextVente]);
+
   // Connexion sécurisée : téléphone + code PIN
   const connexion = (tel, pin) => {
     const c = comptes.find(x => (x.tel || "").trim() === (tel || "").trim());
@@ -1887,6 +1927,8 @@ export default function App() {
     setRole(null);
     setUserActif(null);
     try {
+      localStorage.removeItem("motopieces_role");
+      localStorage.removeItem("motopieces_user");
       await supabaseSignOut();
     } catch (e) {
       console.warn("Erreur déconnexion Supabase:", e);
