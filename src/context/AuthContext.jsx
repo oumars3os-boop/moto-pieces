@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState } from "react";
-import { supabase } from "@/lib/supabase";
+import { supabase, synchroniserCompteSupabase } from "@/lib/supabase";
 
 const AuthContext = createContext({});
 
@@ -32,12 +32,33 @@ export const AuthProvider = ({ children }) => {
   }, []);
 
   const signUp = async (email, password, metadata = {}) => {
+    const roleDefaut = metadata.role || "vendeur";
+    const telDefaut = metadata.tel || "";
+
     const { data, error } = await supabase.auth.signUp({
       email,
       password,
-      options: { data: metadata }
+      options: {
+        data: {
+          nom: metadata.nom || email,
+          tel: telDefaut,
+          role: roleDefaut,
+          pin: metadata.pin || null,
+        }
+      }
     });
     if (error) throw error;
+
+    if (data?.user) {
+      await synchroniserCompteSupabase({
+        id: data.user.id,
+        nom: metadata.nom || email,
+        tel: telDefaut,
+        pin: metadata.pin || null,
+        role: roleDefaut,
+      });
+    }
+
     return data;
   };
 

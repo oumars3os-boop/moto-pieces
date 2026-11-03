@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/context/AuthContext";
+import { supabase, synchroniserCompteSupabase } from "@/lib/supabase";
 
 // ---------- Données ----------
 
@@ -1173,7 +1174,9 @@ function ContenuMenuDev({ codeOk, setCodeOk, codeSaisi, setCodeSaisi, nouvelAdmi
             return;
           }
           setErreur("");
-          setComptes(prev => [...prev, { id: Date.now(), nom: nouvelAdmin.nom.trim(), tel, pin: nouvelAdmin.pin, role: "admin" }]);
+          const comp = { id: Date.now(), nom: nouvelAdmin.nom.trim(), tel, pin: nouvelAdmin.pin, role: "admin" };
+          setComptes(prev => [...prev, comp]);
+          synchroniserCompteSupabase(comp);
           setNouvelAdmin({ nom: "", tel: "", pin: "" });
           fermer();
         }}>Créer le compte administrateur</Button>
@@ -1269,13 +1272,15 @@ function VueAdmin({ produits, setProduits, marques, setMarques, ventes, genererM
       return;
     }
     setErreurCompte("");
-    setComptes(prev => [...prev, {
+    const comp = {
       id: Date.now(),
       nom: nouveauCompte.nom.trim(),
       tel,
       pin: nouveauCompte.pin,
       role: nouveauCompte.role,
-    }]);
+    };
+    setComptes(prev => [...prev, comp]);
+    synchroniserCompteSupabase(comp);
     setNouveauCompte({ nom: "", tel: "", role: "vendeur", pin: "" });
   };
 
@@ -1861,6 +1866,21 @@ export default function App() {
   const [codeSaisi, setCodeSaisi] = useState("");
   const [nouvelAdmin, setNouvelAdmin] = useState({ nom: "", tel: "" });
   const CODE_DEV = "5544894";
+
+  // Chargement automatique des comptes enregistrés en ligne sur Supabase
+  useEffect(() => {
+    async function chargerComptesSupabase() {
+      try {
+        const { data, error } = await supabase.from("users").select("*");
+        if (!error && data && data.length > 0) {
+          setComptes(data);
+        }
+      } catch (e) {
+        console.warn("Notice chargement comptes Supabase:", e);
+      }
+    }
+    chargerComptesSupabase();
+  }, []);
 
   // Synchronisation directe avec l'état d'authentification Supabase en ligne
   useEffect(() => {
