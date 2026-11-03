@@ -1807,7 +1807,12 @@ function VueAdmin({ produits, setProduits, marques, setMarques, ventes, genererM
 // ---------- App ----------
 
 export default function App() {
-  const [role, setRole] = useState(null); // écran de connexion : tout le monde doit se connecter
+  const [role, setRole] = useState(() => {
+    try { return localStorage.getItem("motopieces_role") || null; } catch { return null; }
+  });
+  const [userActif, setUserActif] = useState(() => {
+    try { const s = localStorage.getItem("motopieces_user"); return s ? JSON.parse(s) : null; } catch { return null; }
+  });
   const [erreurLogin, setErreurLogin] = useState("");
   const [telLogin, setTelLogin] = useState("");
   const [pinLogin, setPinLogin] = useState("");
@@ -1818,23 +1823,72 @@ export default function App() {
   const [oubliPin, setOubliPin] = useState("");
   const [oubliPin2, setOubliPin2] = useState("");
   const [succesMsg, setSuccesMsg] = useState("");
-  const [produits, setProduits] = useState(() =>
-    PRODUITS.map(p => ({ ...p, code: p.code || ("ART-" + String(p.id).padStart(3, "0")), stockInit: p.stock })));
+  const [produits, setProduits] = useState(() => {
+    try {
+      const s = localStorage.getItem("motopieces_produits");
+      if (s) return JSON.parse(s);
+    } catch {}
+    return PRODUITS.map(p => ({ ...p, code: p.code || ("ART-" + String(p.id).padStart(3, "0")), stockInit: p.stock }));
+  });
   const [marques, setMarques] = useState([]);
   const [categories, setCategories] = useState(CATEGORIES_DEFAUT);
   const [photosCategories, setPhotosCategories] = useState({});
   const [photosMarques, setPhotosMarques] = useState({});
-  const [ventes, setVentes] = useState([]);
-  const [comptes, setComptes] = useState([]);
-  const [entreprise, setEntreprise] = useState({ nom: "MotoPièces", tel: "+225 07 00 00 00 00", materiel: "Pièces de moto" });
-  const [modePrix, setModePrix] = useState("admin"); // "admin" : prix fixés par l'admin | "secretaire" : la secrétaire fixe les prix
-  const [nextVente, setNextVente] = useState(1);
+  const [ventes, setVentes] = useState(() => {
+    try { const s = localStorage.getItem("motopieces_ventes"); return s ? JSON.parse(s) : []; } catch { return []; }
+  });
+  const [comptes, setComptes] = useState(() => {
+    try { const s = localStorage.getItem("motopieces_comptes"); return s ? JSON.parse(s) : []; } catch { return []; }
+  });
+  const [entreprise, setEntreprise] = useState(() => {
+    try { const s = localStorage.getItem("motopieces_entreprise"); if (s) return JSON.parse(s); } catch {}
+    return { nom: "MotoPièces", tel: "+225 07 00 00 00 00", materiel: "Pièces de moto" };
+  });
+  const [modePrix, setModePrix] = useState("admin");
+  const [nextVente, setNextVente] = useState(() => {
+    try { const s = localStorage.getItem("motopieces_next_vente"); return s ? Number(s) : 1; } catch { return 1; }
+  });
   const [nextId, setNextId] = useState(113);
   const [menuDev, setMenuDev] = useState(false);
   const [codeOk, setCodeOk] = useState(false);
   const [codeSaisi, setCodeSaisi] = useState("");
   const [nouvelAdmin, setNouvelAdmin] = useState({ nom: "", tel: "" });
   const CODE_DEV = "5544894";
+
+  // Persistence automatique via localStorage
+  useEffect(() => {
+    try {
+      if (role) localStorage.setItem("motopieces_role", role);
+      else localStorage.removeItem("motopieces_role");
+    } catch {}
+  }, [role]);
+
+  useEffect(() => {
+    try {
+      if (userActif) localStorage.setItem("motopieces_user", JSON.stringify(userActif));
+      else localStorage.removeItem("motopieces_user");
+    } catch {}
+  }, [userActif]);
+
+  useEffect(() => {
+    try { localStorage.setItem("motopieces_comptes", JSON.stringify(comptes)); } catch {}
+  }, [comptes]);
+
+  useEffect(() => {
+    try { localStorage.setItem("motopieces_ventes", JSON.stringify(ventes)); } catch {}
+  }, [ventes]);
+
+  useEffect(() => {
+    try { localStorage.setItem("motopieces_produits", JSON.stringify(produits)); } catch {}
+  }, [produits]);
+
+  useEffect(() => {
+    try { localStorage.setItem("motopieces_entreprise", JSON.stringify(entreprise)); } catch {}
+  }, [entreprise]);
+
+  useEffect(() => {
+    try { localStorage.setItem("motopieces_next_vente", String(nextVente)); } catch {}
+  }, [nextVente]);
 
   // Connexion sécurisée : téléphone + code PIN
   const connexion = (tel, pin) => {
@@ -1843,7 +1897,17 @@ export default function App() {
     if ((c.pin || "") !== (pin || "").trim()) { setErreurLogin("Code PIN incorrect."); return; }
     if (c.bloque) { setErreurLogin("Ce compte est bloqué. Contactez l'administrateur."); return; }
     setErreurLogin("");
+    setUserActif(c);
     setRole(c.role);
+  };
+
+  const deconnexion = () => {
+    setRole(null);
+    setUserActif(null);
+    try {
+      localStorage.removeItem("motopieces_role");
+      localStorage.removeItem("motopieces_user");
+    } catch {}
   };
 
   const creerVente = (v) => {
@@ -1997,7 +2061,7 @@ export default function App() {
             boutonClass="text-white font-bold text-lg hover:bg-white/10 text-left"
             onSupprimer={() => setMenuDev(true)} />
           <Badge variant="secondary" className="ml-2">{r.emoji} {r.titre}</Badge>
-          <Button variant="ghost" className="ml-auto text-white/70 hover:text-white" onClick={() => setRole(null)}>Changer de profil</Button>
+          <Button variant="ghost" className="ml-auto text-white/70 hover:text-white" onClick={deconnexion}>Changer de profil</Button>
         </div>
       </header>
 
