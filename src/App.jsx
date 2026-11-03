@@ -1810,6 +1810,136 @@ function VueAdmin({ produits, setProduits, marques, setMarques, ventes, genererM
   );
 }
 
+// ---------- Composant Section Publicités & Promotions ----------
+function SectionPublicites({ publicites, setPublicites, estAdmin }) {
+  const [openModal, setOpenModal] = useState(false);
+  const [titre, setTitre] = useState("");
+  const [image, setImage] = useState(null);
+
+  const handleUpload = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      setImage(event.target.result);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const ajouterPublicite = () => {
+    if (!image) return;
+    const nouvellePub = {
+      id: Date.now(),
+      titre: titre.trim() || "Offre Spéciale MotoPièces",
+      image,
+      date: new Date().toLocaleDateString("fr-FR"),
+    };
+    setPublicites((prev) => [nouvellePub, ...prev]);
+    setTitre("");
+    setImage(null);
+    setOpenModal(false);
+  };
+
+  const supprimerPub = (id) => {
+    setPublicites((prev) => prev.filter((p) => p.id !== id));
+  };
+
+  return (
+    <div className="max-w-6xl mx-auto px-4 mt-4 mb-2">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-lg font-bold text-zinc-900 flex items-center gap-2">
+          📢 Promotions & Bannières Publicitaires
+        </h2>
+        {estAdmin && (
+          <Button
+            size="sm"
+            className="bg-blue-600 hover:bg-blue-700 text-white"
+            onClick={() => setOpenModal(true)}
+          >
+            ➕ Publier une Promo / Image
+          </Button>
+        )}
+      </div>
+
+      {publicites.length === 0 ? (
+        <Card className="bg-gradient-to-r from-blue-600 to-indigo-700 text-white border-none shadow-md">
+          <CardContent className="p-5 flex flex-col md:flex-row items-center justify-between gap-4">
+            <div>
+              <p className="font-bold text-lg">🚀 Nouveautés & Promotions MotoPièces !</p>
+              <p className="text-xs text-blue-100 mt-1">
+                Découvrez nos pièces de rechange d'origine au meilleur prix du marché.
+              </p>
+            </div>
+            <Badge className="bg-amber-400 text-zinc-900 font-bold px-3 py-1 text-sm">
+              🔥 Prix Cassés
+            </Badge>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {publicites.map((pub) => (
+            <Card key={pub.id} className="overflow-hidden shadow border hover:shadow-lg transition bg-white">
+              <div className="relative h-48 bg-zinc-900">
+                <img src={pub.image} alt={pub.titre} className="w-full h-full object-cover" />
+                {estAdmin && (
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    className="absolute top-2 right-2 h-7 px-2 text-xs"
+                    onClick={() => supprimerPub(pub.id)}
+                  >
+                    🗑️ Supprimer
+                  </Button>
+                )}
+              </div>
+              <CardContent className="p-3">
+                <h3 className="font-bold text-sm text-zinc-900">{pub.titre}</h3>
+                <p className="text-[10px] text-zinc-500 mt-1">Publié le {pub.date}</p>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      {/* Modal d'upload de publicité */}
+      <Dialog open={openModal} onOpenChange={setOpenModal}>
+        <DialogContent className="bg-white rounded-lg p-6 max-w-md w-full">
+          <DialogHeader>
+            <DialogTitle>📢 Ajouter une Image Promotionnelle</DialogTitle>
+          </DialogHeader>
+          <div className="grid gap-3 mt-2">
+            <Label>Titre / Description de l'offre</Label>
+            <Input
+              value={titre}
+              onChange={(e) => setTitre(e.target.value)}
+              placeholder="Ex : Remise -15% sur les bougies & huiles"
+            />
+            <Label>Fichier Image (Upload)</Label>
+            <input
+              type="file"
+              accept="image/*"
+              onChange={handleUpload}
+              className="border p-2 rounded text-sm w-full bg-zinc-50"
+            />
+            {image && (
+              <div className="mt-2 h-36 rounded border overflow-hidden bg-zinc-100">
+                <img src={image} alt="Aperçu" className="w-full h-full object-cover" />
+              </div>
+            )}
+            <Button
+              className="mt-4 bg-blue-600 hover:bg-blue-700 text-white h-11"
+              disabled={!image}
+              onClick={ajouterPublicite}
+            >
+              ✅ Publier la bannière
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
 const COMPTES_PAR_DEFAUT = [
   { id: 1, nom: "Administrateur Principal", tel: "+225 07 00 00 00 00", pin: "1234", role: "admin" },
   { id: 2, nom: "Vendeur Exemple", tel: "+225 05 00 00 00 00", pin: "0000", role: "vendeur" }
@@ -1825,6 +1955,10 @@ export default function App() {
   const [userActif, setUserActif] = useState(() => {
     try { const s = localStorage.getItem("motopieces_user"); return s ? JSON.parse(s) : null; } catch { return null; }
   });
+  const [publicites, setPublicites] = useState(() => {
+    try { const s = localStorage.getItem("motopieces_publicites"); return s ? JSON.parse(s) : []; } catch { return []; }
+  });
+  const [openProfil, setOpenProfil] = useState(false);
   const [erreurLogin, setErreurLogin] = useState("");
   const [telLogin, setTelLogin] = useState("");
   const [pinLogin, setPinLogin] = useState("");
@@ -1936,6 +2070,10 @@ export default function App() {
   useEffect(() => {
     try { localStorage.setItem("motopieces_next_vente", String(nextVente)); } catch {}
   }, [nextVente]);
+
+  useEffect(() => {
+    try { localStorage.setItem("motopieces_publicites", JSON.stringify(publicites)); } catch {}
+  }, [publicites]);
 
   // Connexion sécurisée : téléphone + code PIN
   const connexion = (tel, pin) => {
@@ -2114,17 +2252,74 @@ export default function App() {
   const r = ROLES.find(x => x.id === role) || { emoji: "🧑‍🔧👩‍💼", titre: "Vendeur + Secrétaire" };
 
   return (
-    <div className="min-h-screen bg-zinc-100">
+    <div className="min-h-screen bg-zinc-100 pb-10">
+      {/* En-tête principal : Titre MotoPièces tout en haut, profil et accès utilisateur */}
       <header className="bg-zinc-900 text-white sticky top-0 z-20 shadow">
-        <div className="max-w-6xl mx-auto px-4 py-3 flex items-center gap-3">
-          {/* Logo : maintenir 7 secondes pour ouvrir le menu développeur */}
-          <BoutonSupprimer label={<><IconeMoto /> {entreprise.nom}<span className="block text-[10px] font-normal text-white/60 leading-tight">🛍️ {entreprise.materiel} — 📞 {entreprise.tel}</span></>} duree={7000}
-            boutonClass="text-white font-bold text-lg hover:bg-white/10 text-left"
-            onSupprimer={() => setMenuDev(true)} />
-          <Badge variant="secondary" className="ml-2">{r.emoji} {r.titre}</Badge>
-          <Button variant="ghost" className="ml-auto text-white/70 hover:text-white" onClick={deconnexion}>Changer de profil</Button>
+        <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            {/* Logo & Titre MotoPièces */}
+            <BoutonSupprimer label={<><IconeMoto /> <span className="text-xl font-extrabold tracking-wide">{entreprise.nom || "MotoPièces"}</span><span className="block text-[10px] font-normal text-white/60 leading-tight">🛍️ {entreprise.materiel} — 📞 {entreprise.tel}</span></>} duree={7000}
+              boutonClass="text-white hover:bg-white/10 text-left rounded p-1"
+              onSupprimer={() => setMenuDev(true)} />
+            <Badge variant="secondary" className="hidden sm:inline-flex">{r.emoji} {r.titre}</Badge>
+          </div>
+
+          {/* Affichage du nom d'utilisateur / Profil & Déconnexion */}
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="bg-zinc-800 border-zinc-700 text-white hover:bg-zinc-700 flex items-center gap-2"
+              onClick={() => setOpenProfil(true)}
+            >
+              <span className="w-2 h-2 rounded-full bg-green-500"></span>
+              <span className="font-semibold text-xs max-w-[130px] sm:max-w-none truncate">
+                👤 {userActif?.nom || userActif?.tel || supabaseUser?.email || "Mon Profil"}
+              </span>
+            </Button>
+
+            <Button variant="ghost" size="sm" className="text-white/70 hover:text-white text-xs" onClick={deconnexion}>
+              Déconnexion
+            </Button>
+          </div>
         </div>
       </header>
+
+      {/* Section dédiée aux Publicités & Bannières Promotionnelles */}
+      <SectionPublicites
+        publicites={publicites}
+        setPublicites={setPublicites}
+        estAdmin={role === "admin" || role === "vendeur-secretaire"}
+      />
+
+      {/* Modal du Profil Utilisateur */}
+      <Dialog open={openProfil} onOpenChange={setOpenProfil}>
+        <DialogContent className="bg-white text-zinc-900 rounded-lg p-6 max-w-sm w-full">
+          <DialogHeader>
+            <DialogTitle>👤 Profil Utilisateur</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 mt-2 text-sm">
+            <div className="p-3 bg-zinc-50 border rounded-lg">
+              <p className="text-xs text-zinc-500">Nom Complet</p>
+              <p className="font-bold text-zinc-900">{userActif?.nom || "Utilisateur MotoPièces"}</p>
+            </div>
+            <div className="p-3 bg-zinc-50 border rounded-lg">
+              <p className="text-xs text-zinc-500">Téléphone / Contact</p>
+              <p className="font-bold text-zinc-900">{userActif?.tel || userActif?.email || "Non renseigné"}</p>
+            </div>
+            <div className="p-3 bg-zinc-50 border rounded-lg">
+              <p className="text-xs text-zinc-500">Rôle d'accès</p>
+              <p className="font-bold text-blue-600">{r.emoji} {r.titre}</p>
+            </div>
+            <Button
+              className="w-full bg-red-600 hover:bg-red-700 text-white mt-4"
+              onClick={() => { setOpenProfil(false); deconnexion(); }}
+            >
+              🚪 Se déconnecter
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Menu développeur (accessible en maintenant le logo 7 secondes) */}
       <Dialog open={menuDev} onOpenChange={o => { setMenuDev(o); if (!o) { setCodeOk(false); setCodeSaisi(""); } }}>
@@ -2136,6 +2331,8 @@ export default function App() {
             CODE_DEV={CODE_DEV} />
         </DialogContent>
       </Dialog>
+
+      {/* Vues Métier selon le Rôle */}
       {role === "client" && <VueClient produits={produits} marques={marques} creerVente={creerVente} photosCategories={photosCategories} photosMarques={photosMarques} categories={categories} />}
       {role === "vendeur" && <VueVendeur produits={produits} marques={marques} ventes={ventes} creerVente={creerVente} />}
       {role === "secretaire" && <VueSecretaire ventes={ventes} confirmerPaiement={confirmerPaiement} majPrixLigne={majPrixLigne} modePrix={modePrix} entreprise={entreprise} />}
