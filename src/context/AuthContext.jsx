@@ -9,24 +9,38 @@ export const AuthProvider = ({ children }) => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Récupération de la session actuelle au chargement
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setUser(session?.user ?? null);
-      setLoading(false);
-    });
+    let subscription = null;
 
-    // Écoute des changements d'état d'authentification
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-      setUser(session?.user ?? null);
-      setLoading(false);
-    });
+    async function initAuth() {
+      try {
+        const { data } = await supabase.auth.getSession();
+        setSession(data?.session ?? null);
+        setUser(data?.session?.user ?? null);
+      } catch (err) {
+        console.warn("Avertissement d'initialisation Supabase Auth:", err);
+      } finally {
+        setLoading(false);
+      }
 
-    return () => subscription.unsubscribe();
+      try {
+        const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
+          setSession(session);
+          setUser(session?.user ?? null);
+          setLoading(false);
+        });
+        subscription = authListener?.subscription;
+      } catch (err) {
+        console.warn("Erreur écouteur AuthState:", err);
+      }
+    }
+
+    initAuth();
+
+    return () => {
+      if (subscription) subscription.unsubscribe();
+    };
   }, []);
 
-  // Inscription par email et mot de passe
   const signUp = async (email, password) => {
     const { data, error } = await supabase.auth.signUp({
       email,
@@ -36,7 +50,6 @@ export const AuthProvider = ({ children }) => {
     return data;
   };
 
-  // Connexion par email et mot de passe
   const signIn = async (email, password) => {
     const { data, error } = await supabase.auth.signInWithPassword({
       email,
@@ -46,7 +59,6 @@ export const AuthProvider = ({ children }) => {
     return data;
   };
 
-  // Déconnexion
   const signOut = async () => {
     const { error } = await supabase.auth.signOut();
     if (error) throw error;
