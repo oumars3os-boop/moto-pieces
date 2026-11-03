@@ -9,17 +9,47 @@ export const AuthProvider = ({ children }) => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // 1. Écouter immédiatement les évènements d'authentification Supabase (INITIAL_SESSION, SIGNED_IN, SIGNED_OUT, etc.)
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-      setUser(session?.user ?? null);
+    // Synchronisation automatique et permanente du stockage local avec la session Supabase
+    const syncLocalStorage = (currentSession) => {
+      try {
+        if (currentSession?.user) {
+          const currentUser = currentSession.user;
+          const role = currentUser.user_metadata?.role || localStorage.getItem("motopieces_role") || "admin";
+          const userObj = {
+            id: currentUser.id,
+            email: currentUser.email || "",
+            tel: currentUser.phone || currentUser.user_metadata?.tel || "",
+            nom: currentUser.user_metadata?.nom || currentUser.email || "Utilisateur Supabase",
+            role: role,
+          };
+          localStorage.setItem("motopieces_session", JSON.stringify(currentSession));
+          localStorage.setItem("motopieces_user", JSON.stringify(userObj));
+          localStorage.setItem("motopieces_role", role);
+        } else if (!localStorage.getItem("motopieces_user")) {
+          localStorage.removeItem("motopieces_session");
+          localStorage.removeItem("motopieces_role");
+          localStorage.removeItem("motopieces_user");
+        }
+      } catch (e) {
+        console.warn("Erreur de synchronisation stockage local:", e);
+      }
+    };
+
+    // 1. Écouteur de session Supabase actif en permanence durant tout le cycle de vie de l'application
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, currentSession) => {
+      setSession(currentSession);
+      setUser(currentSession?.user ?? null);
+      syncLocalStorage(currentSession);
       setLoading(false);
     });
 
-    // 2. Récupérer la session courante depuis le stockage local
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setUser(session?.user ?? null);
+    // 2. Vérification immédiate de la session au démarrage / rechargement du navigateur
+    supabase.auth.getSession().then(({ data: { session: initialSession } }) => {
+      if (initialSession) {
+        setSession(initialSession);
+        setUser(initialSession.user);
+        syncLocalStorage(initialSession);
+      }
       setLoading(false);
     }).catch(err => {
       console.warn("Erreur lors de la récupération de la session Supabase:", err);
@@ -38,6 +68,10 @@ export const AuthProvider = ({ children }) => {
       options: { data: metadata }
     });
     if (error) throw error;
+    if (data.session) {
+      setSession(data.session);
+      setUser(data.user);
+    }
     return data;
   };
 
@@ -47,11 +81,22 @@ export const AuthProvider = ({ children }) => {
       password,
     });
     if (error) throw error;
+    if (data.session) {
+      setSession(data.session);
+      setUser(data.user);
+    }
     return data;
   };
 
   const signOut = async () => {
+    try {
+      localStorage.removeItem("motopieces_session");
+      localStorage.removeItem("motopieces_role");
+      localStorage.removeItem("motopieces_user");
+    } catch {}
     const { error } = await supabase.auth.signOut();
+    setUser(null);
+    setSession(null);
     if (error) throw error;
   };
 
