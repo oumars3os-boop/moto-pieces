@@ -9,42 +9,33 @@ export const AuthProvider = ({ children }) => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    let subscription = null;
+    // 1. Écouter immédiatement les évènements d'authentification Supabase (INITIAL_SESSION, SIGNED_IN, SIGNED_OUT, etc.)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+      setUser(session?.user ?? null);
+      setLoading(false);
+    });
 
-    async function initAuth() {
-      try {
-        const { data } = await supabase.auth.getSession();
-        setSession(data?.session ?? null);
-        setUser(data?.session?.user ?? null);
-      } catch (err) {
-        console.warn("Avertissement d'initialisation Supabase Auth:", err);
-      } finally {
-        setLoading(false);
-      }
-
-      try {
-        const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
-          setSession(session);
-          setUser(session?.user ?? null);
-          setLoading(false);
-        });
-        subscription = authListener?.subscription;
-      } catch (err) {
-        console.warn("Erreur écouteur AuthState:", err);
-      }
-    }
-
-    initAuth();
+    // 2. Récupérer la session courante depuis le stockage local
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      setUser(session?.user ?? null);
+      setLoading(false);
+    }).catch(err => {
+      console.warn("Erreur lors de la récupération de la session Supabase:", err);
+      setLoading(false);
+    });
 
     return () => {
-      if (subscription) subscription.unsubscribe();
+      subscription?.unsubscribe();
     };
   }, []);
 
-  const signUp = async (email, password) => {
+  const signUp = async (email, password, metadata = {}) => {
     const { data, error } = await supabase.auth.signUp({
       email,
       password,
+      options: { data: metadata }
     });
     if (error) throw error;
     return data;

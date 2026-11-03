@@ -10,6 +10,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { useAuth } from "@/context/AuthContext";
 
 // ---------- Données ----------
 
@@ -1807,6 +1808,7 @@ function VueAdmin({ produits, setProduits, marques, setMarques, ventes, genererM
 // ---------- App ----------
 
 export default function App() {
+  const { user: supabaseUser, signOut: supabaseSignOut, loading: authLoading } = useAuth();
   const [role, setRole] = useState(() => {
     try { return localStorage.getItem("motopieces_role") || null; } catch { return null; }
   });
@@ -1855,6 +1857,24 @@ export default function App() {
   const [nouvelAdmin, setNouvelAdmin] = useState({ nom: "", tel: "" });
   const CODE_DEV = "5544894";
 
+  // Synchronisation avec l'état d'authentification Supabase
+  useEffect(() => {
+    if (supabaseUser) {
+      const savedRole = localStorage.getItem("motopieces_role");
+      const userRole = supabaseUser.user_metadata?.role || savedRole || "admin";
+      setRole(userRole);
+      if (!userActif) {
+        setUserActif({
+          id: supabaseUser.id,
+          nom: supabaseUser.user_metadata?.nom || supabaseUser.email || "Utilisateur Supabase",
+          tel: supabaseUser.phone || "",
+          email: supabaseUser.email || "",
+          role: userRole,
+        });
+      }
+    }
+  }, [supabaseUser]);
+
   // Persistence automatique via localStorage
   useEffect(() => {
     try {
@@ -1901,13 +1921,16 @@ export default function App() {
     setRole(c.role);
   };
 
-  const deconnexion = () => {
+  const deconnexion = async () => {
     setRole(null);
     setUserActif(null);
     try {
       localStorage.removeItem("motopieces_role");
       localStorage.removeItem("motopieces_user");
-    } catch {}
+      await supabaseSignOut();
+    } catch (e) {
+      console.warn("Erreur déconnexion:", e);
+    }
   };
 
   const creerVente = (v) => {
@@ -1968,6 +1991,17 @@ export default function App() {
     setSuccesMsg("Code PIN modifié avec succès ! Connectez-vous avec votre nouveau PIN.");
     setOubli(false); setOubliEtape(1); setOubliTel(""); setOubliCle(""); setOubliPin(""); setOubliPin2(""); setErreurLogin("");
   };
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-zinc-900 flex items-center justify-center text-white p-4">
+        <div className="text-center space-y-3">
+          <div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
+          <p className="text-sm text-zinc-400">Vérification de la session...</p>
+        </div>
+      </div>
+    );
+  }
 
   if (!role) {
     return (
