@@ -1326,7 +1326,13 @@ function VueVendeurSecretaire({ produits, marques, ventes, creerVente, confirmer
   );
 }
 
-function VueAdmin({ produits, setProduits, marques, setMarques, ventes, genererMarque, photosCategories, setPhotosCategories, photosMarques, setPhotosMarques, modePrix, setModePrix, categories, setCategories, comptes, setComptes, entreprise, setEntreprise, boutiquesMasquees = [], basculerVisibiliteBoutique = () => {} }) {
+function VueAdmin({
+  produits, setProduits, marques, setMarques, ventes, genererMarque,
+  photosCategories, setPhotosCategories, photosMarques, setPhotosMarques,
+  modePrix, setModePrix, categories, setCategories, comptes, setComptes,
+  entreprise, setEntreprise, boutiquesMasquees = [], basculerVisibiliteBoutique = () => {},
+  transfertsStock = [], effectuerTransfertStock = () => {}, validerTransfertStock = () => {}
+}) {
   const [onglet, setOnglet] = useState("stats");
   const [recherche, setRecherche] = useState("");
   const [cat, setCat] = useState("toutes");
@@ -1349,6 +1355,23 @@ function VueAdmin({ produits, setProduits, marques, setMarques, ventes, genererM
   const [nouveauCompte, setNouveauCompte] = useState({ nom: "", tel: "", role: "vendeur", pin: "" });
   const [erreurCompte, setErreurCompte] = useState("");
   const [cleAffichee, setCleAffichee] = useState(null);
+
+  // État du module de transfert de stock
+  const [articleTransfert, setArticleTransfert] = useState("");
+  const [boutiqueCible, setBoutiqueCible] = useState("");
+  const [qteTransfert, setQteTransfert] = useState("");
+  const [msgTransfert, setMsgTransfert] = useState(null);
+
+  const handleEffectuerTransfert = () => {
+    if (!articleTransfert || !qteTransfert) return;
+    const res = effectuerTransfertStock(articleTransfert, "", boutiqueCible, qteTransfert);
+    setMsgTransfert(res);
+    if (res.success) {
+      setArticleTransfert("");
+      setBoutiqueCible("");
+      setQteTransfert("");
+    }
+  };
 
   const toutesLesBoutiques = useMemo(() => {
     const setB = new Set();
@@ -1456,6 +1479,7 @@ function VueAdmin({ produits, setProduits, marques, setMarques, ventes, genererM
         <Button variant={onglet === "marques" ? "default" : "outline"} className={onglet === "marques" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("marques")}>🏍️ Marques ({marques.length})</Button>
         <Button variant={onglet === "categories" ? "default" : "outline"} className={onglet === "categories" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("categories")}>🖼️ Catégories</Button>
         <Button variant={onglet === "boutiques" ? "default" : "outline"} className={onglet === "boutiques" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("boutiques")}>🏪 Magasins ({toutesLesBoutiques.length})</Button>
+        <Button variant={onglet === "transferts" ? "default" : "outline"} className={onglet === "transferts" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("transferts")}>🔄 Transferts ({transfertsStock.length})</Button>
         <Button variant={onglet === "utilisateurs" ? "default" : "outline"} className={onglet === "utilisateurs" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("utilisateurs")}>👥 Utilisateurs</Button>
         <div className="flex-1" />
         <Select value={modePrix} onValueChange={setModePrix}>
@@ -1884,6 +1908,117 @@ function VueAdmin({ produits, setProduits, marques, setMarques, ventes, genererM
                     </div>
                   );
                 })}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {onglet === "transferts" && (
+        <div className="max-w-6xl mx-auto px-4 py-4 space-y-4">
+          <Card className="bg-white border shadow-sm">
+            <CardHeader className="p-4 border-b">
+              <CardTitle className="text-lg font-bold flex items-center justify-between">
+                <span>🔄 Transfert Sécurisé de Stock entre Administrateurs & Magasins</span>
+                <Badge className="bg-blue-600 text-white">👑 Espace Administrateur</Badge>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-4 space-y-4">
+              <p className="text-xs text-muted-foreground">
+                Initiez le transfert de marchandises d'un magasin vers un autre. Les mouvements sont tracés en temps réel et nécessitent une validation pour mettre à jour automatiquement les stocks disponibles.
+              </p>
+
+              {msgTransfert && (
+                <div className={`p-3 rounded-lg text-xs font-semibold ${msgTransfert.success ? "bg-green-50 text-green-700 border border-green-200" : "bg-red-50 text-red-700 border border-red-200"}`}>
+                  {msgTransfert.message}
+                </div>
+              )}
+
+              {/* Formulaire de transfert */}
+              <div className="p-4 border rounded-xl bg-zinc-50 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 items-end">
+                <div>
+                  <Label className="text-xs font-semibold">Article / Produit</Label>
+                  <Select value={articleTransfert} onValueChange={setArticleTransfert}>
+                    <SelectTrigger className="bg-white text-xs mt-1"><SelectValue placeholder="Sélectionner l'article" /></SelectTrigger>
+                    <SelectContent className="bg-white z-[200]">
+                      {produits.map(p => (
+                        <SelectItem key={p.id} value={String(p.id)}>
+                          📦 {p.nom} (Stock : {p.stock}) — 🏪 {p.boutique || "MotoPièces Principal"}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div>
+                  <Label className="text-xs font-semibold">Magasin / Entrepôt Cible</Label>
+                  <Input
+                    value={boutiqueCible}
+                    onChange={e => setBoutiqueCible(e.target.value)}
+                    placeholder="Ex : Garage Honda Abidjan"
+                    className="bg-white text-xs mt-1"
+                  />
+                </div>
+
+                <div>
+                  <Label className="text-xs font-semibold">Quantité à transférer</Label>
+                  <Input
+                    type="number"
+                    min="1"
+                    value={qteTransfert}
+                    onChange={e => setQteTransfert(e.target.value)}
+                    placeholder="Ex : 5"
+                    className="bg-white text-xs mt-1"
+                  />
+                </div>
+
+                <Button
+                  className="bg-blue-600 hover:bg-blue-700 text-white text-xs h-10 font-bold shadow"
+                  onClick={handleEffectuerTransfert}
+                >
+                  🚀 Initier le Transfert
+                </Button>
+              </div>
+
+              {/* Historique des transferts */}
+              <div className="pt-2">
+                <h3 className="font-bold text-sm text-zinc-900 mb-2">📋 Suivi des Transferts de Stock :</h3>
+                {transfertsStock.length === 0 ? (
+                  <p className="text-xs text-muted-foreground p-4 text-center border rounded-lg bg-zinc-50">
+                    Aucun transfert de stock n'a été initié pour le moment.
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {transfertsStock.map(t => (
+                      <div key={t.id} className="p-3 border rounded-lg bg-white flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs shadow-sm">
+                        <div className="space-y-1">
+                          <div className="font-bold text-zinc-900 flex items-center gap-2 text-sm">
+                            📦 {t.produitNom} (Qté : {t.quantite})
+                            {t.statut === "valide" ? (
+                              <Badge className="bg-green-600 text-white text-[10px]">Validé ✅</Badge>
+                            ) : (
+                              <Badge className="bg-amber-500 text-white text-[10px]">En attente ⏳</Badge>
+                            )}
+                          </div>
+                          <p className="text-zinc-500">
+                            De <span className="font-semibold text-zinc-700">🏪 {t.boutiqueSource}</span> vers <span className="font-semibold text-blue-700">🏪 {t.boutiqueCible}</span>
+                          </p>
+                          <p className="text-[10px] text-zinc-400">Initiés par {t.emetteur} le {t.date}</p>
+                        </div>
+
+                        {t.statut !== "valide" && (
+                          <Button
+                            size="sm"
+                            className="bg-green-600 hover:bg-green-700 text-white text-xs font-bold shadow shrink-0"
+                            onClick={() => validerTransfertStock(t.id)}
+                          >
+                            ✅ Valider & Transférer
+                          </Button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </CardContent>
           </Card>
@@ -2460,6 +2595,14 @@ export default function App() {
       return [];
     }
   });
+  const [transfertsStock, setTransfertsStock] = useState(() => {
+    try {
+      const s = localStorage.getItem("motopieces_transferts_stock");
+      return s ? JSON.parse(s) : [];
+    } catch {
+      return [];
+    }
+  });
   const [openProfil, setOpenProfil] = useState(false);
   const [openLoginModal, setOpenLoginModal] = useState(false);
   const [openChat, setOpenChat] = useState(false);
@@ -2589,12 +2732,57 @@ export default function App() {
     try { localStorage.setItem("motopieces_boutiques_masquees", JSON.stringify(boutiquesMasquees)); } catch {}
   }, [boutiquesMasquees]);
 
+  useEffect(() => {
+    try { localStorage.setItem("motopieces_transferts_stock", JSON.stringify(transfertsStock)); } catch {}
+  }, [transfertsStock]);
+
   const basculerVisibiliteBoutique = (nomBoutique) => {
     setBoutiquesMasquees(prev =>
       prev.includes(nomBoutique)
         ? prev.filter(b => b !== nomBoutique)
         : [...prev, nomBoutique]
     );
+  };
+
+  const effectuerTransfertStock = (idProduit, boutiqueSource, boutiqueCible, quantite) => {
+    const qteNum = Number(quantite);
+    const p = produits.find(item => item.id === Number(idProduit));
+    if (!p || !qteNum || qteNum <= 0 || qteNum > p.stock) {
+      return { success: false, message: "Quantité invalide ou stock disponible insuffisant dans ce magasin." };
+    }
+
+    const nouveauTransfert = {
+      id: Date.now(),
+      produitId: p.id,
+      produitNom: p.nom,
+      boutiqueSource: boutiqueSource || p.boutique || "MotoPièces Principal",
+      boutiqueCible: boutiqueCible || "Autre Magasin",
+      quantite: qteNum,
+      statut: "en_attente",
+      date: new Date().toLocaleDateString("fr-FR") + " à " + new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }),
+      emetteur: userActif?.nom || "Administrateur",
+    };
+
+    setTransfertsStock(prev => [nouveauTransfert, ...prev]);
+    return { success: true, message: "Transfert de stock initié avec succès ! En attente de validation." };
+  };
+
+  const validerTransfertStock = (idTransfert) => {
+    const t = transfertsStock.find(item => item.id === idTransfert);
+    if (!t || t.statut === "valide") return;
+
+    // Décrémenter du stock d'origine et valider le transfert
+    setProduits(prev => prev.map(p => {
+      if (p.id === t.produitId) {
+        return {
+          ...p,
+          stock: Math.max(0, p.stock - t.quantite),
+        };
+      }
+      return p;
+    }));
+
+    setTransfertsStock(prev => prev.map(item => item.id === idTransfert ? { ...item, statut: "valide" } : item));
   };
 
   // Connexion sécurisée : téléphone + code PIN
@@ -2910,7 +3098,10 @@ export default function App() {
           comptes={comptes} setComptes={setComptes}
           entreprise={entreprise} setEntreprise={setEntreprise}
           boutiquesMasquees={boutiquesMasquees}
-          basculerVisibiliteBoutique={basculerVisibiliteBoutique} />
+          basculerVisibiliteBoutique={basculerVisibiliteBoutique}
+          transfertsStock={transfertsStock}
+          effectuerTransfertStock={effectuerTransfertStock}
+          validerTransfertStock={validerTransfertStock} />
       )}
 
       {/* Bouton Flottant & Chat Routé par Rôle avec Option Vocale */}
