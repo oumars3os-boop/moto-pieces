@@ -1947,6 +1947,249 @@ function VueAdmin({ produits, setProduits, marques, setMarques, ventes, genererM
   );
 }
 
+// ---------- Composant Chat Flottant & Messagerie Vocale ----------
+function ChatFlottant({ userActif, entreprise }) {
+  const [open, setOpen] = useState(false);
+  const [messages, setMessages] = useState(() => {
+    try {
+      const s = localStorage.getItem("motopieces_chat_messages");
+      return s ? JSON.parse(s) : [
+        { id: 1, auteur: "Assistance MotoPièces", texte: "Bonjour ! Comment pouvons-nous vous aider aujourd'hui ?", date: "09:00", audioUrl: null }
+      ];
+    } catch {
+      return [
+        { id: 1, auteur: "Assistance MotoPièces", texte: "Bonjour ! Comment pouvons-nous vous aider aujourd'hui ?", date: "09:00", audioUrl: null }
+      ];
+    }
+  });
+
+  const [texte, setTexte] = useState("");
+  const [enEnregistrement, setEnEnregistrement] = useState(false);
+  const [dureeVocal, setDureeVocal] = useState(0);
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
+  const timerVocalRef = useRef(null);
+  const chatEndRef = useRef(null);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("motopieces_chat_messages", JSON.stringify(messages));
+    } catch {}
+    if (chatEndRef.current) {
+      chatEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [messages, open]);
+
+  // Démarrer l'enregistrement vocal via le micro
+  const demarrerEnregistrement = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioChunksRef.current = [];
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
+      };
+
+      mediaRecorder.onstop = () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+        const audioUrl = URL.createObjectURL(audioBlob);
+        envoyerVocal(audioUrl);
+        stream.getTracks().forEach(track => track.stop());
+      };
+
+      mediaRecorder.start();
+      setEnEnregistrement(true);
+      setDureeVocal(0);
+
+      timerVocalRef.current = setInterval(() => {
+        setDureeVocal((prev) => prev + 1);
+      }, 1000);
+    } catch (err) {
+      alert("Accès au microphone requis pour envoyer un message vocal.");
+    }
+  };
+
+  // Arrêter l'enregistrement vocal
+  const arreterEnregistrement = () => {
+    if (mediaRecorderRef.current && enEnregistrement) {
+      mediaRecorderRef.current.stop();
+      setEnEnregistrement(false);
+      clearInterval(timerVocalRef.current);
+    }
+  };
+
+  // Envoyer un message texte
+  const envoyerTexte = (e) => {
+    if (e) e.preventDefault();
+    if (!texte.trim()) return;
+
+    const nouveauMsg = {
+      id: Date.now(),
+      auteur: userActif?.nom || "Client",
+      texte: texte.trim(),
+      audioUrl: null,
+      date: new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }),
+    };
+
+    setMessages((prev) => [...prev, nouveauMsg]);
+    setTexte("");
+
+    // Réponse automatique d'assistance
+    setTimeout(() => {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: Date.now() + 1,
+          auteur: "Assistance MotoPièces",
+          texte: "Merci pour votre message ! Un conseiller vous répond dans quelques instants.",
+          audioUrl: null,
+          date: new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }),
+        },
+      ]);
+    }, 1200);
+  };
+
+  // Envoyer la note vocale enregistrée
+  const envoyerVocal = (audioUrl) => {
+    const nouveauMsg = {
+      id: Date.now(),
+      auteur: userActif?.nom || "Client",
+      texte: `🎙️ Message vocal (${dureeVocal}s)`,
+      audioUrl,
+      date: new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }),
+    };
+
+    setMessages((prev) => [...prev, nouveauMsg]);
+
+    setTimeout(() => {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: Date.now() + 1,
+          auteur: "Assistance MotoPièces",
+          texte: "Bien reçu votre note vocale ! Notre équipe écoute votre demande.",
+          audioUrl: null,
+          date: new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }),
+        },
+      ]);
+    }, 1500);
+  };
+
+  return (
+    <>
+      {/* Bouton Flottant Fixe en Bas à Droite */}
+      <div className="fixed bottom-6 right-6 z-50">
+        <Button
+          onClick={() => setOpen(!open)}
+          className="h-14 w-14 rounded-full bg-blue-600 hover:bg-blue-700 text-white shadow-2xl flex items-center justify-center transition-transform active:scale-90 border-2 border-white"
+          title="Ouvrir le Chat & Messagerie Vocale"
+        >
+          {open ? <span className="text-xl font-bold">✕</span> : <span className="text-2xl">💬</span>}
+        </Button>
+      </div>
+
+      {/* Fenêtre de Chat / Messagerie Instantanée */}
+      {open && (
+        <Card className="fixed bottom-24 right-4 sm:right-6 z-50 w-[92vw] sm:w-[380px] h-[480px] bg-white border shadow-2xl rounded-2xl flex flex-col overflow-hidden animate-in slide-in-from-bottom-5">
+          {/* En-tête du Chat */}
+          <div className="bg-zinc-900 text-white p-3 px-4 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="w-2.5 h-2.5 rounded-full bg-green-500 animate-pulse"></span>
+              <div>
+                <p className="font-bold text-sm leading-tight">💬 Chat {entreprise?.nom || "MotoPièces"}</p>
+                <p className="text-[10px] text-zinc-400">Assistance & Vendeurs en ligne</p>
+              </div>
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-zinc-400 hover:text-white h-7 w-7 p-0"
+              onClick={() => setOpen(false)}
+            >
+              ✕
+            </Button>
+          </div>
+
+          {/* Liste des Messages */}
+          <ScrollArea className="flex-1 p-3 space-y-3 bg-zinc-50">
+            {messages.map((m) => {
+              const estMoi = m.auteur === (userActif?.nom || "Client");
+              return (
+                <div
+                  key={m.id}
+                  className={`flex flex-col mb-3 ${estMoi ? "items-end" : "items-start"}`}
+                >
+                  <span className="text-[10px] text-zinc-400 mb-0.5 px-1">{m.auteur} • {m.date}</span>
+                  <div
+                    className={`p-3 rounded-2xl max-w-[85%] text-xs shadow-sm ${
+                      estMoi
+                        ? "bg-blue-600 text-white rounded-br-none"
+                        : "bg-white text-zinc-900 border rounded-bl-none"
+                    }`}
+                  >
+                    <p className="font-medium">{m.texte}</p>
+                    {m.audioUrl && (
+                      <audio controls src={m.audioUrl} className="mt-2 w-full max-w-[220px] h-8 rounded" />
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+            <div ref={chatEndRef} />
+          </ScrollArea>
+
+          {/* Barre de Saisie & Option Vocale */}
+          <div className="p-2 border-t bg-white flex flex-col gap-1.5">
+            {enEnregistrement ? (
+              <div className="flex items-center justify-between p-2 bg-red-50 border border-red-200 rounded-lg animate-pulse">
+                <span className="text-xs text-red-600 font-bold flex items-center gap-2">
+                  🔴 Enregistrement vocal ({dureeVocal}s)
+                </span>
+                <Button
+                  size="sm"
+                  className="bg-red-600 hover:bg-red-700 text-white text-xs h-8 px-3"
+                  onClick={arreterEnregistrement}
+                >
+                  ⏹️ Envoyer le vocal
+                </Button>
+              </div>
+            ) : (
+              <form onSubmit={envoyerTexte} className="flex items-center gap-1.5">
+                <Input
+                  value={texte}
+                  onChange={(e) => setTexte(e.target.value)}
+                  placeholder="Écrivez un message…"
+                  className="flex-1 text-xs h-9"
+                />
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-9 px-2 text-xs border-blue-200 text-blue-700 hover:bg-blue-50"
+                  onClick={demarrerEnregistrement}
+                  title="Envoyer un message vocal"
+                >
+                  🎙️
+                </Button>
+                <Button
+                  type="submit"
+                  size="sm"
+                  className="h-9 bg-blue-600 hover:bg-blue-700 text-white text-xs px-3"
+                  disabled={!texte.trim()}
+                >
+                  Envoyer
+                </Button>
+              </form>
+            )}
+          </div>
+        </Card>
+      )}
+    </>
+  );
+}
+
 // ---------- Composant Section Publicités & Promotions ----------
 function SectionPublicites({ publicites, setPublicites, autoriserUpload = false }) {
   const [openModal, setOpenModal] = useState(false);
@@ -2549,6 +2792,9 @@ export default function App() {
           boutiquesMasquees={boutiquesMasquees}
           basculerVisibiliteBoutique={basculerVisibiliteBoutique} />
       )}
+
+      {/* Bouton Flottant & Chat avec Option Vocale */}
+      <ChatFlottant userActif={userActif} entreprise={entreprise} />
     </div>
   );
 }
