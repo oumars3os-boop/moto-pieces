@@ -364,26 +364,28 @@ function Filtres({ recherche, setRecherche, cat, setCat, marque, setMarque, marq
     ? <img src={photosCategories[c.id]} alt="" className="w-5 h-5 rounded object-contain border bg-zinc-100 inline-block" />
     : <span>{c.emoji}</span>;
   return (
-    <div className="max-w-6xl mx-auto px-4 py-4 flex flex-wrap items-center gap-2">
-      <Input className="w-[200px]" placeholder="Rechercher…" value={recherche} onChange={e => setRecherche(e.target.value)} />
-      <Select value={cat} onValueChange={setCat}>
-        <SelectTrigger className="w-[180px]"><SelectValue placeholder="Catégorie" /></SelectTrigger>
-        <SelectContent className="bg-white text-zinc-900 border border-zinc-200 shadow-lg z-[200]">
-          <SelectItem value="toutes">🗂️ Toutes catégories</SelectItem>
-          {categories.map(c => <SelectItem key={c.id} value={c.id}>{iconeCat(c)} {c.label}</SelectItem>)}
-        </SelectContent>
-      </Select>
-      <Select value={marque} onValueChange={setMarque}>
-        <SelectTrigger className="w-[150px]"><SelectValue placeholder="Marque" /></SelectTrigger>
-        <SelectContent className="bg-white text-zinc-900 border border-zinc-200 shadow-lg z-[200]">
-          <SelectItem value="toutes">🏍️ Toutes marques</SelectItem>
-          {marques.map(m => <SelectItem key={m} value={m}>{photosMarques?.[m]
-            ? <img src={photosMarques[m]} alt="" className="w-5 h-5 rounded object-contain border bg-zinc-100 inline-block" />
-            : <span>🏍️</span>} {m}</SelectItem>)}
-        </SelectContent>
-      </Select>
+    <div className="max-w-[1400px] mx-auto px-3 sm:px-6 lg:px-8 py-3 flex flex-wrap sm:flex-nowrap items-center gap-2">
+      <Input className="w-full sm:w-[220px]" placeholder="🔎 Rechercher une pièce…" value={recherche} onChange={e => setRecherche(e.target.value)} />
+      <div className="grid grid-cols-2 sm:flex items-center gap-2 w-full sm:w-auto">
+        <Select value={cat} onValueChange={setCat}>
+          <SelectTrigger className="w-full sm:w-[180px]"><SelectValue placeholder="Catégorie" /></SelectTrigger>
+          <SelectContent className="bg-white text-zinc-900 border border-zinc-200 shadow-lg z-[200]">
+            <SelectItem value="toutes">🗂️ Toutes catégories</SelectItem>
+            {categories.map(c => <SelectItem key={c.id} value={c.id}>{iconeCat(c)} {c.label}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        <Select value={marque} onValueChange={setMarque}>
+          <SelectTrigger className="w-full sm:w-[150px]"><SelectValue placeholder="Marque" /></SelectTrigger>
+          <SelectContent className="bg-white text-zinc-900 border border-zinc-200 shadow-lg z-[200]">
+            <SelectItem value="toutes">🏍️ Toutes marques</SelectItem>
+            {marques.map(m => <SelectItem key={m} value={m}>{photosMarques?.[m]
+              ? <img src={photosMarques[m]} alt="" className="w-5 h-5 rounded object-contain border bg-zinc-100 inline-block" />
+              : <span>🏍️</span>} {m}</SelectItem>)}
+          </SelectContent>
+        </Select>
+      </div>
       <Select value={tri} onValueChange={setTri}>
-        <SelectTrigger className="w-[160px]"><SelectValue placeholder="Trier" /></SelectTrigger>
+        <SelectTrigger className="w-full sm:w-[160px]"><SelectValue placeholder="Trier" /></SelectTrigger>
         <SelectContent className="bg-white text-zinc-900 border border-zinc-200 shadow-lg z-[200]">
           <SelectItem value="pertinence">Pertinence</SelectItem>
           <SelectItem value="prix-asc">Prix croissant</SelectItem>
@@ -570,8 +572,8 @@ function VueClient({ produits, marques, creerVente, photosCategories, photosMarq
       )}
       <Filtres recherche={recherche} setRecherche={setRecherche} cat={cat} setCat={setCat}
         marque={marque} setMarque={setMarque} marques={marques} tri={tri} setTri={setTri} photosCategories={photosCategories} photosMarques={photosMarques} categories={categories} />
-      <main className="max-w-6xl mx-auto px-4 pb-24">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <main className="max-w-[1400px] mx-auto px-3 sm:px-6 lg:px-8 pb-24">
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2 sm:gap-4">
           {liste.map(p => <Produit key={p.id} p={p} onAjout={ajouter} onRetirer={retirer} categories={categories}
             qteDansPanier={panier.find(i => i.p.id === p.id)?.qte || 0} />)}
         </div>
@@ -1845,7 +1847,7 @@ function SectionPublicites({ publicites, setPublicites, autoriserUpload = false 
   };
 
   return (
-    <div className="max-w-6xl mx-auto w-full px-4 mt-4 mb-4">
+    <div className="max-w-[1400px] mx-auto w-full px-3 sm:px-6 lg:px-8 mt-4 mb-4">
       <div className="flex items-center justify-between mb-3">
         <h2 className="text-lg font-bold text-zinc-900 flex items-center gap-2">
           📢 Offres & Bannières Promotionnelles
@@ -2178,7 +2180,7 @@ export default function App() {
     <div className="min-h-screen bg-zinc-100 pb-10">
       {/* En-tête principal : Titre MotoPièces tout en haut, Bouton de Connexion / Profil en haut à droite */}
       <header className="bg-zinc-900 text-white sticky top-0 z-20 shadow">
-        <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
+        <div className="max-w-[1400px] mx-auto px-3 sm:px-6 lg:px-8 py-3 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             {/* Logo & Titre MotoPièces */}
             <BoutonSupprimer label={<><IconeMoto /> <span className="text-xl font-extrabold tracking-wide">{entreprise.nom || "MotoPièces"}</span><span className="block text-[10px] font-normal text-white/60 leading-tight">🛍️ {entreprise.materiel} — 📞 {entreprise.tel}</span></>} duree={7000}
