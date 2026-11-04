@@ -1844,8 +1844,6 @@ function SectionPublicites({ publicites, setPublicites, autoriserUpload = false 
     setPublicites((prev) => prev.filter((p) => p.id !== id));
   };
 
-  if (publicites.length === 0 && !autoriserUpload) return null;
-
   return (
     <div className="max-w-6xl mx-auto w-full px-4 mt-4 mb-4">
       <div className="flex items-center justify-between mb-3">
