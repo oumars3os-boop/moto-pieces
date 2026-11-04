@@ -1810,6 +1810,140 @@ function VueAdmin({ produits, setProduits, marques, setMarques, ventes, genererM
   );
 }
 
+// ---------- Composant Section Publicités & Promotions ----------
+function SectionPublicites({ publicites, setPublicites, autoriserUpload = false }) {
+  const [openModal, setOpenModal] = useState(false);
+  const [titre, setTitre] = useState("");
+  const [image, setImage] = useState(null);
+
+  const handleUpload = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      setImage(event.target.result);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const ajouterPublicite = () => {
+    if (!image) return;
+    const nouvellePub = {
+      id: Date.now(),
+      titre: titre.trim() || "Offre Spéciale MotoPièces",
+      image,
+      date: new Date().toLocaleDateString("fr-FR"),
+    };
+    setPublicites((prev) => [nouvellePub, ...prev]);
+    setTitre("");
+    setImage(null);
+    setOpenModal(false);
+  };
+
+  const supprimerPub = (id) => {
+    setPublicites((prev) => prev.filter((p) => p.id !== id));
+  };
+
+  if (publicites.length === 0 && !autoriserUpload) return null;
+
+  return (
+    <div className="max-w-6xl mx-auto w-full px-4 mt-4 mb-4">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-lg font-bold text-zinc-900 flex items-center gap-2">
+          📢 Offres & Bannières Promotionnelles
+        </h2>
+        {autoriserUpload && (
+          <Button
+            size="sm"
+            className="bg-blue-600 hover:bg-blue-700 text-white shadow"
+            onClick={() => setOpenModal(true)}
+          >
+            ➕ Publier une Image / Promo
+          </Button>
+        )}
+      </div>
+
+      {publicites.length === 0 ? (
+        <Card className="bg-gradient-to-r from-blue-600 to-indigo-700 text-white border-none shadow-md">
+          <CardContent className="p-5 flex flex-col md:flex-row items-center justify-between gap-4">
+            <div>
+              <p className="font-bold text-lg">🚀 Nouveautés & Promotions MotoPièces !</p>
+              <p className="text-xs text-blue-100 mt-1">
+                Découvrez nos pièces de rechange d'origine au meilleur prix du marché.
+              </p>
+            </div>
+            <Badge className="bg-amber-400 text-zinc-900 font-bold px-3 py-1 text-sm">
+              🔥 Prix Cassés
+            </Badge>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {publicites.map((pub) => (
+            <Card key={pub.id} className="overflow-hidden shadow border hover:shadow-lg transition bg-white">
+              <div className="relative h-48 bg-zinc-900">
+                <img src={pub.image} alt={pub.titre} className="w-full h-full object-cover" />
+                {autoriserUpload && (
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    className="absolute top-2 right-2 h-7 px-2 text-xs shadow"
+                    onClick={() => supprimerPub(pub.id)}
+                  >
+                    🗑️ Supprimer
+                  </Button>
+                )}
+              </div>
+              <CardContent className="p-3">
+                <h3 className="font-bold text-sm text-zinc-900">{pub.titre}</h3>
+                <p className="text-[10px] text-zinc-500 mt-1">Publié le {pub.date}</p>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      {/* Modal d'upload de publicité (Admin seulement) */}
+      {autoriserUpload && (
+        <Dialog open={openModal} onOpenChange={setOpenModal}>
+          <DialogContent className="bg-white rounded-lg p-6 max-w-md w-full">
+            <DialogHeader>
+              <DialogTitle>📢 Publier une Image Promotionnelle</DialogTitle>
+            </DialogHeader>
+            <div className="grid gap-3 mt-2">
+              <Label>Titre / Description de l'offre</Label>
+              <Input
+                value={titre}
+                onChange={(e) => setTitre(e.target.value)}
+                placeholder="Ex : Remise -15% sur les kits chaîne & freins"
+              />
+              <Label>Fichier Image (Upload)</Label>
+              <input
+                type="file"
+                accept="image/*"
+                onChange={handleUpload}
+                className="border p-2 rounded text-sm w-full bg-zinc-50"
+              />
+              {image && (
+                <div className="mt-2 h-36 rounded border overflow-hidden bg-zinc-100">
+                  <img src={image} alt="Aperçu" className="w-full h-full object-cover" />
+                </div>
+              )}
+              <Button
+                className="mt-4 bg-blue-600 hover:bg-blue-700 text-white h-11"
+                disabled={!image}
+                onClick={ajouterPublicite}
+              >
+                ✅ Publier la bannière
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
+    </div>
+  );
+}
+
 const COMPTES_PAR_DEFAUT = [
   { id: 1, nom: "Administrateur Principal", tel: "+225 07 00 00 00 00", pin: "1234", role: "admin" },
   { id: 2, nom: "Vendeur Exemple", tel: "+225 05 00 00 00 00", pin: "0000", role: "vendeur" }
@@ -2198,16 +2332,23 @@ export default function App() {
         </DialogContent>
       </Dialog>
 
-      {/* Vitrine des Marchandises Disponibles (Visible aux clients et visiteurs) */}
+      {/* Vitrine des Marchandises & Bannières Publicitaires (Visibles aux clients et visiteurs) */}
       {(!role || role === "client") && (
-        <VueClient
-          produits={produits}
-          marques={marques}
-          creerVente={creerVente}
-          photosCategories={photosCategories}
-          photosMarques={photosMarques}
-          categories={categories}
-        />
+        <div className="space-y-4">
+          <SectionPublicites
+            publicites={publicites}
+            setPublicites={setPublicites}
+            autoriserUpload={role === "admin"}
+          />
+          <VueClient
+            produits={produits}
+            marques={marques}
+            creerVente={creerVente}
+            photosCategories={photosCategories}
+            photosMarques={photosMarques}
+            categories={categories}
+          />
+        </div>
       )}
 
       {/* Vues Métier réservées au personnel de l'entreprise */}
