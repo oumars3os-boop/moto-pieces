@@ -2181,19 +2181,29 @@ export default function App() {
       {/* En-tête principal : Titre MotoPièces tout en haut, Bouton de Connexion / Profil en haut à droite */}
       <header className="bg-zinc-900 text-white sticky top-0 z-20 shadow">
         <div className="max-w-[1400px] mx-auto px-3 sm:px-6 lg:px-8 py-3 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
+          {/* Bloc Gauche : Bouton Se connecter sur Mobile (en haut à gauche) + Logo & Titre MotoPièces */}
+          <div className="flex items-center gap-2 sm:gap-3">
+            {!role && (
+              <Button
+                className="md:hidden bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs px-3 h-9 shadow shrink-0"
+                onClick={() => { setOpenLoginModal(true); setErreurLogin(""); setSuccesMsg(""); }}
+              >
+                🔐 Se connecter
+              </Button>
+            )}
+
             {/* Logo & Titre MotoPièces */}
-            <BoutonSupprimer label={<><IconeMoto /> <span className="text-xl font-extrabold tracking-wide">{entreprise.nom || "MotoPièces"}</span><span className="block text-[10px] font-normal text-white/60 leading-tight">🛍️ {entreprise.materiel} — 📞 {entreprise.tel}</span></>} duree={7000}
+            <BoutonSupprimer label={<><IconeMoto /> <span className="text-lg sm:text-xl font-extrabold tracking-wide">{entreprise.nom || "MotoPièces"}</span><span className="block text-[10px] font-normal text-white/60 leading-tight">🛍️ {entreprise.materiel} — 📞 {entreprise.tel}</span></>} duree={7000}
               boutonClass="text-white hover:bg-white/10 text-left rounded p-1"
               onSupprimer={() => setMenuDev(true)} />
             {role && <Badge variant="secondary" className="hidden sm:inline-flex">{r.emoji} {r.titre}</Badge>}
           </div>
 
-          {/* En haut à droite : Bouton de connexion si déconnecté OR Bouton de profil si connecté */}
+          {/* Bloc Droit : Bouton Se connecter sur Ordinateur (en haut à droite) OR Profil si connecté */}
           <div className="flex items-center gap-2">
             {!role ? (
               <Button
-                className="bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm px-4 h-10 shadow"
+                className="hidden md:inline-flex bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm px-4 h-10 shadow"
                 onClick={() => { setOpenLoginModal(true); setErreurLogin(""); setSuccesMsg(""); }}
               >
                 🔐 Se connecter
