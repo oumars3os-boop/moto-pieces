@@ -2038,6 +2038,14 @@ export default function App() {
   const [publicites, setPublicites] = useState(() => {
     try { const s = localStorage.getItem("motopieces_publicites"); return s ? JSON.parse(s) : []; } catch { return []; }
   });
+  const [boutiquesMasquees, setBoutiquesMasquees] = useState(() => {
+    try {
+      const s = localStorage.getItem("motopieces_boutiques_masquees");
+      return s ? JSON.parse(s) : [];
+    } catch {
+      return [];
+    }
+  });
   const [openProfil, setOpenProfil] = useState(false);
   const [openLoginModal, setOpenLoginModal] = useState(false);
   const [erreurLogin, setErreurLogin] = useState("");
@@ -2155,6 +2163,18 @@ export default function App() {
   useEffect(() => {
     try { localStorage.setItem("motopieces_publicites", JSON.stringify(publicites)); } catch {}
   }, [publicites]);
+
+  useEffect(() => {
+    try { localStorage.setItem("motopieces_boutiques_masquees", JSON.stringify(boutiquesMasquees)); } catch {}
+  }, [boutiquesMasquees]);
+
+  const basculerVisibiliteBoutique = (nomBoutique) => {
+    setBoutiquesMasquees(prev =>
+      prev.includes(nomBoutique)
+        ? prev.filter(b => b !== nomBoutique)
+        : [...prev, nomBoutique]
+    );
+  };
 
   // Connexion sécurisée : téléphone + code PIN
   const connexion = (tel, pin) => {
