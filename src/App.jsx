@@ -2288,11 +2288,11 @@ export default function App() {
         </DialogContent>
       </Dialog>
 
-      {/* Section dédiée aux Publicités & Bannières Promotionnelles (avec Upload) */}
+      {/* Section dédiée aux Publicites & Bannières Promotionnelles (visibles par tous, gestion par admin) */}
       <SectionPublicites
         publicites={publicites}
         setPublicites={setPublicites}
-        autoriserUpload={true}
+        autoriserUpload={role === "admin"}
       />
 
       {/* Modal du Profil Utilisateur */}
