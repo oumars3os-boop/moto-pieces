@@ -1959,6 +1959,7 @@ export default function App() {
     try { const s = localStorage.getItem("motopieces_publicites"); return s ? JSON.parse(s) : []; } catch { return []; }
   });
   const [openProfil, setOpenProfil] = useState(false);
+  const [openLoginModal, setOpenLoginModal] = useState(false);
   const [erreurLogin, setErreurLogin] = useState("");
   const [telLogin, setTelLogin] = useState("");
   const [pinLogin, setPinLogin] = useState("");
@@ -2084,6 +2085,7 @@ export default function App() {
     setErreurLogin("");
     setUserActif(c);
     setRole(c.role);
+    setOpenLoginModal(false);
   };
 
   const deconnexion = async () => {
@@ -2168,99 +2170,11 @@ export default function App() {
     );
   }
 
-  if (!role) {
-    return (
-      <div className="min-h-screen bg-zinc-100 flex flex-col items-center justify-start p-4 py-8">
-        <div className="max-w-md w-full">
-          <div className="text-center mb-8">
-            {/* Logo : maintenir 7 secondes pour ouvrir le menu développeur */}
-            <div className="flex justify-center">
-              <BoutonSupprimer label={<><IconeMoto /> {entreprise.nom}<span className="block text-xs font-normal text-zinc-500 leading-tight">🛍️ {entreprise.materiel} — 📞 {entreprise.tel}</span></>} duree={7000}
-                boutonClass="text-zinc-900 font-bold text-3xl hover:bg-zinc-200 text-left"
-                onSupprimer={() => setMenuDev(true)} />
-            </div>
-            <p className="text-muted-foreground mt-2">Connexion sécurisée — entrez votre téléphone et votre code PIN.</p>
-          </div>
-          <Card className="bg-white shadow">
-            <CardContent className="p-6 grid gap-1.5">
-              {succesMsg && <p className="text-green-600 text-sm mb-1">✅ {succesMsg}</p>}
-              {!oubli ? (
-                <>
-                  <Label>Téléphone</Label>
-                  <Input autoFocus inputMode="tel" value={telLogin} onChange={e => setTelLogin(e.target.value)} placeholder="+225 07 00 00 00 00" />
-                  <Label className="pt-2">Code PIN (4 chiffres)</Label>
-                  <Input type="password" inputMode="numeric" maxLength={4} value={pinLogin}
-                    onChange={e => setPinLogin(e.target.value.replace(/\D/g, ""))}
-                    onKeyDown={e => { if (e.key === "Enter") connexion(telLogin, pinLogin); }}
-                    placeholder="••••" />
-                  {erreurLogin && <p className="text-red-600 text-sm mt-1">{erreurLogin}</p>}
-                  <Button className="mt-4 bg-blue-600 hover:bg-blue-700 text-white h-12 text-base"
-                    disabled={!telLogin.trim() || pinLogin.length < 4}
-                    onClick={() => connexion(telLogin, pinLogin)}>🔐 Se connecter</Button>
-                  <button className="text-sm text-blue-600 hover:underline mt-2" onClick={() => { setOubli(true); setErreurLogin(""); setSuccesMsg(""); }}>🔑 Code PIN oublié ?</button>
-                  <p className="text-xs text-muted-foreground mt-2 text-center">
-                    Pas encore de compte ? Demandez à l'administrateur de vous en créer un.
-                  </p>
-                </>
-              ) : oubliEtape === 1 ? (
-                <>
-                  <div className="font-semibold text-base">🔑 Code PIN oublié</div>
-                  <p className="text-xs text-muted-foreground">Entrez votre numéro de téléphone.</p>
-                  <Label className="pt-2">Téléphone</Label>
-                  <Input autoFocus inputMode="tel" value={oubliTel} onChange={e => setOubliTel(e.target.value)} placeholder="+225 07 00 00 00 00" />
-                  {erreurLogin && <p className="text-red-600 text-sm mt-1">{erreurLogin}</p>}
-                  <Button className="mt-4 bg-blue-600 hover:bg-blue-700 text-white h-11 text-base" disabled={!oubliTel.trim()} onClick={verifierTelOubli}>Vérifier</Button>
-                  <button className="text-sm text-muted-foreground hover:underline mt-2" onClick={() => { setOubli(false); setErreurLogin(""); }}>← Retour à la connexion</button>
-                </>
-              ) : (
-                <>
-                  <div className="font-semibold text-base">🔑 Réinitialiser votre code PIN</div>
-                  <p className="text-xs text-muted-foreground">Entrez la clé donnée par l'administrateur, puis votre nouveau code PIN.</p>
-                  <Label className="pt-2">Clé de réinitialisation</Label>
-                  <Input autoFocus inputMode="numeric" value={oubliCle} onChange={e => setOubliCle(e.target.value)} placeholder="Clé à 6 chiffres" />
-                  <Label className="pt-2">Nouveau code PIN (4 chiffres)</Label>
-                  <Input type="password" inputMode="numeric" maxLength={4} value={oubliPin}
-                    onChange={e => setOubliPin(e.target.value.replace(/\D/g, ""))} placeholder="••••" />
-                  <Label className="pt-2">Confirmez le nouveau code PIN</Label>
-                  <Input type="password" inputMode="numeric" maxLength={4} value={oubliPin2}
-                    onChange={e => setOubliPin2(e.target.value.replace(/\D/g, ""))} placeholder="••••" />
-                  {erreurLogin && <p className="text-red-600 text-sm mt-1">{erreurLogin}</p>}
-                  <Button className="mt-4 bg-blue-600 hover:bg-blue-700 text-white h-11 text-base"
-                    disabled={!oubliCle.trim() || oubliPin.length < 4 || oubliPin2.length < 4}
-                    onClick={reinitialiserPin}>✅ Réinitialiser mon PIN</Button>
-                  <button className="text-sm text-muted-foreground hover:underline mt-2" onClick={() => { setOubli(false); setErreurLogin(""); setOubliEtape(1); }}>← Annuler</button>
-                </>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* Section Publicités & Promotions sur la page d'accueil publique (Avant connexion) */}
-        <SectionPublicites
-          publicites={publicites}
-          setPublicites={setPublicites}
-          autoriserUpload={true}
-        />
-
-        {/* Menu développeur aussi accessible depuis l'écran de connexion */}
-        <Dialog open={menuDev} onOpenChange={o => { setMenuDev(o); if (!o) { setCodeOk(false); setCodeSaisi(""); } }}>
-          <DialogContent className="bg-white text-zinc-900 rounded-lg p-4 border shadow-xl" style={{position:"fixed",left:"50%",top:"50%",transform:"translate(-50%,-50%)",maxWidth:"300px",width:"90%",zIndex:60}}>
-            <ContenuMenuDev codeOk={codeOk} setCodeOk={setCodeOk} codeSaisi={codeSaisi} setCodeSaisi={setCodeSaisi}
-              nouvelAdmin={nouvelAdmin} setNouvelAdmin={setNouvelAdmin}
-              comptes={comptes} setComptes={setComptes}
-              fermer={() => { setMenuDev(false); setCodeOk(false); setCodeSaisi(""); }}
-              CODE_DEV={CODE_DEV} />
-          </DialogContent>
-        </Dialog>
-      </div>
-    );
-  }
-
   const r = ROLES.find(x => x.id === role) || { emoji: "🧑‍🔧👩‍💼", titre: "Vendeur + Secrétaire" };
 
   return (
     <div className="min-h-screen bg-zinc-100 pb-10">
-      {/* En-tête principal : Titre MotoPièces tout en haut, profil et accès utilisateur */}
+      {/* En-tête principal : Titre MotoPièces tout en haut, Bouton de Connexion / Profil en haut à droite */}
       <header className="bg-zinc-900 text-white sticky top-0 z-20 shadow">
         <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
@@ -2268,35 +2182,117 @@ export default function App() {
             <BoutonSupprimer label={<><IconeMoto /> <span className="text-xl font-extrabold tracking-wide">{entreprise.nom || "MotoPièces"}</span><span className="block text-[10px] font-normal text-white/60 leading-tight">🛍️ {entreprise.materiel} — 📞 {entreprise.tel}</span></>} duree={7000}
               boutonClass="text-white hover:bg-white/10 text-left rounded p-1"
               onSupprimer={() => setMenuDev(true)} />
-            <Badge variant="secondary" className="hidden sm:inline-flex">{r.emoji} {r.titre}</Badge>
+            {role && <Badge variant="secondary" className="hidden sm:inline-flex">{r.emoji} {r.titre}</Badge>}
           </div>
 
-          {/* Affichage du nom d'utilisateur / Profil & Déconnexion */}
+          {/* En haut à droite : Bouton de connexion si déconnecté OR Bouton de profil si connecté */}
           <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              className="bg-zinc-800 border-zinc-700 text-white hover:bg-zinc-700 flex items-center gap-2"
-              onClick={() => setOpenProfil(true)}
-            >
-              <span className="w-2 h-2 rounded-full bg-green-500"></span>
-              <span className="font-semibold text-xs max-w-[130px] sm:max-w-none truncate">
-                👤 {userActif?.nom || userActif?.tel || supabaseUser?.email || "Mon Profil"}
-              </span>
-            </Button>
+            {!role ? (
+              <Button
+                className="bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm px-4 h-10 shadow"
+                onClick={() => { setOpenLoginModal(true); setErreurLogin(""); setSuccesMsg(""); }}
+              >
+                🔐 Se connecter
+              </Button>
+            ) : (
+              <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="bg-zinc-800 border-zinc-700 text-white hover:bg-zinc-700 flex items-center gap-2"
+                  onClick={() => setOpenProfil(true)}
+                >
+                  <span className="w-2 h-2 rounded-full bg-green-500"></span>
+                  <span className="font-semibold text-xs max-w-[130px] sm:max-w-none truncate">
+                    👤 {userActif?.nom || userActif?.tel || supabaseUser?.email || "Mon Profil"}
+                  </span>
+                </Button>
 
-            <Button variant="ghost" size="sm" className="text-white/70 hover:text-white text-xs" onClick={deconnexion}>
-              Déconnexion
-            </Button>
+                <Button variant="ghost" size="sm" className="text-white/70 hover:text-white text-xs" onClick={deconnexion}>
+                  Déconnexion
+                </Button>
+              </>
+            )}
           </div>
         </div>
       </header>
 
-      {/* Section dédiée aux Publicités & Bannières Promotionnelles */}
+      {/* Interface de Saisie du Téléphone et Code PIN (Modal de Connexion) */}
+      <Dialog open={openLoginModal} onOpenChange={setOpenLoginModal}>
+        <DialogContent className="bg-white text-zinc-900 rounded-lg p-6 max-w-md w-full">
+          <DialogHeader>
+            <DialogTitle className="text-center text-xl font-bold">🔐 Connexion - MotoPièces</DialogTitle>
+          </DialogHeader>
+          <div className="grid gap-2 mt-2">
+            {succesMsg && <p className="text-green-600 text-sm mb-1 text-center">✅ {succesMsg}</p>}
+            {!oubli ? (
+              <>
+                <Label>Numéro de téléphone</Label>
+                <Input
+                  autoFocus
+                  inputMode="tel"
+                  value={telLogin}
+                  onChange={e => setTelLogin(e.target.value)}
+                  placeholder="+225 07 00 00 00 00"
+                />
+                <Label className="pt-2">Code PIN (4 chiffres)</Label>
+                <Input
+                  type="password"
+                  inputMode="numeric"
+                  maxLength={4}
+                  value={pinLogin}
+                  onChange={e => setPinLogin(e.target.value.replace(/\D/g, ""))}
+                  onKeyDown={e => { if (e.key === "Enter") connexion(telLogin, pinLogin); }}
+                  placeholder="••••"
+                />
+                {erreurLogin && <p className="text-red-600 text-sm mt-1">{erreurLogin}</p>}
+                <Button
+                  className="mt-4 bg-blue-600 hover:bg-blue-700 text-white h-12 text-base font-bold shadow"
+                  disabled={!telLogin.trim() || pinLogin.length < 4}
+                  onClick={() => connexion(telLogin, pinLogin)}
+                >
+                  🔐 Valider la connexion
+                </Button>
+                <button className="text-sm text-blue-600 hover:underline mt-2 text-center" onClick={() => { setOubli(true); setErreurLogin(""); setSuccesMsg(""); }}>🔑 Code PIN oublié ?</button>
+              </>
+            ) : oubliEtape === 1 ? (
+              <>
+                <div className="font-semibold text-base">🔑 Code PIN oublié</div>
+                <p className="text-xs text-muted-foreground">Entrez votre numéro de téléphone pour vérifier votre compte.</p>
+                <Label className="pt-2">Téléphone</Label>
+                <Input autoFocus inputMode="tel" value={oubliTel} onChange={e => setOubliTel(e.target.value)} placeholder="+225 07 00 00 00 00" />
+                {erreurLogin && <p className="text-red-600 text-sm mt-1">{erreurLogin}</p>}
+                <Button className="mt-4 bg-blue-600 hover:bg-blue-700 text-white h-11 text-base" disabled={!oubliTel.trim()} onClick={verifierTelOubli}>Vérifier</Button>
+                <button className="text-sm text-muted-foreground hover:underline mt-2 text-center" onClick={() => { setOubli(false); setErreurLogin(""); }}>← Retour à la connexion</button>
+              </>
+            ) : (
+              <>
+                <div className="font-semibold text-base">🔑 Réinitialiser votre code PIN</div>
+                <p className="text-xs text-muted-foreground">Entrez la clé transmise par l'administrateur, puis votre nouveau PIN.</p>
+                <Label className="pt-2">Clé de réinitialisation</Label>
+                <Input autoFocus inputMode="numeric" value={oubliCle} onChange={e => setOubliCle(e.target.value)} placeholder="Clé à 6 chiffres" />
+                <Label className="pt-2">Nouveau code PIN (4 chiffres)</Label>
+                <Input type="password" inputMode="numeric" maxLength={4} value={oubliPin}
+                  onChange={e => setOubliPin(e.target.value.replace(/\D/g, ""))} placeholder="••••" />
+                <Label className="pt-2">Confirmez le nouveau code PIN</Label>
+                <Input type="password" inputMode="numeric" maxLength={4} value={oubliPin2}
+                  onChange={e => setOubliPin2(e.target.value.replace(/\D/g, ""))} placeholder="••••" />
+                {erreurLogin && <p className="text-red-600 text-sm mt-1">{erreurLogin}</p>}
+                <Button className="mt-4 bg-blue-600 hover:bg-blue-700 text-white h-11 text-base"
+                  disabled={!oubliCle.trim() || oubliPin.length < 4 || oubliPin2.length < 4}
+                  onClick={reinitialiserPin}>✅ Réinitialiser mon PIN</Button>
+                <button className="text-sm text-muted-foreground hover:underline mt-2 text-center" onClick={() => { setOubli(false); setErreurLogin(""); setOubliEtape(1); }}>← Annuler</button>
+              </>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Section dédiée aux Publicités & Bannières Promotionnelles (avec Upload) */}
       <SectionPublicites
         publicites={publicites}
         setPublicites={setPublicites}
-        estAdmin={role === "admin" || role === "vendeur-secretaire"}
+        autoriserUpload={true}
       />
 
       {/* Modal du Profil Utilisateur */}
@@ -2339,8 +2335,19 @@ export default function App() {
         </DialogContent>
       </Dialog>
 
-      {/* Vues Métier selon le Rôle */}
-      {role === "client" && <VueClient produits={produits} marques={marques} creerVente={creerVente} photosCategories={photosCategories} photosMarques={photosMarques} categories={categories} />}
+      {/* Vitrine des Marchandises Disponibles (Visible aux clients et visiteurs) */}
+      {(!role || role === "client") && (
+        <VueClient
+          produits={produits}
+          marques={marques}
+          creerVente={creerVente}
+          photosCategories={photosCategories}
+          photosMarques={photosMarques}
+          categories={categories}
+        />
+      )}
+
+      {/* Vues Métier réservées au personnel de l'entreprise */}
       {role === "vendeur" && <VueVendeur produits={produits} marques={marques} ventes={ventes} creerVente={creerVente} />}
       {role === "secretaire" && <VueSecretaire ventes={ventes} confirmerPaiement={confirmerPaiement} majPrixLigne={majPrixLigne} modePrix={modePrix} entreprise={entreprise} />}
       {role === "vendeur-secretaire" && (
