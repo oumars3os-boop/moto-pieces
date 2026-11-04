@@ -289,6 +289,7 @@ function BoutonSupprimer({ onSupprimer, label = "🗑️ Supprimer", duree = 500
 function Produit({ p, onAjout, onRetirer, admin, onEditer, categories, qteDansPanier }) {
   const [flash, setFlash] = useState(false);
   const [flashMoins, setFlashMoins] = useState(false);
+  const [openDetail, setOpenDetail] = useState(false);
   const timerRef = useRef(null);
   const timerMoinsRef = useRef(null);
   const ajouterLocal = () => {
@@ -305,57 +306,132 @@ function Produit({ p, onAjout, onRetirer, admin, onEditer, categories, qteDansPa
     if (timerMoinsRef.current) clearTimeout(timerMoinsRef.current);
     timerMoinsRef.current = setTimeout(() => setFlashMoins(false), 700);
   };
+
+  const nomBoutique = p.boutique || "MotoPièces Principal";
+
   return (
-    <Card className="bg-white hover:shadow-lg transition-shadow">
-      <CardContent className="p-4 flex flex-col gap-2">
-        <div className="flex items-start justify-between">
-          <Badge variant="secondary">{(categories?.find(c => c.id === p.cat) || { emoji: "📦", label: "?" }).emoji} {(categories?.find(c => c.id === p.cat) || { label: "Autre" }).label}</Badge>
-          <div className="flex items-center gap-1">
-            {p.code && <Badge variant="outline" className="font-mono text-[10px]">{p.code}</Badge>}
-            <span className="text-xs text-muted-foreground">{p.marque}</span>
+    <>
+      <Card className="bg-white hover:shadow-lg transition-shadow flex flex-col justify-between">
+        <CardContent className="p-3 sm:p-4 flex flex-col gap-2">
+          <div className="flex items-start justify-between">
+            <Badge variant="secondary" className="text-[10px] sm:text-xs">{(categories?.find(c => c.id === p.cat) || { emoji: "📦", label: "?" }).emoji} {(categories?.find(c => c.id === p.cat) || { label: "Autre" }).label}</Badge>
+            <div className="flex items-center gap-1">
+              {p.code && <Badge variant="outline" className="font-mono text-[9px] sm:text-[10px]">{p.code}</Badge>}
+              <span className="text-[10px] sm:text-xs text-muted-foreground">{p.marque}</span>
+            </div>
           </div>
-        </div>
-        <div className="h-20 rounded-md bg-gradient-to-br from-zinc-800 to-zinc-600 flex items-center justify-center text-white/80 overflow-hidden">
-          {p.photo
-            ? <img src={p.photo} alt={p.nom} className="w-full h-full object-contain bg-zinc-100" />
-            : <IconeMoto />}
-        </div>
-        <div>
-          <div className="font-semibold leading-tight">{p.nom}</div>
-          <div className="text-xs text-muted-foreground mt-0.5">{p.desc}</div>
-        </div>
-        <div className="flex items-center justify-between text-sm">
-          <Etoiles note={p.note} />
-          <span className="text-red-600 text-xs font-semibold">
-            {p.stock > 0 ? `Stock : ${p.stock}/${p.stockInit ?? p.stock}` : "Rupture de stock"}
-          </span>
-        </div>
-        <div className="flex items-center justify-between mt-1">
-          <span className={p.prix > 0 ? "font-bold text-lg" : "text-sm text-muted-foreground"}>{fmt(p.prix)}</span>
-          {admin
-            ? <Button size="sm" variant="outline" onClick={() => onEditer(p)}>Modifier</Button>
-            : (
-              <div className="flex items-center gap-2">
-                {qteDansPanier > 0 && (
-                  <>
-                    <span className="bg-blue-600 text-white text-xs font-bold rounded-full min-w-5 h-5 px-1.5 inline-flex items-center justify-center">×{qteDansPanier}</span>
-                    <button type="button"
-                      className={`h-8 w-8 rounded-full border text-base font-bold transition-all active:scale-90 active:shadow-inner ${flashMoins
-                        ? "bg-red-500 text-white border-red-500"
-                        : "bg-red-100 text-red-600 border-red-300 hover:bg-red-200"}`}
-                      onClick={retirerLocal}>−</button>
-                  </>
-                )}
-                <Button size="sm" disabled={p.stock === 0}
-                  className={flash ? "bg-green-600 hover:bg-green-700 text-white" : ""}
-                  onClick={ajouterLocal}>
-                  {flash ? "✓ Ajouté !" : "Ajouter"}
-                </Button>
+          <div
+            className="h-28 sm:h-32 rounded-md bg-zinc-100 flex items-center justify-center overflow-hidden border cursor-pointer hover:opacity-90 transition"
+            onClick={() => setOpenDetail(true)}
+          >
+            {p.photo
+              ? <img src={p.photo} alt={p.nom} className="w-full h-full object-contain" />
+              : <IconeMoto />}
+          </div>
+          <div>
+            <div
+              className="font-semibold text-xs sm:text-sm leading-tight cursor-pointer hover:text-blue-600 transition"
+              onClick={() => setOpenDetail(true)}
+            >
+              {p.nom}
+            </div>
+            <div className="text-[10px] sm:text-xs text-muted-foreground mt-0.5 line-clamp-1">{p.desc}</div>
+
+            {/* Affichage explicite de la boutique de provenance */}
+            <div className="mt-1">
+              <Badge variant="outline" className="text-[9px] sm:text-[10px] bg-blue-50 text-blue-800 border-blue-200">
+                🏪 {nomBoutique}
+              </Badge>
+            </div>
+          </div>
+          <div className="flex items-center justify-between text-xs sm:text-sm">
+            <Etoiles note={p.note} />
+            <span className="text-red-600 text-[10px] sm:text-xs font-semibold">
+              {p.stock > 0 ? `Stock : ${p.stock}` : "Rupture"}
+            </span>
+          </div>
+          <div className="flex items-center justify-between mt-1 pt-1 border-t">
+            <span className={p.prix > 0 ? "font-bold text-sm sm:text-base text-zinc-900" : "text-xs text-muted-foreground"}>{fmt(p.prix)}</span>
+            {admin
+              ? <Button size="sm" variant="outline" className="text-xs" onClick={() => onEditer(p)}>Modifier</Button>
+              : (
+                <div className="flex items-center gap-1 sm:gap-2">
+                  {qteDansPanier > 0 && (
+                    <>
+                      <span className="bg-blue-600 text-white text-[10px] font-bold rounded-full min-w-4 h-4 px-1 inline-flex items-center justify-center">×{qteDansPanier}</span>
+                      <button type="button"
+                        className={`h-7 w-7 sm:h-8 sm:w-8 rounded-full border text-sm font-bold transition-all active:scale-90 ${flashMoins
+                          ? "bg-red-500 text-white border-red-500"
+                          : "bg-red-100 text-red-600 border-red-300 hover:bg-red-200"}`}
+                        onClick={retirerLocal}>−</button>
+                    </>
+                  )}
+                  <Button size="sm" disabled={p.stock === 0}
+                    className={`text-xs px-2 sm:px-3 h-8 sm:h-9 ${flash ? "bg-green-600 hover:bg-green-700 text-white" : ""}`}
+                    onClick={ajouterLocal}>
+                    {flash ? "✓ Ajouté !" : "Ajouter"}
+                  </Button>
+                </div>
+              )}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Page détaillée de l'article avec provenance boutique */}
+      <Dialog open={openDetail} onOpenChange={setOpenDetail}>
+        <DialogContent className="bg-white text-zinc-900 rounded-lg p-5 max-w-md w-full">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-bold">{p.nom}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 mt-1">
+            <div className="h-44 rounded-lg bg-zinc-100 border flex items-center justify-center overflow-hidden">
+              {p.photo
+                ? <img src={p.photo} alt={p.nom} className="w-full h-full object-contain" />
+                : <IconeMoto />}
+            </div>
+
+            {/* Badge de provenance boutique */}
+            <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg flex items-center justify-between">
+              <div>
+                <p className="text-[10px] text-blue-600 font-semibold uppercase tracking-wider">Provenance / Vendeur</p>
+                <p className="font-bold text-blue-900 text-sm">🏪 {nomBoutique}</p>
               </div>
-            )}
-        </div>
-      </CardContent>
-    </Card>
+              <Badge className="bg-blue-600 text-white text-xs">Achat Direct</Badge>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <div className="p-2 border rounded bg-zinc-50">
+                <span className="text-zinc-500 block">Marque</span>
+                <span className="font-semibold text-zinc-900">{p.marque || "Universelle"}</span>
+              </div>
+              <div className="p-2 border rounded bg-zinc-50">
+                <span className="text-zinc-500 block">Code Référence</span>
+                <span className="font-mono font-semibold text-zinc-900">{p.code || "N/A"}</span>
+              </div>
+            </div>
+
+            <div>
+              <p className="text-xs text-zinc-500 font-medium">Description du produit :</p>
+              <p className="text-xs text-zinc-700 mt-0.5">{p.desc || "Aucune description détaillée disponible."}</p>
+            </div>
+
+            <div className="flex items-center justify-between pt-2 border-t mt-3">
+              <div>
+                <span className="text-xs text-zinc-500 block">Prix unitaire</span>
+                <span className="font-bold text-lg text-blue-700">{fmt(p.prix)}</span>
+              </div>
+              <Button
+                disabled={p.stock === 0}
+                className="bg-blue-600 hover:bg-blue-700 text-white px-5 h-10 font-bold"
+                onClick={() => { ajouterLocal(); setOpenDetail(false); }}
+              >
+                🛒 Ajouter au Panier
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 
@@ -2107,8 +2183,23 @@ export default function App() {
   const creerVente = (v) => {
     const maintenant = new Date();
     const dateVente = maintenant.toLocaleDateString("fr-FR") + " à " + maintenant.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
-    setVentes(prev => [...prev, { ...v, id: nextVente, statut: "en attente", date: dateVente }]);
+
+    // Routage automatique des ventes et notifications vers la boutique / vendeur concerné
+    const premierProduit = v.items?.[0]?.p || v.items?.[0];
+    const nomBoutique = premierProduit?.boutique || v.vendeur || userActif?.nom || entreprise.nom || "MotoPièces Principal";
+
+    const nouvelleVente = {
+      ...v,
+      id: nextVente,
+      vendeur: nomBoutique,
+      boutique: nomBoutique,
+      statut: "en attente",
+      date: dateVente,
+    };
+
+    setVentes(prev => [nouvelleVente, ...prev]);
     setNextVente(n => n + 1);
+
     // Décrément automatique du stock : 10 vendus → il reste 9
     setProduits(prev => prev.map(p => {
       const ligne = v.items.find(it => (it.p ? it.p.id : it.id) === p.id);
