@@ -1811,7 +1811,7 @@ function VueAdmin({ produits, setProduits, marques, setMarques, ventes, genererM
 }
 
 // ---------- Composant Section Publicités & Promotions ----------
-function SectionPublicites({ publicites, setPublicites, estAdmin }) {
+function SectionPublicites({ publicites, setPublicites, autoriserUpload = true }) {
   const [openModal, setOpenModal] = useState(false);
   const [titre, setTitre] = useState("");
   const [image, setImage] = useState(null);
@@ -1845,18 +1845,18 @@ function SectionPublicites({ publicites, setPublicites, estAdmin }) {
   };
 
   return (
-    <div className="max-w-6xl mx-auto px-4 mt-4 mb-2">
+    <div className="max-w-4xl mx-auto w-full px-4 mt-6 mb-6">
       <div className="flex items-center justify-between mb-3">
         <h2 className="text-lg font-bold text-zinc-900 flex items-center gap-2">
-          📢 Promotions & Bannières Publicitaires
+          📢 Offres & Bannières Promotionnelles
         </h2>
-        {estAdmin && (
+        {autoriserUpload && (
           <Button
             size="sm"
-            className="bg-blue-600 hover:bg-blue-700 text-white"
+            className="bg-blue-600 hover:bg-blue-700 text-white shadow"
             onClick={() => setOpenModal(true)}
           >
-            ➕ Publier une Promo / Image
+            ➕ Publier une Image / Promo
           </Button>
         )}
       </div>
@@ -1876,16 +1876,16 @@ function SectionPublicites({ publicites, setPublicites, estAdmin }) {
           </CardContent>
         </Card>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {publicites.map((pub) => (
             <Card key={pub.id} className="overflow-hidden shadow border hover:shadow-lg transition bg-white">
               <div className="relative h-48 bg-zinc-900">
                 <img src={pub.image} alt={pub.titre} className="w-full h-full object-cover" />
-                {estAdmin && (
+                {autoriserUpload && (
                   <Button
                     size="sm"
                     variant="destructive"
-                    className="absolute top-2 right-2 h-7 px-2 text-xs"
+                    className="absolute top-2 right-2 h-7 px-2 text-xs shadow"
                     onClick={() => supprimerPub(pub.id)}
                   >
                     🗑️ Supprimer
@@ -1905,14 +1905,14 @@ function SectionPublicites({ publicites, setPublicites, estAdmin }) {
       <Dialog open={openModal} onOpenChange={setOpenModal}>
         <DialogContent className="bg-white rounded-lg p-6 max-w-md w-full">
           <DialogHeader>
-            <DialogTitle>📢 Ajouter une Image Promotionnelle</DialogTitle>
+            <DialogTitle>📢 Publier une Image Promotionnelle</DialogTitle>
           </DialogHeader>
           <div className="grid gap-3 mt-2">
             <Label>Titre / Description de l'offre</Label>
             <Input
               value={titre}
               onChange={(e) => setTitre(e.target.value)}
-              placeholder="Ex : Remise -15% sur les bougies & huiles"
+              placeholder="Ex : Remise -15% sur les kits chaîne & freins"
             />
             <Label>Fichier Image (Upload)</Label>
             <input
@@ -2170,7 +2170,7 @@ export default function App() {
 
   if (!role) {
     return (
-      <div className="min-h-screen bg-zinc-100 flex items-center justify-center p-4">
+      <div className="min-h-screen bg-zinc-100 flex flex-col items-center justify-start p-4 py-8">
         <div className="max-w-md w-full">
           <div className="text-center mb-8">
             {/* Logo : maintenir 7 secondes pour ouvrir le menu développeur */}
@@ -2181,7 +2181,7 @@ export default function App() {
             </div>
             <p className="text-muted-foreground mt-2">Connexion sécurisée — entrez votre téléphone et votre code PIN.</p>
           </div>
-          <Card className="bg-white">
+          <Card className="bg-white shadow">
             <CardContent className="p-6 grid gap-1.5">
               {succesMsg && <p className="text-green-600 text-sm mb-1">✅ {succesMsg}</p>}
               {!oubli ? (
@@ -2234,6 +2234,13 @@ export default function App() {
             </CardContent>
           </Card>
         </div>
+
+        {/* Section Publicités & Promotions sur la page d'accueil publique (Avant connexion) */}
+        <SectionPublicites
+          publicites={publicites}
+          setPublicites={setPublicites}
+          autoriserUpload={true}
+        />
 
         {/* Menu développeur aussi accessible depuis l'écran de connexion */}
         <Dialog open={menuDev} onOpenChange={o => { setMenuDev(o); if (!o) { setCodeOk(false); setCodeSaisi(""); } }}>
