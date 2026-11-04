@@ -1312,7 +1312,7 @@ function VueVendeurSecretaire({ produits, marques, ventes, creerVente, confirmer
   );
 }
 
-function VueAdmin({ produits, setProduits, marques, setMarques, ventes, genererMarque, photosCategories, setPhotosCategories, photosMarques, setPhotosMarques, modePrix, setModePrix, categories, setCategories, comptes, setComptes, entreprise, setEntreprise }) {
+function VueAdmin({ produits, setProduits, marques, setMarques, ventes, genererMarque, photosCategories, setPhotosCategories, photosMarques, setPhotosMarques, modePrix, setModePrix, categories, setCategories, comptes, setComptes, entreprise, setEntreprise, boutiquesMasquees = [], basculerVisibiliteBoutique = () => {} }) {
   const [onglet, setOnglet] = useState("stats");
   const [recherche, setRecherche] = useState("");
   const [cat, setCat] = useState("toutes");
@@ -1334,7 +1334,13 @@ function VueAdmin({ produits, setProduits, marques, setMarques, ventes, genererM
   const [imprimerTableau, setImprimerTableau] = useState(false);
   const [nouveauCompte, setNouveauCompte] = useState({ nom: "", tel: "", role: "vendeur", pin: "" });
   const [erreurCompte, setErreurCompte] = useState("");
-  const [cleAffichee, setCleAffichee] = useState(null); // { nom, tel, cle }
+  const [cleAffichee, setCleAffichee] = useState(null);
+
+  const toutesLesBoutiques = useMemo(() => {
+    const setB = new Set();
+    produits.forEach(p => setB.add(p.boutique || "MotoPièces Principal"));
+    return Array.from(setB);
+  }, [produits]); // { nom, tel, cle }
 
   const genererCle = (c) => {
     const cle = String(Math.floor(100000 + Math.random() * 900000));
@@ -1435,6 +1441,7 @@ function VueAdmin({ produits, setProduits, marques, setMarques, ventes, genererM
         <Button variant={onglet === "produits" ? "default" : "outline"} className={onglet === "produits" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("produits")}>📦 Produits ({produits.length})</Button>
         <Button variant={onglet === "marques" ? "default" : "outline"} className={onglet === "marques" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("marques")}>🏍️ Marques ({marques.length})</Button>
         <Button variant={onglet === "categories" ? "default" : "outline"} className={onglet === "categories" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("categories")}>🖼️ Catégories</Button>
+        <Button variant={onglet === "boutiques" ? "default" : "outline"} className={onglet === "boutiques" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("boutiques")}>🏪 Magasins ({toutesLesBoutiques.length})</Button>
         <Button variant={onglet === "utilisateurs" ? "default" : "outline"} className={onglet === "utilisateurs" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("utilisateurs")}>👥 Utilisateurs</Button>
         <div className="flex-1" />
         <Select value={modePrix} onValueChange={setModePrix}>
@@ -1814,6 +1821,58 @@ function VueAdmin({ produits, setProduits, marques, setMarques, ventes, genererM
           {comptes.length === 0 && (
             <p className="text-muted-foreground text-sm">Aucun compte créé pour le moment. Utilisez le formulaire ci-dessus pour créer un compte client, vendeur ou secrétaire.</p>
           )}
+        </div>
+      )}
+
+      {onglet === "boutiques" && (
+        <div className="max-w-6xl mx-auto px-4 py-4 space-y-4">
+          <Card className="bg-white border shadow-sm">
+            <CardHeader className="p-4 border-b">
+              <CardTitle className="text-lg font-bold flex items-center justify-between">
+                <span>🏪 Contrôle de Visibilité des Magasins / Boutiques</span>
+                <Badge variant="outline" className="bg-blue-50 text-blue-800 border-blue-200">🔒 Rôle Administrateur</Badge>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-4 space-y-4">
+              <p className="text-xs text-muted-foreground">
+                Masquez ou réaffichez en un clic l'intégralité des marchandises associées à une boutique spécifique sur l'interface client. Lorsqu'une boutique est masquée, ses articles n'apparaissent plus dans le catalogue général.
+              </p>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {toutesLesBoutiques.map(nomBoutique => {
+                  const estMasquee = boutiquesMasquees.includes(nomBoutique);
+                  const nbArticles = produits.filter(p => (p.boutique || "MotoPièces Principal") === nomBoutique).length;
+
+                  return (
+                    <div key={nomBoutique} className={`p-4 border rounded-lg flex items-center justify-between gap-3 transition ${estMasquee ? "bg-red-50 border-red-200" : "bg-zinc-50 border-zinc-200"}`}>
+                      <div>
+                        <p className="font-bold text-sm text-zinc-900 flex items-center gap-2">
+                          🏪 {nomBoutique}
+                          {estMasquee ? (
+                            <Badge className="bg-red-600 text-white text-[10px]">🙈 Masquée Client</Badge>
+                          ) : (
+                            <Badge className="bg-green-600 text-white text-[10px]">👁️ Visible Client</Badge>
+                          )}
+                        </p>
+                        <p className="text-xs text-zinc-500 mt-1">
+                          {nbArticles} marchandise{nbArticles > 1 ? "s" : ""} associée{nbArticles > 1 ? "s" : ""}
+                        </p>
+                      </div>
+
+                      <Button
+                        size="sm"
+                        variant={estMasquee ? "default" : "outline"}
+                        className={estMasquee ? "bg-green-600 hover:bg-green-700 text-white text-xs font-semibold" : "border-red-300 text-red-700 hover:bg-red-50 text-xs font-semibold"}
+                        onClick={() => basculerVisibiliteBoutique(nomBoutique)}
+                      >
+                        {estMasquee ? "👁️ Réafficher" : "🙈 Masquer"}
+                      </Button>
+                    </div>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
         </div>
       )}
 
@@ -2462,7 +2521,7 @@ export default function App() {
             autoriserUpload={role === "admin"}
           />
           <VueClient
-            produits={produits}
+            produits={produits.filter(p => !boutiquesMasquees.includes(p.boutique || "MotoPièces Principal"))}
             marques={marques}
             creerVente={creerVente}
             photosCategories={photosCategories}
@@ -2486,7 +2545,9 @@ export default function App() {
           photosMarques={photosMarques} setPhotosMarques={setPhotosMarques}
           modePrix={modePrix} setModePrix={setModePrix} categories={categories} setCategories={setCategories}
           comptes={comptes} setComptes={setComptes}
-          entreprise={entreprise} setEntreprise={setEntreprise} />
+          entreprise={entreprise} setEntreprise={setEntreprise}
+          boutiquesMasquees={boutiquesMasquees}
+          basculerVisibiliteBoutique={basculerVisibiliteBoutique} />
       )}
     </div>
   );
