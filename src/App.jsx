@@ -286,7 +286,7 @@ function BoutonSupprimer({ onSupprimer, label = "🗑️ Supprimer", duree = 500
 
 // ---------- Composants communs ----------
 
-function Produit({ p, onAjout, onRetirer, admin, onEditer, categories, qteDansPanier }) {
+function Produit({ p, onAjout, onRetirer, admin, onEditer, categories, qteDansPanier, onNegocierPrix }) {
   const [flash, setFlash] = useState(false);
   const [flashMoins, setFlashMoins] = useState(false);
   const [openDetail, setOpenDetail] = useState(false);
@@ -415,18 +415,31 @@ function Produit({ p, onAjout, onRetirer, admin, onEditer, categories, qteDansPa
               <p className="text-xs text-zinc-700 mt-0.5">{p.desc || "Aucune description détaillée disponible."}</p>
             </div>
 
-            <div className="flex items-center justify-between pt-2 border-t mt-3">
+            <div className="flex items-center justify-between pt-2 border-t mt-3 gap-2">
               <div>
                 <span className="text-xs text-zinc-500 block">Prix unitaire</span>
                 <span className="font-bold text-lg text-blue-700">{fmt(p.prix)}</span>
               </div>
-              <Button
-                disabled={p.stock === 0}
-                className="bg-blue-600 hover:bg-blue-700 text-white px-5 h-10 font-bold"
-                onClick={() => { ajouterLocal(); setOpenDetail(false); }}
-              >
-                🛒 Ajouter au Panier
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 text-xs h-10 font-bold"
+                  onClick={() => {
+                    if (onNegocierPrix) onNegocierPrix(p);
+                    setOpenDetail(false);
+                  }}
+                >
+                  🤝 Négocier
+                </Button>
+                <Button
+                  disabled={p.stock === 0}
+                  className="bg-blue-600 hover:bg-blue-700 text-white px-4 h-10 font-bold"
+                  onClick={() => { ajouterLocal(); setOpenDetail(false); }}
+                >
+                  🛒 Ajouter
+                </Button>
+              </div>
             </div>
           </div>
         </DialogContent>
@@ -568,7 +581,7 @@ function LigneVente({ v, onConfirmer, onSaisirPrix, saisiePrix }) {
 
 // ---------- Vue Client ----------
 
-function VueClient({ produits, marques, creerVente, photosCategories, photosMarques, categories }) {
+function VueClient({ produits, marques, creerVente, photosCategories, photosMarques, categories, onNegocierPrix }) {
   const [recherche, setRecherche] = useState("");
   const [cat, setCat] = useState("toutes");
   const [marque, setMarque] = useState("toutes");
@@ -651,7 +664,8 @@ function VueClient({ produits, marques, creerVente, photosCategories, photosMarq
       <main className="max-w-[1400px] mx-auto px-3 sm:px-6 lg:px-8 pb-24">
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2 sm:gap-4">
           {liste.map(p => <Produit key={p.id} p={p} onAjout={ajouter} onRetirer={retirer} categories={categories}
-            qteDansPanier={panier.find(i => i.p.id === p.id)?.qte || 0} />)}
+            qteDansPanier={panier.find(i => i.p.id === p.id)?.qte || 0}
+            onNegocierPrix={onNegocierPrix} />)}
         </div>
       </main>
 
@@ -1947,21 +1961,30 @@ function VueAdmin({ produits, setProduits, marques, setMarques, ventes, genererM
   );
 }
 
-// ---------- Composant Chat Flottant & Messagerie Vocale ----------
-function ChatFlottant({ userActif, entreprise }) {
+// ---------- Composant Chat Flottant & Messagerie Routée selon Rôle ----------
+function ChatFlottant({ userActif, entreprise, role, openChat, setOpenChat, articleNegociation }) {
   const [open, setOpen] = useState(false);
+  const [canal, setCanal] = useState("assistance"); // "assistance" | "negociation" | "developpeur"
   const [messages, setMessages] = useState(() => {
     try {
       const s = localStorage.getItem("motopieces_chat_messages");
       return s ? JSON.parse(s) : [
-        { id: 1, auteur: "Assistance MotoPièces", texte: "Bonjour ! Comment pouvons-nous vous aider aujourd'hui ?", date: "09:00", audioUrl: null }
+        { id: 1, canal: "assistance", auteur: "Assistance MotoPièces", texte: "Bonjour ! Comment pouvons-nous vous aider aujourd'hui ?", date: "09:00", audioUrl: null }
       ];
     } catch {
       return [
-        { id: 1, auteur: "Assistance MotoPièces", texte: "Bonjour ! Comment pouvons-nous vous aider aujourd'hui ?", date: "09:00", audioUrl: null }
+        { id: 1, canal: "assistance", auteur: "Assistance MotoPièces", texte: "Bonjour ! Comment pouvons-nous vous aider aujourd'hui ?", date: "09:00", audioUrl: null }
       ];
     }
   });
+
+  // Ouverture automatique et passage en canal négociation lorsqu'un client clique sur "Négocier"
+  useEffect(() => {
+    if (openChat) {
+      setOpen(true);
+      setCanal("negociation");
+    }
+  }, [openChat, articleNegociation]);
 
   const [texte, setTexte] = useState("");
   const [enEnregistrement, setEnEnregistrement] = useState(false);
@@ -1971,6 +1994,8 @@ function ChatFlottant({ userActif, entreprise }) {
   const timerVocalRef = useRef(null);
   const chatEndRef = useRef(null);
 
+  const estPersonnel = role === "vendeur" || role === "secretaire" || role === "vendeur-secretaire" || role === "admin";
+
   useEffect(() => {
     try {
       localStorage.setItem("motopieces_chat_messages", JSON.stringify(messages));
@@ -1978,7 +2003,7 @@ function ChatFlottant({ userActif, entreprise }) {
     if (chatEndRef.current) {
       chatEndRef.current.scrollIntoView({ behavior: "smooth" });
     }
-  }, [messages, open]);
+  }, [messages, open, canal]);
 
   // Démarrer l'enregistrement vocal via le micro
   const demarrerEnregistrement = async () => {
@@ -2027,6 +2052,7 @@ function ChatFlottant({ userActif, entreprise }) {
 
     const nouveauMsg = {
       id: Date.now(),
+      canal,
       auteur: userActif?.nom || "Client",
       texte: texte.trim(),
       audioUrl: null,
@@ -2036,14 +2062,26 @@ function ChatFlottant({ userActif, entreprise }) {
     setMessages((prev) => [...prev, nouveauMsg]);
     setTexte("");
 
-    // Réponse automatique d'assistance
+    // Réponse automatique routée selon le canal
     setTimeout(() => {
+      let reponseAuteur = "Assistance MotoPièces";
+      let reponseTexte = "Merci pour votre message ! Un conseiller vous répond dans quelques instants.";
+
+      if (canal === "negociation") {
+        reponseAuteur = `Vendeur (${articleNegociation?.boutique || "MotoPièces"})`;
+        reponseTexte = `Proposition bien reçue concernant ${articleNegociation?.nom || "votre négociation"}. Notre vendeur étudie votre prix.`;
+      } else if (canal === "developpeur") {
+        reponseAuteur = "👨‍💻 Support Développeur Platform";
+        reponseTexte = "Message d'assistance technique transmis au développeur. Nous traitons votre demande.";
+      }
+
       setMessages((prev) => [
         ...prev,
         {
           id: Date.now() + 1,
-          auteur: "Assistance MotoPièces",
-          texte: "Merci pour votre message ! Un conseiller vous répond dans quelques instants.",
+          canal,
+          auteur: reponseAuteur,
+          texte: reponseTexte,
           audioUrl: null,
           date: new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }),
         },
@@ -2055,6 +2093,7 @@ function ChatFlottant({ userActif, entreprise }) {
   const envoyerVocal = (audioUrl) => {
     const nouveauMsg = {
       id: Date.now(),
+      canal,
       auteur: userActif?.nom || "Client",
       texte: `🎙️ Message vocal (${dureeVocal}s)`,
       audioUrl,
@@ -2064,12 +2103,24 @@ function ChatFlottant({ userActif, entreprise }) {
     setMessages((prev) => [...prev, nouveauMsg]);
 
     setTimeout(() => {
+      let reponseAuteur = "Assistance MotoPièces";
+      let reponseTexte = "Bien reçu votre note vocale ! Notre équipe écoute votre demande.";
+
+      if (canal === "negociation") {
+        reponseAuteur = `Vendeur (${articleNegociation?.boutique || "MotoPièces"})`;
+        reponseTexte = "Note vocale reçue par le vendeur. Nous étudions votre négociation de prix.";
+      } else if (canal === "developpeur") {
+        reponseAuteur = "👨‍💻 Support Développeur Platform";
+        reponseTexte = "Note vocale d'assistance technique transmise au développeur.";
+      }
+
       setMessages((prev) => [
         ...prev,
         {
           id: Date.now() + 1,
-          auteur: "Assistance MotoPièces",
-          texte: "Bien reçu votre note vocale ! Notre équipe écoute votre demande.",
+          canal,
+          auteur: reponseAuteur,
+          texte: reponseTexte,
           audioUrl: null,
           date: new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }),
         },
@@ -2077,12 +2128,18 @@ function ChatFlottant({ userActif, entreprise }) {
     }, 1500);
   };
 
+  const messagesFiltres = messages.filter((m) => (m.canal || "assistance") === canal);
+
   return (
     <>
       {/* Bouton Flottant Fixe en Bas à Droite */}
       <div className="fixed bottom-6 right-6 z-50">
         <Button
-          onClick={() => setOpen(!open)}
+          onClick={() => {
+            const nextState = !open;
+            setOpen(nextState);
+            if (!nextState && setOpenChat) setOpenChat(false);
+          }}
           className="h-14 w-14 rounded-full bg-blue-600 hover:bg-blue-700 text-white shadow-2xl flex items-center justify-center transition-transform active:scale-90 border-2 border-white"
           title="Ouvrir le Chat & Messagerie Vocale"
         >
@@ -2090,53 +2147,102 @@ function ChatFlottant({ userActif, entreprise }) {
         </Button>
       </div>
 
-      {/* Fenêtre de Chat / Messagerie Instantanée */}
+      {/* Fenêtre de Chat / Messagerie Instantanée Routée */}
       {open && (
-        <Card className="fixed bottom-24 right-4 sm:right-6 z-50 w-[92vw] sm:w-[380px] h-[480px] bg-white border shadow-2xl rounded-2xl flex flex-col overflow-hidden animate-in slide-in-from-bottom-5">
+        <Card className="fixed bottom-24 right-4 sm:right-6 z-50 w-[92vw] sm:w-[390px] h-[500px] bg-white border shadow-2xl rounded-2xl flex flex-col overflow-hidden animate-in slide-in-from-bottom-5">
           {/* En-tête du Chat */}
           <div className="bg-zinc-900 text-white p-3 px-4 flex items-center justify-between">
             <div className="flex items-center gap-2">
               <span className="w-2.5 h-2.5 rounded-full bg-green-500 animate-pulse"></span>
               <div>
                 <p className="font-bold text-sm leading-tight">💬 Chat {entreprise?.nom || "MotoPièces"}</p>
-                <p className="text-[10px] text-zinc-400">Assistance & Vendeurs en ligne</p>
+                <p className="text-[10px] text-zinc-400">Routage dynamique par rôle</p>
               </div>
             </div>
             <Button
               variant="ghost"
               size="sm"
               className="text-zinc-400 hover:text-white h-7 w-7 p-0"
-              onClick={() => setOpen(false)}
+              onClick={() => {
+                setOpen(false);
+                if (setOpenChat) setOpenChat(false);
+              }}
             >
               ✕
             </Button>
           </div>
 
-          {/* Liste des Messages */}
+          {/* Sélecteur de Canaux selon le Rôle */}
+          <div className="flex items-center border-b bg-zinc-100 p-1 gap-1 text-xs">
+            <button
+              onClick={() => setCanal("assistance")}
+              className={`flex-1 py-1.5 px-1.5 rounded font-medium transition ${
+                canal === "assistance" ? "bg-white text-blue-700 shadow-sm font-bold" : "text-zinc-600 hover:bg-zinc-200"
+              }`}
+            >
+              💬 Assistance
+            </button>
+            <button
+              onClick={() => setCanal("negociation")}
+              className={`flex-1 py-1.5 px-1.5 rounded font-medium transition ${
+                canal === "negociation" ? "bg-white text-blue-700 shadow-sm font-bold" : "text-zinc-600 hover:bg-zinc-200"
+              }`}
+            >
+              🤝 Négociation
+            </button>
+            {estPersonnel && (
+              <button
+                onClick={() => setCanal("developpeur")}
+                className={`flex-1 py-1.5 px-1.5 rounded font-medium transition ${
+                  canal === "developpeur" ? "bg-white text-amber-800 shadow-sm font-bold" : "text-zinc-600 hover:bg-zinc-200"
+                }`}
+              >
+                👨‍💻 Développeur
+              </button>
+            )}
+          </div>
+
+          {/* Info sur l'article en cours de négociation */}
+          {canal === "negociation" && articleNegociation && (
+            <div className="p-2 px-3 bg-amber-50 border-b border-amber-200 text-xs flex items-center justify-between">
+              <span className="truncate font-semibold text-amber-900">
+                📦 {articleNegociation.nom} ({articleNegociation.prix ? `${articleNegociation.prix.toLocaleString("fr-FR")} FCFA` : "Prix à négocier"})
+              </span>
+              <Badge className="bg-amber-600 text-white text-[9px] shrink-0">🏪 {articleNegociation.boutique || "MotoPièces"}</Badge>
+            </div>
+          )}
+
+          {/* Liste des Messages du Canal Sélectionné */}
           <ScrollArea className="flex-1 p-3 space-y-3 bg-zinc-50">
-            {messages.map((m) => {
-              const estMoi = m.auteur === (userActif?.nom || "Client");
-              return (
-                <div
-                  key={m.id}
-                  className={`flex flex-col mb-3 ${estMoi ? "items-end" : "items-start"}`}
-                >
-                  <span className="text-[10px] text-zinc-400 mb-0.5 px-1">{m.auteur} • {m.date}</span>
+            {messagesFiltres.length === 0 ? (
+              <p className="text-xs text-zinc-400 py-8 text-center">
+                Aucun message dans ce canal. Envoyez votre premier message ou note vocale ci-dessous !
+              </p>
+            ) : (
+              messagesFiltres.map((m) => {
+                const estMoi = m.auteur === (userActif?.nom || "Client");
+                return (
                   <div
-                    className={`p-3 rounded-2xl max-w-[85%] text-xs shadow-sm ${
-                      estMoi
-                        ? "bg-blue-600 text-white rounded-br-none"
-                        : "bg-white text-zinc-900 border rounded-bl-none"
-                    }`}
+                    key={m.id}
+                    className={`flex flex-col mb-3 ${estMoi ? "items-end" : "items-start"}`}
                   >
-                    <p className="font-medium">{m.texte}</p>
-                    {m.audioUrl && (
-                      <audio controls src={m.audioUrl} className="mt-2 w-full max-w-[220px] h-8 rounded" />
-                    )}
+                    <span className="text-[10px] text-zinc-400 mb-0.5 px-1">{m.auteur} • {m.date}</span>
+                    <div
+                      className={`p-3 rounded-2xl max-w-[85%] text-xs shadow-sm ${
+                        estMoi
+                          ? "bg-blue-600 text-white rounded-br-none"
+                          : "bg-white text-zinc-900 border rounded-bl-none"
+                      }`}
+                    >
+                      <p className="font-medium">{m.texte}</p>
+                      {m.audioUrl && (
+                        <audio controls src={m.audioUrl} className="mt-2 w-full max-w-[220px] h-8 rounded" />
+                      )}
+                    </div>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })
+            )}
             <div ref={chatEndRef} />
           </ScrollArea>
 
@@ -2149,7 +2255,7 @@ function ChatFlottant({ userActif, entreprise }) {
                 </span>
                 <Button
                   size="sm"
-                  className="bg-red-600 hover:bg-red-700 text-white text-xs h-8 px-3"
+                  className="bg-red-600 hover:bg-red-700 text-white text-xs h-8 px-3 font-bold"
                   onClick={arreterEnregistrement}
                 >
                   ⏹️ Envoyer le vocal
@@ -2160,7 +2266,13 @@ function ChatFlottant({ userActif, entreprise }) {
                 <Input
                   value={texte}
                   onChange={(e) => setTexte(e.target.value)}
-                  placeholder="Écrivez un message…"
+                  placeholder={
+                    canal === "negociation"
+                      ? "Proposez votre prix au vendeur..."
+                      : canal === "developpeur"
+                      ? "Message d'assistance technique..."
+                      : "Écrivez un message..."
+                  }
                   className="flex-1 text-xs h-9"
                 />
                 <Button
@@ -2176,7 +2288,7 @@ function ChatFlottant({ userActif, entreprise }) {
                 <Button
                   type="submit"
                   size="sm"
-                  className="h-9 bg-blue-600 hover:bg-blue-700 text-white text-xs px-3"
+                  className="h-9 bg-blue-600 hover:bg-blue-700 text-white text-xs px-3 font-bold"
                   disabled={!texte.trim()}
                 >
                   Envoyer
@@ -2350,6 +2462,13 @@ export default function App() {
   });
   const [openProfil, setOpenProfil] = useState(false);
   const [openLoginModal, setOpenLoginModal] = useState(false);
+  const [openChat, setOpenChat] = useState(false);
+  const [articleNegociation, setArticleNegociation] = useState(null);
+
+  const negocierPrixArticle = (article) => {
+    setArticleNegociation(article);
+    setOpenChat(true);
+  };
   const [erreurLogin, setErreurLogin] = useState("");
   const [telLogin, setTelLogin] = useState("");
   const [pinLogin, setPinLogin] = useState("");
@@ -2770,6 +2889,7 @@ export default function App() {
             photosCategories={photosCategories}
             photosMarques={photosMarques}
             categories={categories}
+            onNegocierPrix={negocierPrixArticle}
           />
         </div>
       )}
@@ -2793,8 +2913,15 @@ export default function App() {
           basculerVisibiliteBoutique={basculerVisibiliteBoutique} />
       )}
 
-      {/* Bouton Flottant & Chat avec Option Vocale */}
-      <ChatFlottant userActif={userActif} entreprise={entreprise} />
+      {/* Bouton Flottant & Chat Routé par Rôle avec Option Vocale */}
+      <ChatFlottant
+        userActif={userActif}
+        entreprise={entreprise}
+        role={role}
+        openChat={openChat}
+        setOpenChat={setOpenChat}
+        articleNegociation={articleNegociation}
+      />
     </div>
   );
 }
