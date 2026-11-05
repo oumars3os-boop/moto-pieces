@@ -1929,7 +1929,8 @@ function VueAdmin({
   entreprise, setEntreprise, boutiquesMasquees = [], basculerVisibiliteBoutique = () => {},
   transfertsStock = [], effectuerTransfertStock = () => {}, validerTransfertStock = () => {},
   credits = [], ajouterCredit, ajouterVersement, validerCredit,
-  cases = [], setCases = () => {}
+  cases = [], setCases = () => {},
+  chefEquipe = ""
 }) {
   const [onglet, setOnglet] = useState("stats");
   const [recherche, setRecherche] = useState("");
@@ -1999,6 +2000,8 @@ function VueAdmin({
       tel,
       pin: nouveauCompte.pin,
       role: nouveauCompte.role,
+      // Chaque compte rejoint l'équipe de l'administrateur qui le crée
+      equipe: (chefEquipe || "").trim(),
     };
     setComptes(prev => [...prev, comp]);
     synchroniserCompteSupabase(comp);
@@ -2792,248 +2795,308 @@ function VueAdmin({
 // ---------- Talkie-walkie vocal (administrateur & vendeurs uniquement) ----------
 const TALKIE_ROLES = ["admin", "vendeur", "vendeur-secretaire"];
 
-function TalkieWalkie({ role, userActif, comptes }) {
+// ---------- Messagerie d'équipe type WhatsApp (photos, vidéos, textes, vocaux) ----------
+// Chaque administrateur voit UNIQUEMENT son équipe (les comptes qu'il a créés).
+// Les administrateurs ont en plus un espace privé pour causer entre eux, toutes équipes confondues.
+
+function MessagerieEquipe({ role, userActif, comptes }) {
   const [ouvert, setOuvert] = useState(false);
-  const [destinataire, setDestinataire] = useState("groupe"); // "groupe" = toute l'équipe | ou le téléphone d'une personne
-  const [enEmission, setEnEmission] = useState(false);
-  const [enReception, setEnReception] = useState(false);
-  const [nomQuiParle, setNomQuiParle] = useState("");
+  const [canal, setCanal] = useState("equipe"); // "equipe" | "admins" | téléphone d'une personne
+  const [messages, setMessages] = useState([]);
+  const [texte, setTexte] = useState("");
   const [info, setInfo] = useState("");
-  const [connectes, setConnectes] = useState([]); // personnes qui ont le talkie ouvert en ce moment
-  const canalRef = useRef(null);
-  const pcsRef = useRef({}); // connexions WebRTC en cours, par téléphone
-  const fluxRef = useRef(null);
-  const audioRef = useRef(null);
+  const [enVocal, setEnVocal] = useState(false);
+  const [chargement, setChargement] = useState(false);
+  const mediaRecorderRef = useRef(null);
+  const chunksRef = useRef([]);
+  const arretAutoRef = useRef(null);
+  const inputPhotoRef = useRef(null);
+  const inputVideoRef = useRef(null);
+  const finListeRef = useRef(null);
 
   const monTel = (userActif?.tel || "").trim();
   const monNom = userActif?.nom || "Moi";
-  const equipe = (comptes || []).filter(c => TALKIE_ROLES.includes(c.role) && (c.tel || "").trim() && (c.tel || "").trim() !== monTel);
+  const estAdmin = role === "admin";
 
-  const signaler = (payload) => {
-    try {
-      const canal = canalRef.current;
-      if (!canal) return;
-      canal.send({ type: "broadcast", event: "signal", payload: { ...payload, de: monTel, nomDe: monNom } });
-    } catch {}
-  };
+  // Mon équipe : les comptes créés par le même administrateur (l'admin est le chef de son équipe)
+  const cleEquipeDe = (c) => (c.role === "admin" ? (c.tel || "").trim() : (c.equipe || "defaut"));
+  const maCle = estAdmin ? monTel : ((userActif?.equipe || "").trim() || "defaut");
+  const membresEquipe = (comptes || []).filter(c =>
+    TALKIE_ROLES.includes(c.role) && (c.tel || "").trim() && (c.tel || "").trim() !== monTel && cleEquipeDe(c) === maCle);
+  const lesAdmins = (comptes || []).filter(c => c.role === "admin" && (c.tel || "").trim() !== monTel);
 
-  // Arrêter l'écoute du flux reçu (appelé quand l'autre relâche son bouton)
-  const couperReception = (telEmetteur) => {
-    try {
-      if (telEmetteur && pcsRef.current[telEmetteur]) {
-        try { pcsRef.current[telEmetteur].close(); } catch {}
-        delete pcsRef.current[telEmetteur];
-      } else {
-        Object.values(pcsRef.current).forEach(pc => { try { pc.close(); } catch {} });
-        pcsRef.current = {};
-      }
-    } catch {}
-    if (audioRef.current) { try { audioRef.current.pause(); audioRef.current.srcObject = null; } catch {} }
-    setEnReception(false);
-    setNomQuiParle("");
-  };
+  const canalIdPerso = (tel) => "perso:" + [monTel, tel].sort().join("|");
+  const idDuCanal = (c) => c === "equipe" ? "equipe:" + maCle : c === "admins" ? "admins" : canalIdPerso(c);
+  const titreDuCanal = (c) => c === "equipe" ? "👥 Mon équipe" : c === "admins" ? "👑 Espace Admins" : "👤 " + (((comptes || []).find(x => (x.tel || "").trim() === c) || {}).nom || c);
 
-  // Réception d'une offre : quelqu'un maintient son bouton et parle, on l'écoute en direct
-  const ecouterOffre = async (p) => {
-    if (typeof RTCPeerConnection === "undefined") return;
-    try {
-      // Une seule voix à la fois : si quelqu'un d'autre parlait déjà, on le coupe
-      couperReception();
-      const pc = new RTCPeerConnection({ iceServers: [{ urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }] });
-      pc.onicecandidate = (e) => { if (e.candidate) signaler({ type: "cand", vers: p.de, c: e.candidate }); };
-      pc.ontrack = (e) => {
-        try {
-          const audio = audioRef.current;
-          if (!audio) return;
-          audio.srcObject = e.streams[0];
-          audio.play().catch(() => {});
-          setEnReception(true);
-          setNomQuiParle(p.nomDe || p.de);
-        } catch {}
-      };
-      pc.oniceconnectionstatechange = () => {
-        if (["failed", "disconnected", "closed"].includes(pc.iceConnectionState)) couperReception(p.de);
-      };
-      await pc.setRemoteDescription(new RTCSessionDescription(p.sdp));
-      const reponse = await pc.createAnswer();
-      await pc.setLocalDescription(reponse);
-      signaler({ type: "reponse", vers: p.de, sdp: reponse });
-      pcsRef.current[p.de] = pc;
-    } catch (e) {
-      console.warn("Talkie : impossible d'écouter l'émetteur", e);
-    }
-  };
-
-  // Tous les signaux du talkie (offre, réponse, candidat réseau, fin)
-  const traiterSignal = (p) => {
-    if (!p || p.de === monTel) return;
-    if (p.type !== "fin" && p.vers !== "groupe" && p.vers !== monTel) return;
-    if (p.type === "offre") { ecouterOffre(p); return; }
-    if (p.type === "reponse") {
-      const pc = pcsRef.current[p.de];
-      if (pc) pc.setRemoteDescription(new RTCSessionDescription(p.sdp)).catch(() => {});
-      return;
-    }
-    if (p.type === "cand") {
-      const pc = pcsRef.current[p.de];
-      if (pc) pc.addIceCandidate(new RTCIceCandidate(p.c)).catch(() => {});
-      return;
-    }
-    if (p.type === "fin") couperReception(p.de);
-  };
-
-  // Ouverture du talkie : on rejoint le canal de signalisation et on annonce sa présence
+  // Réception : on recharge les messages toutes les 4 secondes
   useEffect(() => {
     if (!ouvert || !monTel) return;
-    let canal = null;
-    try {
-      canal = supabase.channel("talkie-walkie", { config: { presence: { key: monTel }, broadcast: { self: false } } });
-      canalRef.current = canal;
-      canal.on("presence", { event: "sync" }, () => {
-        try {
-          const liste = Object.values(canal.presenceState()).flat();
-          setConnectes(liste.filter(c => (c.tel || "").trim() !== monTel));
-        } catch {}
-      });
-      canal.on("broadcast", { event: "signal" }, ({ payload }) => traiterSignal(payload));
-      canal.subscribe((statut) => {
-        if (statut === "SUBSCRIBED") { try { canal.track({ nom: monNom, tel: monTel }); } catch {} }
-      });
-    } catch (e) {
-      setInfo("⚠️ Connexion du talkie impossible : " + (e?.message || e));
-    }
-    return () => {
-      signaler({ type: "fin", vers: "groupe" });
-      try { canal?.unsubscribe?.(); } catch {}
-      canalRef.current = null;
-      couperReception();
+    let actif = true;
+    const canaux = [
+      "equipe:" + maCle,
+      ...(estAdmin ? ["admins"] : []),
+      ...membresEquipe.map(m => canalIdPerso((m.tel || "").trim())),
+      ...(estAdmin ? lesAdmins.map(a => canalIdPerso((a.tel || "").trim())) : []),
+    ];
+    const charger = async () => {
+      try {
+        const { data, error } = await supabase
+          .from("messages")
+          .select("id, destinataire, de, nom, type, contenu, date")
+          .in("destinataire", canaux)
+          .order("id", { ascending: false })
+          .limit(100);
+        if (!actif || error || !data) return;
+        setMessages(data.sort((a, b) => (a.id || 0) - (b.id || 0)));
+      } catch {}
     };
-  }, [ouvert, monTel]);
+    charger();
+    const t = setInterval(charger, 4000);
+    return () => { actif = false; clearInterval(t); };
+  }, [ouvert, monTel, maCle, canal]);
 
-  // Maintenir le bouton : le micro s'ouvre et la voix part EN DIRECT chez les autres
-  const demarrer = async () => {
-    if (enEmission) return;
+  // Défilement automatique vers le dernier message
+  useEffect(() => {
+    if (finListeRef.current) finListeRef.current.scrollIntoView({ behavior: "smooth" });
+  }, [messages, canal]);
+
+  // Envoi d'un message (texte, photo, vidéo ou vocal)
+  const envoyer = async (type, contenu) => {
+    if (type === "texte" && !(contenu || "").trim()) return;
+    setInfo("");
+    setChargement(true);
+    const msg = {
+      destinataire: idDuCanal(canal),
+      de: monTel,
+      nom: monNom,
+      type,
+      contenu: contenu || "",
+      date: new Date().toISOString(),
+    };
+    try {
+      const { data, error } = await supabase.from("messages").insert(msg).select("id").single();
+      if (error) {
+        setInfo("⚠️ Envoi impossible : " + (error.message || "erreur") + ". Vérifie que la table « messages » a été créée dans Supabase.");
+      } else {
+        setMessages(prev => [...prev, { ...msg, id: data?.id || Date.now() }].slice(-100));
+      }
+    } catch (e) {
+      setInfo("⚠️ Erreur réseau : " + (e?.message || e));
+    }
+    setChargement(false);
+  };
+
+  // Lecture d'un fichier en base64
+  const lireBase64 = (fichier) => new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(String(r.result).split(",")[1] || "");
+    r.onerror = rej;
+    r.readAsDataURL(fichier);
+  });
+
+  // Photo : on réduit la taille pour que l'envoi soit rapide même en 3G
+  const compresserPhoto = (fichier) => new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const maxi = 900;
+        const echelle = Math.min(1, maxi / Math.max(img.width, img.height));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.round(img.width * echelle);
+        canvas.height = Math.round(img.height * echelle);
+        canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+        res(canvas.toDataURL("image/jpeg", 0.7).split(",")[1] || "");
+      };
+      img.onerror = rej;
+      img.src = r.result;
+    };
+    r.onerror = rej;
+    r.readAsDataURL(fichier);
+  });
+
+  const choisirPhoto = async (e) => {
+    const fichier = e.target.files?.[0];
+    e.target.value = "";
+    if (!fichier) return;
+    try {
+      const b64 = await compresserPhoto(fichier);
+      await envoyer("photo", b64);
+    } catch { setInfo("❌ Impossible de lire cette photo."); }
+  };
+
+  const choisirVideo = async (e) => {
+    const fichier = e.target.files?.[0];
+    e.target.value = "";
+    if (!fichier) return;
+    if (fichier.size > 12 * 1024 * 1024) { setInfo("❌ Vidéo trop lourde (max 12 Mo). Filme un morceau plus court."); return; }
+    try {
+      const b64 = await lireBase64(fichier);
+      await envoyer("video", b64);
+    } catch { setInfo("❌ Impossible de lire cette vidéo."); }
+  };
+
+  // Message vocal : maintenir le bouton micro, relâcher pour envoyer.
+  // Dès qu'on relâche, le micro se coupe automatiquement (même si l'appui a été très court).
+  const enVocalRef = useRef(false);
+  const demarrerVocal = async () => {
+    if (enVocalRef.current) return;
+    enVocalRef.current = true;
     setInfo("");
     try {
-      if (!navigator.mediaDevices?.getUserMedia) { setInfo("❌ Le micro n'est pas disponible sur cet appareil."); return; }
-      if (typeof RTCPeerConnection === "undefined") { setInfo("❌ Ce navigateur ne supporte pas le talkie en direct."); return; }
-      if (!canalRef.current) { setInfo("⚠️ Connexion en cours… attends une seconde et réessaie."); return; }
-      const flux = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
-      fluxRef.current = flux;
-      const cibles = (destinataire === "groupe"
-        ? connectes.map(c => (c.tel || "").trim())
-        : [destinataire]).filter(Boolean);
-      if (cibles.length === 0) {
+      if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+        enVocalRef.current = false;
+        setInfo("❌ Le micro n'est pas disponible sur cet appareil."); return;
+      }
+      const flux = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // Si le doigt a déjà été relâché pendant l'ouverture du micro : on annule tout de suite
+      if (!enVocalRef.current) { flux.getTracks().forEach(t => t.stop()); return; }
+      const mime = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find(t => MediaRecorder.isTypeSupported(t)) || "";
+      const recorder = mime ? new MediaRecorder(flux, { mimeType: mime }) : new MediaRecorder(flux);
+      chunksRef.current = [];
+      recorder.ondataavailable = (ev) => { if (ev.data && ev.data.size > 0) chunksRef.current.push(ev.data); };
+      recorder.onstop = async () => {
         flux.getTracks().forEach(t => t.stop());
-        fluxRef.current = null;
-        setInfo("👤 Personne n'écoute pour le moment" + (destinataire === "groupe" ? " : personne d'autre n'a ouvert le talkie." : " : cette personne n'a pas ouvert le talkie."));
-        return;
-      }
-      for (const tel of cibles) {
-        const pc = new RTCPeerConnection({ iceServers: [{ urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }] });
-        flux.getTracks().forEach(t => pc.addTrack(t, flux));
-        pc.onicecandidate = (e) => { if (e.candidate) signaler({ type: "cand", vers: tel, c: e.candidate }); };
-        pcsRef.current[tel] = pc;
-        const offre = await pc.createOffer();
-        await pc.setLocalDescription(offre);
-        signaler({ type: "offre", vers: tel, sdp: offre });
-      }
-      setEnEmission(true);
+        setEnVocal(false);
+        const blob = new Blob(chunksRef.current, { type: recorder.mimeType || "audio/webm" });
+        if (blob.size < 300) { setInfo("Rien n'a été entendu. Maintiens le micro et parle."); return; }
+        const b64 = await lireBase64(blob);
+        envoyer("audio", b64);
+      };
+      recorder.start();
+      mediaRecorderRef.current = recorder;
+      setEnVocal(true);
+      arretAutoRef.current = setTimeout(() => { try { recorder.stop(); } catch {} }, 30000);
     } catch (e) {
-      setEnEmission(false);
-      setInfo("❌ Micro refusé ou indisponible : " + (e?.message || e) + " (autorise le micro dans ton navigateur).");
+      enVocalRef.current = false;
+      setEnVocal(false);
+      setInfo("❌ Micro refusé ou indisponible : " + (e?.message || e) + ".");
     }
   };
 
-  // Relâcher le bouton : la conversation se coupe chez tout le monde
-  const arreter = () => {
-    if (!enEmission) return;
-    signaler({ type: "fin", vers: destinataire });
-    Object.values(pcsRef.current).forEach(pc => { try { pc.close(); } catch {} });
-    pcsRef.current = {};
-    try { fluxRef.current?.getTracks().forEach(t => t.stop()); } catch {}
-    fluxRef.current = null;
-    setEnEmission(false);
+  const arreterVocal = () => {
+    if (!enVocalRef.current) return;
+    enVocalRef.current = false;
+    if (arretAutoRef.current) { clearTimeout(arretAutoRef.current); arretAutoRef.current = null; }
+    try { if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") mediaRecorderRef.current.stop(); } catch {}
+    mediaRecorderRef.current = null;
+    setEnVocal(false);
   };
+
+  const ecouterVocal = (m) => {
+    try { new Audio("data:audio/webm;base64," + m.contenu).play().catch(() => {}); } catch {}
+  };
+
+  const heureDe = (m) => {
+    try { return new Date(m.date).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }); } catch { return ""; }
+  };
+
+  const messagesDuCanal = messages.filter(m => m.destinataire === idDuCanal(canal));
 
   if (!TALKIE_ROLES.includes(role)) return null;
 
   return (
     <div>
-      {/* Gros bouton flottant du talkie-walkie */}
+      {/* Gros bouton flottant de la messagerie */}
       {!ouvert && (
         <button
-          className="fixed bottom-6 left-4 z-50 w-16 h-16 rounded-full bg-zinc-900 hover:bg-zinc-800 text-white text-2xl shadow-2xl border-4 border-white active:scale-95 transition"
+          className="fixed bottom-6 left-4 z-50 w-16 h-16 rounded-full bg-green-600 hover:bg-green-700 text-white text-2xl shadow-2xl border-4 border-white active:scale-95 transition"
           onClick={() => setOuvert(true)}
-          aria-label="Talkie-walkie">
-          🎙️
+          aria-label="Messagerie de l'équipe">
+          💬
         </button>
       )}
 
-      {/* Panneau du talkie-walkie */}
+      {/* Écran de discussion, comme WhatsApp */}
       {ouvert && (
-        <Card className="fixed bottom-4 left-2 right-2 sm:right-auto sm:left-4 sm:w-[390px] z-50 h-[70vh] max-h-[560px] bg-white border shadow-2xl rounded-2xl flex flex-col overflow-hidden">
-          <div className="bg-zinc-900 text-white p-3 flex items-center justify-between">
-            <div className="font-bold">🎙️ Talkie-Walkie {enEmission ? "(EN DIRECT 🔴)" : ""}</div>
-            <button className="text-white/70 hover:text-white text-lg" onClick={() => { arreter(); setOuvert(false); }}>✕</button>
+        <Card className="fixed bottom-2 left-2 right-2 sm:right-auto sm:left-4 sm:w-[400px] z-50 h-[80vh] max-h-[640px] bg-white border shadow-2xl rounded-2xl flex flex-col overflow-hidden">
+          <div className="bg-green-700 text-white p-3 flex items-center justify-between">
+            <div className="font-bold">💬 {titreDuCanal(canal)}</div>
+            <button className="text-white/80 hover:text-white text-lg" onClick={() => { arreterVocal(); setOuvert(false); }}>✕</button>
           </div>
 
-          {/* État en direct */}
-          {(enEmission || enReception) && (
-            <div className={"p-2 text-center font-bold text-white text-sm " + (enEmission ? "bg-red-600 animate-pulse" : "bg-blue-600")}>
-              {enEmission ? "🔴 Tu es EN DIRECT : parle, tout le monde t'entend" : "🎧 " + (nomQuiParle || "Quelqu'un") + " parle : écoute…"}
-            </div>
-          )}
-
-          {/* Choix de la destination : toute l'équipe ou une personne précise */}
-          <div className="p-3 border-b bg-zinc-50 space-y-2">
-            <Label className="text-xs">Qui doit t'entendre ?</Label>
-            <div className="flex flex-wrap gap-2">
-              <Button variant={destinataire === "groupe" ? "default" : "outline"} className={destinataire === "groupe" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setDestinataire("groupe")}>📢 Toute l'équipe</Button>
-              {equipe.map(c => (
-                <Button key={c.tel} variant={destinataire === c.tel ? "default" : "outline"} className={destinataire === c.tel ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setDestinataire(c.tel.trim())}>
-                  👤 {c.nom}
-                </Button>
-              ))}
-            </div>
-            {/* Personnes connectées au talkie en ce moment */}
-            <div className="text-[11px] text-muted-foreground">
-              {connectes.length === 0
-                ? "Personne d'autre n'a ouvert le talkie pour l'instant."
-                : "🎧 Connectés : " + connectes.map(c => c.nom || c.tel).join(", ")}
-            </div>
+          {/* Choix de la destination : mon équipe, l'espace admins, ou une personne */}
+          <div className="p-2 border-b bg-zinc-50 flex flex-wrap gap-2">
+            <Button variant={canal === "equipe" ? "default" : "outline"} className={canal === "equipe" ? "ring-2 ring-green-600 ring-offset-1" : ""} onClick={() => setCanal("equipe")}>👥 Mon équipe ({membresEquipe.length})</Button>
+            {estAdmin && (
+              <Button variant={canal === "admins" ? "default" : "outline"} className={canal === "admins" ? "ring-2 ring-amber-600 ring-offset-1" : ""} onClick={() => setCanal("admins")}>👑 Admins ({lesAdmins.length})</Button>
+            )}
+            {membresEquipe.map(c => (
+              <Button key={c.tel} variant={canal === c.tel ? "default" : "outline"} className={canal === c.tel ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setCanal((c.tel || "").trim())}>👤 {c.nom}</Button>
+            ))}
+            {estAdmin && lesAdmins.map(c => (
+              <Button key={c.tel} variant={canal === c.tel ? "default" : "outline"} className={canal === c.tel ? "ring-2 ring-amber-600 ring-offset-1" : ""} onClick={() => setCanal((c.tel || "").trim())}>👑 {c.nom}</Button>
+            ))}
           </div>
 
-          {/* Explication simple */}
-          <div className="flex-1 overflow-auto p-3 text-sm text-muted-foreground space-y-1">
-            <p>Comment ça marche :</p>
-            <p>1️⃣ Maintiens le gros bouton rouge et parle : ta voix part en direct, en même temps.</p>
-            <p>2️⃣ Relâche : la conversation se coupe aussitôt chez tout le monde.</p>
-            <p>3️⃣ Les autres ouvrent le talkie pour t'écouter et te répondre pareil.</p>
+          {/* Bulles de messages */}
+          <div className="flex-1 overflow-auto p-3 space-y-2 bg-[#ece5dd]">
+            {messagesDuCanal.length === 0 && (
+              <p className="text-sm text-zinc-600 text-center">
+                {canal === "admins"
+                  ? "Espace privé entre administrateurs : envoyez une photo ou une vidéo pour demander qui a une pièce."
+                  : "Aucun message. Écris, envoie une photo, une vidéo ou un vocal."}
+              </p>
+            )}
+            {messagesDuCanal.map((m, i) => {
+              const moi = m.de === monTel;
+              return (
+                <div key={m.id ?? i} className={"flex " + (moi ? "justify-end" : "justify-start")}>
+                  <div className={"rounded-xl px-3 py-2 max-w-[80%] shadow-sm text-sm " + (moi ? "bg-[#d9fdd3] text-zinc-900" : "bg-white text-zinc-900")}>
+                    {!moi && <div className="text-xs font-bold text-green-800">{m.nom || m.de}</div>}
+                    {m.type === "texte" && <p className="whitespace-pre-wrap break-words">{m.contenu}</p>}
+                    {m.type === "photo" && <img src={"data:image/jpeg;base64," + m.contenu} alt="" className="rounded-lg max-w-full" />}
+                    {m.type === "video" && <video controls src={"data:video/mp4;base64," + m.contenu} className="rounded-lg max-w-full" />}
+                    {m.type === "audio" && (
+                      <button className="flex items-center gap-2 font-semibold text-green-800" onClick={() => ecouterVocal(m)}>▶️ 🎤 Vocal</button>
+                    )}
+                    <div className="text-[10px] text-zinc-500 text-right mt-1">{heureDe(m)}</div>
+                  </div>
+                </div>
+              );
+            })}
+            <div ref={finListeRef} />
           </div>
 
-          {/* Gros bouton : maintenir pour parler en direct */}
-          <div className="p-3 border-t bg-white">
-            <button
-              className={"w-full py-6 rounded-xl text-white font-bold text-lg shadow-md select-none " + (enEmission ? "bg-red-700 animate-pulse" : "bg-red-600 hover:bg-red-700")}
-              style={{ touchAction: "none" }}
-              onPointerDown={(e) => { e.preventDefault(); demarrer(); }}
-              onPointerUp={arreter}
-              onPointerLeave={arreter}
-              onPointerCancel={arreter}
-              onContextMenu={(e) => e.preventDefault()}>
-              {enEmission ? "🔴 EN DIRECT… relâche pour couper" : "🎙️ MAINTIENS et PARLE (direct)"}
-            </button>
-            {info && <p className="text-xs mt-2 text-zinc-700">{info}</p>}
+          {/* Barre d'envoi : photo, vidéo, texte, vocal */}
+          <div className="p-2 border-t bg-white flex flex-wrap items-center gap-1">
+            <input ref={inputPhotoRef} type="file" accept="image/*" className="hidden" onChange={choisirPhoto} />
+            <input ref={inputVideoRef} type="file" accept="video/*" className="hidden" onChange={choisirVideo} />
+            <button className="w-10 h-10 rounded-full bg-zinc-100 hover:bg-zinc-200 text-lg" title="Envoyer une photo" onClick={() => inputPhotoRef.current?.click()}>📷</button>
+            <button className="w-10 h-10 rounded-full bg-zinc-100 hover:bg-zinc-200 text-lg" title="Envoyer une vidéo" onClick={() => inputVideoRef.current?.click()}>🎬</button>
+            <Input
+              className="flex-1 min-w-[120px] h-10"
+              placeholder={chargement ? "Envoi en cours…" : "Écris ton message…"}
+              value={texte}
+              onChange={e => setTexte(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter") { envoyer("texte", texte); setTexte(""); } }}
+            />
+            {texte.trim()
+              ? <button className="w-10 h-10 rounded-full bg-green-600 hover:bg-green-700 text-white text-lg" title="Envoyer" onClick={() => { envoyer("texte", texte); setTexte(""); }}>➤</button>
+              : <button
+                  className={"w-10 h-10 rounded-full text-white text-lg select-none " + (enVocal ? "bg-red-600 animate-pulse" : "bg-green-600 hover:bg-green-700")}
+                  style={{ touchAction: "none" }}
+                  title="Maintiens pour parler, relâche pour envoyer"
+                  onPointerDown={(e) => {
+                    e.preventDefault();
+                    // On capture le doigt : même s'il bouge, le relâchement coupe toujours le micro
+                    try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
+                    demarrerVocal();
+                  }}
+                  onPointerUp={arreterVocal}
+                  onLostPointerCapture={arreterVocal}
+                  onContextMenu={(e) => e.preventDefault()}>
+                  {enVocal ? "⏺" : "🎤"}
+                </button>}
           </div>
+          {info && <p className="text-xs px-3 pb-2 text-zinc-700">{info}</p>}
         </Card>
       )}
-
-      {/* Élément audio invisible qui reçoit la voix de l'autre */}
-      <audio ref={audioRef} autoPlay playsInline className="hidden" />
     </div>
   );
 }
+
 
 function ChatFlottant({ userActif, entreprise, role, openChat, setOpenChat, articleNegociation }) {
   const [open, setOpen] = useState(false);
@@ -4325,7 +4388,8 @@ export default function App() {
           ajouterCredit={ajouterCredit}
           ajouterVersement={ajouterVersement}
           validerCredit={validerCredit}
-          cases={cases} setCases={setCases} />
+          cases={cases} setCases={setCases}
+          chefEquipe={userActif?.tel} />
       )}
 
       {/* Bouton Flottant & Chat Routé par Rôle avec Option Vocale */}
@@ -4339,8 +4403,9 @@ export default function App() {
       />
 
       {/* Talkie-walkie vocal : visible uniquement pour l'administrateur et les vendeurs */}
+      {/* Messagerie d'équipe type WhatsApp : visible uniquement pour l'administrateur et les vendeurs */}
       {TALKIE_ROLES.includes(role) && (
-        <TalkieWalkie role={role} userActif={userActif} comptes={comptes} />
+        <MessagerieEquipe role={role} userActif={userActif} comptes={comptes} />
       )}
     </div>
   );

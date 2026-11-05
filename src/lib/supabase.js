@@ -23,6 +23,8 @@ export async function synchroniserCompteSupabase(compte) {
           role: compte.role || "vendeur",
           cle: compte.cle || null,
           bloque: Boolean(compte.bloque),
+          // Équipe : le téléphone de l'administrateur qui a créé ce compte
+          equipe: compte.equipe || null,
         },
         { onConflict: "tel" }
       );
