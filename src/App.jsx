@@ -2964,7 +2964,7 @@ function TalkieWalkie({ role, userActif, comptes }) {
 
   // Ouverture du talkie : on rejoint le canal et on annonce sa présence
   useEffect(() => {
-    if (!ouvert || !monTel) return;
+    if (!monTel) return; // le talkie se connecte tout seul dès que l'application est ouverte
     let canal = null;
     try {
       canal = supabase.channel("talkie-walkie", { config: { presence: { key: monTel }, broadcast: { self: false } } });
@@ -2989,7 +2989,7 @@ function TalkieWalkie({ role, userActif, comptes }) {
       canalRef.current = null;
       couperReception();
     };
-  }, [ouvert, monTel]);
+  }, [monTel]);
 
   // Sécurité : si l'application passe derrière une autre application, le micro se coupe tout seul
   useEffect(() => {
@@ -3057,7 +3057,7 @@ function TalkieWalkie({ role, userActif, comptes }) {
         flux.getTracks().forEach(t => t.stop());
         fluxRef.current = null;
         enEmissionRef.current = false;
-        setInfo("👤 Personne n'écoute pour le moment" + (destinataire === "equipe" ? " : personne de ton équipe n'a ouvert le talkie." : destinataire === "admins" ? " : aucun admin n'a ouvert le talkie." : " : cette personne n'a pas ouvert le talkie."));
+        setInfo("👤 Personne n'écoute pour le moment" + (destinataire === "equipe" ? " : personne de ton équipe n'a encore ouvert l'application." : destinataire === "admins" ? " : aucun admin n'a ouvert l'application." : " : cette personne n'a pas ouvert l'application."));
         return;
       }
       for (const tel of cibles) {
@@ -3143,7 +3143,7 @@ function TalkieWalkie({ role, userActif, comptes }) {
             </div>
             <div className="text-[11px] text-muted-foreground">
               {connectes.length === 0
-                ? "Personne n'a ouvert le talkie pour l'instant. Les autres doivent l'ouvrir pour t'entendre."
+                ? "Personne n'a encore ouvert l'application MotoPièces. Dès qu'on l'ouvre (même en arrière-plan), on t'entend automatiquement."
                 : "🎧 Connectés : " + connectes.map(c => c.nom || c.tel).join(", ")}
             </div>
           </div>
@@ -3151,7 +3151,7 @@ function TalkieWalkie({ role, userActif, comptes }) {
           {/* Explication simple */}
           <div className="flex-1 overflow-auto p-3 text-sm text-muted-foreground space-y-1">
             <p>Comment ça marche :</p>
-            <p>1️⃣ Les autres ouvrent leur talkie (bouton 🎙️).</p>
+            <p>1️⃣ Les autres ont juste leur application MotoPièces ouverte (même en arrière-plan, ils t'entendent).</p>
             <p>2️⃣ Tu maintiens le gros bouton et tu parles : ils t'entendent en même temps.</p>
             <p>3️⃣ Tu relâches : le micro se coupe automatiquement, la conversation s'arrête.</p>
           </div>
@@ -3189,7 +3189,7 @@ function TalkieWalkie({ role, userActif, comptes }) {
                     <span>🔴 MIC ACTIF — ils t'entendent… relâche pour couper</span>
                   </span>)
                 : ecoute ? "🎙️ MAINTIENS et PARLE — on t'attend ✅"
-                : "🔴 Personne n'est en ligne (ouvre son talkie)"}
+                : "🔴 Personne n'a l'application ouverte"}
             </button>
             {info && <p className="text-xs mt-2 text-zinc-700">{info}</p>}
           </div>
@@ -3303,7 +3303,7 @@ function TalkieClientArticle({ article, userActif, comptes }) {
 
   // Ouverture : le client rejoint le canal du talkie et voit qui est connecté
   useEffect(() => {
-    if (!ouvert || !monTel) return;
+    if (!monTel) return; // le talkie se connecte tout seul dès que l'application est ouverte
     let canal = null;
     try {
       canal = supabase.channel("talkie-walkie", { config: { presence: { key: monTel }, broadcast: { self: false } } });
@@ -3328,7 +3328,7 @@ function TalkieClientArticle({ article, userActif, comptes }) {
       couperReception();
     };
     // eslint-disable-next-line
-  }, [ouvert, monTel]);
+  }, [monTel]);
 
   // Sécurité : si l'application passe derrière une autre application, le micro se coupe tout seul
   useEffect(() => {
@@ -3348,7 +3348,7 @@ function TalkieClientArticle({ article, userActif, comptes }) {
       if (!canalRef.current) { setInfo("⚠️ Connexion en cours… attends une seconde et réessaie."); return; }
       const cibles = connectes.map(c => (c.tel || "").trim()).filter(t => telsEquipe.includes(t));
       if (cibles.length === 0) {
-        setInfo("👤 Personne n'écoute pour le moment : personne de la boutique n'a ouvert le talkie (bouton 🎙️).");
+        setInfo("👤 Personne n'écoute pour le moment : personne de la boutique n'a encore ouvert l'application.");
         return;
       }
       enEmissionRef.current = true;
@@ -3416,11 +3416,11 @@ function TalkieClientArticle({ article, userActif, comptes }) {
 
           <div className="p-3">
             <p className="text-xs text-muted-foreground mb-1">
-              1️⃣ La boutique ouvre son talkie (bouton 🎙️). 2️⃣ Maintiens le gros bouton et parle : les vendeurs et la secrétaire de la boutique t'entendent en même temps. 3️⃣ Relâche : le micro se coupe.
+              1️⃣ La boutique a juste son application ouverte (même en arrière-plan). 2️⃣ Maintiens le gros bouton et parle : les vendeurs et la secrétaire de la boutique t'entendent automatiquement. 3️⃣ Relâche : le micro se coupe.
             </p>
             <div className="text-[11px] text-muted-foreground mb-2">
               {connectes.length === 0
-                ? "🎧 Personne de la boutique n'a ouvert le talkie pour l'instant."
+                ? "🎧 Personne de la boutique n'a encore ouvert l'application."
                 : "🎧 En ligne : " + connectes.map(c => c.nom || c.tel).join(", ")}
             </div>
             <button
