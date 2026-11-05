@@ -16,6 +16,7 @@ import { extraireTexteImage } from "@/lib/ocr";
 import { demanderAssistantMistral } from "@/lib/mistral";
 import { verifierQualiteImage } from "@/lib/imageProcessor";
 import ModeRech from "@/components/ModeRech";
+import HistoriqueGlobal from "@/components/HistoriqueGlobal";
 
 // ---------- Données ----------
 
@@ -963,9 +964,10 @@ function VueVendeur({ produits, ventes, creerVente }) {
 
   return (
     <div>
-      <div className="max-w-6xl mx-auto px-4 pt-4 flex gap-2">
+      <div className="max-w-6xl mx-auto px-4 pt-4 flex gap-2 flex-wrap">
         <Button variant={onglet === "vendre" ? "default" : "outline"} className={onglet === "vendre" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("vendre")}>📷 Vendre</Button>
         <Button variant={onglet === "ventes" ? "default" : "outline"} className={onglet === "ventes" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("ventes")}>📋 Ventes ({ventes.length})</Button>
+        <Button variant={onglet === "historique" ? "default" : "outline"} className={onglet === "historique" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("historique")}>📊 Historique Global</Button>
       </div>
 
       {onglet === "vendre" ? (
@@ -1107,7 +1109,7 @@ function VueVendeur({ produits, ventes, creerVente }) {
             </CardContent>
           </Card>
         </div>
-      ) : (
+      ) : onglet === "ventes" ? (
         <div className="max-w-6xl mx-auto px-4 py-4">
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
             <Card className="bg-white"><CardContent className="p-3">
@@ -1132,7 +1134,9 @@ function VueVendeur({ produits, ventes, creerVente }) {
             (filtreVentes === "toutes" ? ventes : ventes.filter(v => filtreVentes === "payée" ? v.statut === "payée" : v.statut !== "payée"))
               .map(v => <LigneVente key={v.id} v={v} />)}
         </div>
-      )}
+      ) : onglet === "historique" ? (
+        <HistoriqueGlobal ventes={ventes} />
+      ) : null}
 
       {/* Cagnotte flottante de la vente en cours */}
       {onglet === "vendre" && !vendu && identifies.length > 0 && (
