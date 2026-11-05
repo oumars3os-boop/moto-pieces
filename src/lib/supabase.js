@@ -69,10 +69,13 @@ export async function enregistrerVenteSupabase(vente) {
     }
 
     // Écriture serveur directe des lignes d'articles vers la table sale_items
+    // Correctif : part_id mis à null — les articles de la boutique ne sont pas dans la table
+    // en ligne "parts" (vide), et une référence inexistante fait échouer SILENCIEUSEMENT
+    // l'enregistrement des lignes, ce qui vidait les ventes après actualisation.
     if (saleData && vente.items && vente.items.length > 0) {
       const itemsPayload = vente.items.map((it) => ({
         sale_id: saleData.id,
-        part_id: typeof it.p?.id === "number" ? it.p.id : (typeof it.id === "number" ? it.id : null),
+        part_id: null,
         nom: it.p?.nom || it.nom || "Article",
         quantite: it.qte || 1,
         prix_unitaire: it.prixLigne ?? (it.p ? it.p.prix : it.prix) ?? 0,
@@ -127,7 +130,7 @@ export async function majVenteSupabase(vente) {
     await supabase.from("sale_items").delete().eq("sale_id", idSup);
     const itemsPayload = (vente.items || []).map((it) => ({
       sale_id: idSup,
-      part_id: typeof it.p?.id === "number" ? it.p.id : (typeof it.id === "number" ? it.id : null),
+      part_id: null, // même correctif : jamais de référence à la table "parts" vide
       nom: it.p?.nom || it.nom || "Article",
       quantite: it.qte || 1,
       prix_unitaire: it.prixLigne ?? (it.p ? it.p.prix : it.prix) ?? 0,

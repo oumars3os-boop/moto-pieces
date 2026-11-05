@@ -3110,11 +3110,11 @@ export default function App() {
       try {
         const ventesEnLigne = await chargerVentesSupabase();
         // Correctif : fusion avec les ventes locales au lieu de les écraser.
-        // On ne charge QUE les ventes réellement payées avec un total positif :
-        // les anciennes lignes « en attente » à 0 FCFA ne reviennent plus dans l'historique.
-        // On ignore aussi les ventes déjà connues localement (même identifiant serveur).
+        // On charge : toutes les ventes payées avec un total positif (historique définitif)
+        // ET toutes les ventes en attente (la secrétaire doit les voir pour fixer les prix et valider).
+        // On ignore seulement les lignes vides (aucun article) et les anciens doublons « payée à 0 FCFA ».
         const lignesValides = (ventesEnLigne || []).filter(s =>
-          s.statut === "payée" && (Number(s.total) > 0) && (s.items || []).length > 0);
+          (s.items || []).length > 0 && (s.statut === "payée" ? Number(s.total) > 0 : true));
         if (lignesValides.length > 0) {
           setVentes(prev => {
             const idsConnus = new Set(prev.map(v => String(v.id)));
