@@ -23,7 +23,8 @@ export default function HistoriqueGlobal({ ventes: ventesProps = [] }) {
       const local = JSON.parse(localStorage.getItem("motopieces_ventes")) ||
                     JSON.parse(localStorage.getItem("historique_ventes")) || [];
       // Même filtre de sécurité sur les ventes locales
-      const localValide = local.filter(v => (v.items || []).length > 0);
+      const localValide = local.filter(v =>
+        (v.items || []).length > 0 && !(v.statut === "payée" && !(Number(v.total) > 0)));
       setVentes(localValide.length ? localValide : ventesProps);
     }
 

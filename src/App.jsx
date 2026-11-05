@@ -3064,7 +3064,18 @@ export default function App() {
   const [photosCategories, setPhotosCategories] = useState({});
   const [photosMarques, setPhotosMarques] = useState({});
   const [ventes, setVentes] = useState(() => {
-    try { const s = localStorage.getItem("motopieces_ventes"); return s ? JSON.parse(s) : []; } catch { return []; }
+    try {
+      const s = localStorage.getItem("motopieces_ventes");
+      if (!s) return [];
+      // Nettoyage automatique : les ventes enregistrées par l'ancienne version buggée
+      // (payées à 0 FCFA ou sans article) ne s'afficheront plus jamais.
+      const ventesLocales = JSON.parse(s);
+      if (!Array.isArray(ventesLocales)) return [];
+      return ventesLocales.filter(v =>
+        (v.items || []).length > 0 &&
+        !(v.statut === "payée" && !(Number(v.total) > 0))
+      );
+    } catch { return []; }
   });
   const [comptes, setComptes] = useState(() => {
     try { const s = localStorage.getItem("motopieces_comptes"); return s ? JSON.parse(s) : COMPTES_PAR_DEFAUT; } catch { return COMPTES_PAR_DEFAUT; }
