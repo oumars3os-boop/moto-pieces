@@ -1420,6 +1420,7 @@ function GestionCredits({ credits, ajouterCredit, ajouterVersement, validerCredi
   const [partie, setPartie] = useState("enregistrer"); // "enregistrer" : formulaire + tableau | "encours" : uniquement les crédits en cours, sans création
   const [filtre, setFiltre] = useState("encours"); // "encours" | "payes"
   const [ticket, setTicket] = useState(null); // crédit en cours d'impression
+  const [listeImpression, setListeImpression] = useState(null); // impression de toute la liste (en cours ou payés)
   const [form, setForm] = useState({ nom: "", tel: "", montant: "" });
   const [saisie, setSaisie] = useState({}); // montant du versement en cours, par crédit
 
@@ -1511,6 +1512,21 @@ function GestionCredits({ credits, ajouterCredit, ajouterVersement, validerCredi
       </CardContent></Card>
       )}
 
+      {/* Gros bouton pour imprimer toute la liste affichée (crédits en cours ou crédits validés) */}
+      {liste.length > 0 && (
+        <div className="mb-4">
+          <Button size="lg" className="w-full py-5 text-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold shadow-md"
+            onClick={() => setListeImpression({
+              titre: affichePayes
+                ? (vue === "recevoir" ? "LISTE DES CRÉDITS VALIDÉS (PAYÉS)" : "LISTE DES DETTES RÉGLÉES")
+                : (vue === "recevoir" ? "LISTE DES CRÉDITS EN COURS" : "LISTE DES DETTES EN COURS"),
+              items: liste,
+            })}>
+            🖨️ Imprimer toute la liste ({liste.length} {liste.length > 1 ? "crédits" : "crédit"}{affichePayes ? " payés" : " en cours"})
+          </Button>
+        </div>
+      )}
+
       {/* Liste des crédits */}
       {liste.length === 0 && <p className="text-muted-foreground">{affichePayes ? "Aucun crédit validé pour le moment. Dès que quelqu'un finit de payer, il arrive ici automatiquement ✅" : "Aucun crédit en cours dans cette catégorie."}</p>}
       {liste.map(c => {
@@ -1581,6 +1597,46 @@ function GestionCredits({ credits, ajouterCredit, ajouterVersement, validerCredi
           </Card>
         );
       })}
+
+      {/* Impression de toute la liste des clients / crédits (en cours ou payés) */}
+      {listeImpression && (
+        <FeuilleTicket onFermer={() => setListeImpression(null)} autoPrint={true}>
+          <div className="text-center font-bold text-sm">MotoPièces</div>
+          <div className="text-center text-[10px] mb-1">{listeImpression.titre}</div>
+          <div className="border-t border-dashed border-zinc-400 my-1" />
+          <div className="text-[10px] mb-1">
+            Date : {new Date().toLocaleDateString("fr-FR")} à {new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}
+          </div>
+          <div className="border-t border-dashed border-zinc-400 my-1" />
+          <div className="text-[11px] leading-snug">
+            {listeImpression.items.map((c, i) => {
+              const reste = resteDe(c);
+              const paye = (c.montant || 0) - reste;
+              return (
+                <div key={c.id || i} style={{ borderBottom: "1px dotted #d4d4d4", padding: "2px 0" }}>
+                  <div className="flex justify-between font-semibold">
+                    <span>{i + 1}. {c.nom}{c.tel ? ` — ${c.tel}` : ""}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Total : {(c.montant || 0).toLocaleString("fr-FR")} F</span>
+                    <span>Payé : {paye.toLocaleString("fr-FR")} F</span>
+                    <span className="font-bold">Reste : {reste.toLocaleString("fr-FR")} F</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="border-t border-dashed border-zinc-400 my-1" />
+          <div className="text-[11px] font-bold">
+            <div className="flex justify-between"><span>Nombre de clients</span><span>{listeImpression.items.length}</span></div>
+            <div className="flex justify-between"><span>Total général</span><span>{listeImpression.items.reduce((s, c) => s + (c.montant || 0), 0).toLocaleString("fr-FR")} F</span></div>
+            <div className="flex justify-between"><span>Total déjà payé</span><span>{listeImpression.items.reduce((s, c) => s + ((c.montant || 0) - resteDe(c)), 0).toLocaleString("fr-FR")} F</span></div>
+            <div className="flex justify-between"><span className="font-bold">Total reste à payer</span><span className="font-bold">{listeImpression.items.reduce((s, c) => s + resteDe(c), 0).toLocaleString("fr-FR")} F</span></div>
+          </div>
+          <div className="border-t border-dashed border-zinc-400 my-1" />
+          <div className="text-center text-[9px]">Document imprimé depuis MotoPièces</div>
+        </FeuilleTicket>
+      )}
 
       {/* Ticket de crédit imprimable (petit ticket à donner au client pour prouver ce qu'il doit) */}
       {ticket && (
@@ -2733,6 +2789,252 @@ function VueAdmin({
 }
 
 // ---------- Composant Chat Flottant & Messagerie Routée selon Rôle ----------
+// ---------- Talkie-walkie vocal (administrateur & vendeurs uniquement) ----------
+const TALKIE_ROLES = ["admin", "vendeur", "vendeur-secretaire"];
+
+function TalkieWalkie({ role, userActif, comptes }) {
+  const [ouvert, setOuvert] = useState(false);
+  const [destinataire, setDestinataire] = useState("groupe"); // "groupe" = toute l'équipe | ou le téléphone d'une personne
+  const [enEmission, setEnEmission] = useState(false);
+  const [enReception, setEnReception] = useState(false);
+  const [nomQuiParle, setNomQuiParle] = useState("");
+  const [info, setInfo] = useState("");
+  const [connectes, setConnectes] = useState([]); // personnes qui ont le talkie ouvert en ce moment
+  const canalRef = useRef(null);
+  const pcsRef = useRef({}); // connexions WebRTC en cours, par téléphone
+  const fluxRef = useRef(null);
+  const audioRef = useRef(null);
+
+  const monTel = (userActif?.tel || "").trim();
+  const monNom = userActif?.nom || "Moi";
+  const equipe = (comptes || []).filter(c => TALKIE_ROLES.includes(c.role) && (c.tel || "").trim() && (c.tel || "").trim() !== monTel);
+
+  const signaler = (payload) => {
+    try {
+      const canal = canalRef.current;
+      if (!canal) return;
+      canal.send({ type: "broadcast", event: "signal", payload: { ...payload, de: monTel, nomDe: monNom } });
+    } catch {}
+  };
+
+  // Arrêter l'écoute du flux reçu (appelé quand l'autre relâche son bouton)
+  const couperReception = (telEmetteur) => {
+    try {
+      if (telEmetteur && pcsRef.current[telEmetteur]) {
+        try { pcsRef.current[telEmetteur].close(); } catch {}
+        delete pcsRef.current[telEmetteur];
+      } else {
+        Object.values(pcsRef.current).forEach(pc => { try { pc.close(); } catch {} });
+        pcsRef.current = {};
+      }
+    } catch {}
+    if (audioRef.current) { try { audioRef.current.pause(); audioRef.current.srcObject = null; } catch {} }
+    setEnReception(false);
+    setNomQuiParle("");
+  };
+
+  // Réception d'une offre : quelqu'un maintient son bouton et parle, on l'écoute en direct
+  const ecouterOffre = async (p) => {
+    if (typeof RTCPeerConnection === "undefined") return;
+    try {
+      // Une seule voix à la fois : si quelqu'un d'autre parlait déjà, on le coupe
+      couperReception();
+      const pc = new RTCPeerConnection({ iceServers: [{ urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }] });
+      pc.onicecandidate = (e) => { if (e.candidate) signaler({ type: "cand", vers: p.de, c: e.candidate }); };
+      pc.ontrack = (e) => {
+        try {
+          const audio = audioRef.current;
+          if (!audio) return;
+          audio.srcObject = e.streams[0];
+          audio.play().catch(() => {});
+          setEnReception(true);
+          setNomQuiParle(p.nomDe || p.de);
+        } catch {}
+      };
+      pc.oniceconnectionstatechange = () => {
+        if (["failed", "disconnected", "closed"].includes(pc.iceConnectionState)) couperReception(p.de);
+      };
+      await pc.setRemoteDescription(new RTCSessionDescription(p.sdp));
+      const reponse = await pc.createAnswer();
+      await pc.setLocalDescription(reponse);
+      signaler({ type: "reponse", vers: p.de, sdp: reponse });
+      pcsRef.current[p.de] = pc;
+    } catch (e) {
+      console.warn("Talkie : impossible d'écouter l'émetteur", e);
+    }
+  };
+
+  // Tous les signaux du talkie (offre, réponse, candidat réseau, fin)
+  const traiterSignal = (p) => {
+    if (!p || p.de === monTel) return;
+    if (p.type !== "fin" && p.vers !== "groupe" && p.vers !== monTel) return;
+    if (p.type === "offre") { ecouterOffre(p); return; }
+    if (p.type === "reponse") {
+      const pc = pcsRef.current[p.de];
+      if (pc) pc.setRemoteDescription(new RTCSessionDescription(p.sdp)).catch(() => {});
+      return;
+    }
+    if (p.type === "cand") {
+      const pc = pcsRef.current[p.de];
+      if (pc) pc.addIceCandidate(new RTCIceCandidate(p.c)).catch(() => {});
+      return;
+    }
+    if (p.type === "fin") couperReception(p.de);
+  };
+
+  // Ouverture du talkie : on rejoint le canal de signalisation et on annonce sa présence
+  useEffect(() => {
+    if (!ouvert || !monTel) return;
+    let canal = null;
+    try {
+      canal = supabase.channel("talkie-walkie", { config: { presence: { key: monTel }, broadcast: { self: false } } });
+      canalRef.current = canal;
+      canal.on("presence", { event: "sync" }, () => {
+        try {
+          const liste = Object.values(canal.presenceState()).flat();
+          setConnectes(liste.filter(c => (c.tel || "").trim() !== monTel));
+        } catch {}
+      });
+      canal.on("broadcast", { event: "signal" }, ({ payload }) => traiterSignal(payload));
+      canal.subscribe((statut) => {
+        if (statut === "SUBSCRIBED") { try { canal.track({ nom: monNom, tel: monTel }); } catch {} }
+      });
+    } catch (e) {
+      setInfo("⚠️ Connexion du talkie impossible : " + (e?.message || e));
+    }
+    return () => {
+      signaler({ type: "fin", vers: "groupe" });
+      try { canal?.unsubscribe?.(); } catch {}
+      canalRef.current = null;
+      couperReception();
+    };
+  }, [ouvert, monTel]);
+
+  // Maintenir le bouton : le micro s'ouvre et la voix part EN DIRECT chez les autres
+  const demarrer = async () => {
+    if (enEmission) return;
+    setInfo("");
+    try {
+      if (!navigator.mediaDevices?.getUserMedia) { setInfo("❌ Le micro n'est pas disponible sur cet appareil."); return; }
+      if (typeof RTCPeerConnection === "undefined") { setInfo("❌ Ce navigateur ne supporte pas le talkie en direct."); return; }
+      if (!canalRef.current) { setInfo("⚠️ Connexion en cours… attends une seconde et réessaie."); return; }
+      const flux = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+      fluxRef.current = flux;
+      const cibles = (destinataire === "groupe"
+        ? connectes.map(c => (c.tel || "").trim())
+        : [destinataire]).filter(Boolean);
+      if (cibles.length === 0) {
+        flux.getTracks().forEach(t => t.stop());
+        fluxRef.current = null;
+        setInfo("👤 Personne n'écoute pour le moment" + (destinataire === "groupe" ? " : personne d'autre n'a ouvert le talkie." : " : cette personne n'a pas ouvert le talkie."));
+        return;
+      }
+      for (const tel of cibles) {
+        const pc = new RTCPeerConnection({ iceServers: [{ urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }] });
+        flux.getTracks().forEach(t => pc.addTrack(t, flux));
+        pc.onicecandidate = (e) => { if (e.candidate) signaler({ type: "cand", vers: tel, c: e.candidate }); };
+        pcsRef.current[tel] = pc;
+        const offre = await pc.createOffer();
+        await pc.setLocalDescription(offre);
+        signaler({ type: "offre", vers: tel, sdp: offre });
+      }
+      setEnEmission(true);
+    } catch (e) {
+      setEnEmission(false);
+      setInfo("❌ Micro refusé ou indisponible : " + (e?.message || e) + " (autorise le micro dans ton navigateur).");
+    }
+  };
+
+  // Relâcher le bouton : la conversation se coupe chez tout le monde
+  const arreter = () => {
+    if (!enEmission) return;
+    signaler({ type: "fin", vers: destinataire });
+    Object.values(pcsRef.current).forEach(pc => { try { pc.close(); } catch {} });
+    pcsRef.current = {};
+    try { fluxRef.current?.getTracks().forEach(t => t.stop()); } catch {}
+    fluxRef.current = null;
+    setEnEmission(false);
+  };
+
+  if (!TALKIE_ROLES.includes(role)) return null;
+
+  return (
+    <div>
+      {/* Gros bouton flottant du talkie-walkie */}
+      {!ouvert && (
+        <button
+          className="fixed bottom-6 left-4 z-50 w-16 h-16 rounded-full bg-zinc-900 hover:bg-zinc-800 text-white text-2xl shadow-2xl border-4 border-white active:scale-95 transition"
+          onClick={() => setOuvert(true)}
+          aria-label="Talkie-walkie">
+          🎙️
+        </button>
+      )}
+
+      {/* Panneau du talkie-walkie */}
+      {ouvert && (
+        <Card className="fixed bottom-4 left-2 right-2 sm:right-auto sm:left-4 sm:w-[390px] z-50 h-[70vh] max-h-[560px] bg-white border shadow-2xl rounded-2xl flex flex-col overflow-hidden">
+          <div className="bg-zinc-900 text-white p-3 flex items-center justify-between">
+            <div className="font-bold">🎙️ Talkie-Walkie {enEmission ? "(EN DIRECT 🔴)" : ""}</div>
+            <button className="text-white/70 hover:text-white text-lg" onClick={() => { arreter(); setOuvert(false); }}>✕</button>
+          </div>
+
+          {/* État en direct */}
+          {(enEmission || enReception) && (
+            <div className={"p-2 text-center font-bold text-white text-sm " + (enEmission ? "bg-red-600 animate-pulse" : "bg-blue-600")}>
+              {enEmission ? "🔴 Tu es EN DIRECT : parle, tout le monde t'entend" : "🎧 " + (nomQuiParle || "Quelqu'un") + " parle : écoute…"}
+            </div>
+          )}
+
+          {/* Choix de la destination : toute l'équipe ou une personne précise */}
+          <div className="p-3 border-b bg-zinc-50 space-y-2">
+            <Label className="text-xs">Qui doit t'entendre ?</Label>
+            <div className="flex flex-wrap gap-2">
+              <Button variant={destinataire === "groupe" ? "default" : "outline"} className={destinataire === "groupe" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setDestinataire("groupe")}>📢 Toute l'équipe</Button>
+              {equipe.map(c => (
+                <Button key={c.tel} variant={destinataire === c.tel ? "default" : "outline"} className={destinataire === c.tel ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setDestinataire(c.tel.trim())}>
+                  👤 {c.nom}
+                </Button>
+              ))}
+            </div>
+            {/* Personnes connectées au talkie en ce moment */}
+            <div className="text-[11px] text-muted-foreground">
+              {connectes.length === 0
+                ? "Personne d'autre n'a ouvert le talkie pour l'instant."
+                : "🎧 Connectés : " + connectes.map(c => c.nom || c.tel).join(", ")}
+            </div>
+          </div>
+
+          {/* Explication simple */}
+          <div className="flex-1 overflow-auto p-3 text-sm text-muted-foreground space-y-1">
+            <p>Comment ça marche :</p>
+            <p>1️⃣ Maintiens le gros bouton rouge et parle : ta voix part en direct, en même temps.</p>
+            <p>2️⃣ Relâche : la conversation se coupe aussitôt chez tout le monde.</p>
+            <p>3️⃣ Les autres ouvrent le talkie pour t'écouter et te répondre pareil.</p>
+          </div>
+
+          {/* Gros bouton : maintenir pour parler en direct */}
+          <div className="p-3 border-t bg-white">
+            <button
+              className={"w-full py-6 rounded-xl text-white font-bold text-lg shadow-md select-none " + (enEmission ? "bg-red-700 animate-pulse" : "bg-red-600 hover:bg-red-700")}
+              style={{ touchAction: "none" }}
+              onPointerDown={(e) => { e.preventDefault(); demarrer(); }}
+              onPointerUp={arreter}
+              onPointerLeave={arreter}
+              onPointerCancel={arreter}
+              onContextMenu={(e) => e.preventDefault()}>
+              {enEmission ? "🔴 EN DIRECT… relâche pour couper" : "🎙️ MAINTIENS et PARLE (direct)"}
+            </button>
+            {info && <p className="text-xs mt-2 text-zinc-700">{info}</p>}
+          </div>
+        </Card>
+      )}
+
+      {/* Élément audio invisible qui reçoit la voix de l'autre */}
+      <audio ref={audioRef} autoPlay playsInline className="hidden" />
+    </div>
+  );
+}
+
 function ChatFlottant({ userActif, entreprise, role, openChat, setOpenChat, articleNegociation }) {
   const [open, setOpen] = useState(false);
   const [canal, setCanal] = useState("assistance"); // "assistance" | "negociation" | "developpeur"
@@ -4035,6 +4337,11 @@ export default function App() {
         setOpenChat={setOpenChat}
         articleNegociation={articleNegociation}
       />
+
+      {/* Talkie-walkie vocal : visible uniquement pour l'administrateur et les vendeurs */}
+      {TALKIE_ROLES.includes(role) && (
+        <TalkieWalkie role={role} userActif={userActif} comptes={comptes} />
+      )}
     </div>
   );
 }
