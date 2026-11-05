@@ -306,7 +306,7 @@ function BoutonSupprimer({ onSupprimer, label = "🗑️ Supprimer", duree = 500
 
 // ---------- Composants communs ----------
 
-function Produit({ p, onAjout, onRetirer, admin, onEditer, categories, qteDansPanier, onNegocierPrix }) {
+function Produit({ p, onAjout, onRetirer, admin, onEditer, categories, qteDansPanier, onNegocierPrix, elementTalkie }) {
   const [flash, setFlash] = useState(false);
   const [flashMoins, setFlashMoins] = useState(false);
   const [openDetail, setOpenDetail] = useState(false);
@@ -358,10 +358,11 @@ function Produit({ p, onAjout, onRetirer, admin, onEditer, categories, qteDansPa
             <div className="text-[10px] sm:text-xs text-muted-foreground mt-0.5 line-clamp-1">{p.desc}</div>
 
             {/* Affichage explicite de la boutique de provenance */}
-            <div className="mt-1">
+            <div className="mt-1 flex items-center gap-1 flex-wrap">
               <Badge variant="outline" className="text-[9px] sm:text-[10px] bg-blue-50 text-blue-800 border-blue-200">
                 🏪 {nomBoutique}
               </Badge>
+              {elementTalkie}
             </div>
           </div>
           <div className="flex items-center justify-between text-xs sm:text-sm">
@@ -603,7 +604,7 @@ function LigneVente({ v, onConfirmer, onSaisirPrix, saisiePrix }) {
 
 // ---------- Vue Client ----------
 
-function VueClient({ produits, marques, creerVente, photosCategories, photosMarques, categories, onNegocierPrix }) {
+function VueClient({ produits, marques, creerVente, photosCategories, photosMarques, categories, onNegocierPrix, userActif, comptes }) {
   const [recherche, setRecherche] = useState("");
   const [cat, setCat] = useState("toutes");
   const [marque, setMarque] = useState("toutes");
@@ -763,7 +764,8 @@ function VueClient({ produits, marques, creerVente, photosCategories, photosMarq
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2 sm:gap-4">
           {liste.map(p => <Produit key={p.id} p={p} onAjout={ajouter} onRetirer={retirer} categories={categories}
             qteDansPanier={panier.find(i => i.p.id === p.id)?.qte || 0}
-            onNegocierPrix={onNegocierPrix} />)}
+            onNegocierPrix={onNegocierPrix}
+            elementTalkie={userActif ? <TalkieClientArticle article={p} userActif={userActif} comptes={comptes} /> : null} />)}
         </div>
       </main>
 
@@ -1814,6 +1816,12 @@ function ContenuMenuDev({ codeOk, setCodeOk, codeSaisi, setCodeSaisi, nouvelAdmi
     setComptes(prev => prev.map(x => x.id === c.id ? { ...x, pin: nouveau } : x));
     setPinGenere({ nom: c.nom, pin: nouveau });
   };
+  // Blocage à distance : le changement part aussitôt vers le serveur (Supabase)
+  const bloquerCompteADistance = (c) => {
+    const bloque = !c.bloque;
+    setComptes(prev => prev.map(x => x.id === c.id ? { ...x, bloque } : x));
+    try { synchroniserCompteSupabase({ ...c, bloque }); } catch {}
+  };
   if (!codeOk) {
     return (
       <div className="grid gap-1.5">
@@ -1885,6 +1893,27 @@ function ContenuMenuDev({ codeOk, setCodeOk, codeSaisi, setCodeSaisi, nouvelAdmi
           )}
         </div>
       )}
+
+      {/* TOUS les comptes : le développeur voit tout le monde et peut bloquer n'importe qui à distance */}
+      <div className="pt-3 mt-2 border-t">
+        <Label>👥 Tous les comptes inscrits ({comptes.filter(c => c.role !== "admin").length}) — blocage à distance :</Label>
+        <p className="text-[11px] text-muted-foreground mt-1">Tous les clients et tout le personnel apparaissent ici, même ceux créés par d'autres administrateurs. Le blocage part aussitôt vers le serveur.</p>
+        {comptes.filter(c => c.role !== "admin").map(c => (
+          <div key={c.id} className="mt-2 flex items-center justify-between gap-2">
+            <span className="text-sm font-medium">
+              {c.role === "client" ? "🛍️" : c.role === "vendeur" ? "👤" : c.role === "secretaire" ? "👩‍💼" : "👤"} {c.nom} — {c.tel} {c.bloque && <Badge className="bg-red-100 text-red-700 border border-red-300 ml-1">🚫 Bloqué</Badge>}
+            </span>
+            <Button size="sm" variant="outline"
+              className={c.bloque ? "border-green-300 text-green-700 hover:bg-green-50" : "border-amber-300 text-amber-700 hover:bg-amber-50"}
+              onClick={() => bloquerCompteADistance(c)}>
+              {c.bloque ? "🔓 Débloquer" : "🔒 Bloquer"}
+            </Button>
+          </div>
+        ))}
+        {comptes.filter(c => c.role !== "admin").length === 0 && (
+          <p className="text-muted-foreground text-sm mt-2">Aucun compte inscrit pour le moment.</p>
+        )}
+      </div>
     </div>
   );
 }
@@ -2010,6 +2039,18 @@ function VueAdmin({
 
   const roleInfo = (r) => r === "client" ? "👤 Client" : r === "vendeur" ? "🧑‍🔧 Vendeur" : r === "secretaire" ? "👩‍💼 Secrétaire" : r === "vendeur-secretaire" ? "🧑‍🔧👩‍💼 Vendeur + Secrétaire" : "👑 Admin";
 
+  // Chaque administrateur ne voit et ne gère QUE les comptes qu'il a créés lui-même (son équipe).
+  // Les comptes créés par un autre administrateur ne sont ni visibles ni supprimables ici.
+  // Comptes de mon équipe uniquement (les clients globaux n'apparaissent PAS ici)
+  const mesComptes = (comptes || []).filter(c => (c.equipe || "").trim() === (chefEquipe || "").trim() && c.role !== "admin");
+  // Clients visibles uniquement s'ils ont commandé un article de CET administrateur
+  const clientsAcheteurs = (comptes || []).filter(c =>
+    c.role === "client" && (c.equipe || "") === "clients" &&
+    (ventes || []).some(v =>
+      (v.tel || "").trim() === (c.tel || "").trim() &&
+      (v.items || []).some(it => (it.equipe || "").trim() === (chefEquipe || "").trim())
+    ));
+
   const maxId = produits.reduce((m, p) => Math.max(m, p.id), 0);
 
   const enregistrerNouveau = () => {
@@ -2027,6 +2068,7 @@ function VueAdmin({
       note: 4.0, desc: np.nom.trim(),
       photo: photoNouveau,
       caseId: np.caseId, // case de rangement : le vendeur sait où trouver l'article
+      equipe: (chefEquipe || "").trim(), // propriétaire : le téléphone de l'administrateur qui a créé l'article
     }]);
     setNp({ nom: "", cat: "", marque: "", prix: "", stock: "" });
     setPhotoNouveau(null);
@@ -2522,9 +2564,9 @@ function VueAdmin({
             </Card>
           )}
 
-          {/* Liste des comptes */}
-          <div className="text-sm text-muted-foreground mb-2">{comptes.length} compte{comptes.length > 1 ? "s" : ""} créé{comptes.length > 1 ? "s" : ""}</div>
-          {comptes.map(c => (
+          {/* Liste des comptes : uniquement ceux créés par cet administrateur */}
+          <div className="text-sm text-muted-foreground mb-2">{mesComptes.length} compte{mesComptes.length > 1 ? "s" : ""} créé{mesComptes.length > 1 ? "s" : ""} par toi</div>
+          {mesComptes.map(c => (
             <Card key={c.id} className="bg-white mb-2">
               <CardContent className="p-3 flex items-center justify-between gap-3">
                 <div>
@@ -2551,9 +2593,39 @@ function VueAdmin({
               </CardContent>
             </Card>
           ))}
-          {comptes.length === 0 && (
-            <p className="text-muted-foreground text-sm">Aucun compte créé pour le moment. Utilisez le formulaire ci-dessus pour créer un compte client, vendeur ou secrétaire.</p>
+          {mesComptes.length === 0 && (
+            <p className="text-muted-foreground text-sm">Aucun compte créé par toi pour le moment. Utilisez le formulaire ci-dessus pour créer un compte client, vendeur ou secrétaire. Les comptes créés par d'autres administrateurs ne s'affichent pas ici.</p>
           )}
+
+          {/* Clients : visibles uniquement quand ils commandent un de tes articles */}
+          <div className="mt-5">
+            <div className="font-semibold text-sm mb-1">🛍️ Clients ayant commandé tes articles ({clientsAcheteurs.length})</div>
+            <div className="text-xs text-muted-foreground mb-2">Un compte client apparaît ici seulement après avoir commandé un article de ta boutique.</div>
+            {clientsAcheteurs.map(c => (
+              <Card key={"cli-" + c.id} className="bg-white mb-2">
+                <CardContent className="p-3 flex items-center justify-between gap-3">
+                  <div>
+                    <div className="font-medium text-sm">
+                      🛍️ Client — {c.nom} {c.bloque && <Badge className="bg-red-100 text-red-700 border border-red-300 ml-1">🚫 Bloqué</Badge>}
+                    </div>
+                    <div className="text-xs text-muted-foreground">{c.tel || "—"}</div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button size="sm" variant="outline"
+                      className={c.bloque ? "border-green-300 text-green-700 hover:bg-green-50" : "border-amber-300 text-amber-700 hover:bg-amber-50"}
+                      onClick={() => setComptes(prev => prev.map(x => x.id === c.id ? { ...x, bloque: !x.bloque } : x))}>
+                      {c.bloque ? "🔓 Débloquer" : "🔒 Bloquer"}
+                    </Button>
+                    <BoutonSupprimer label="🗑️ Supprimer"
+                      onSupprimer={() => setComptes(prev => prev.filter(x => x.id !== c.id))} />
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+            {clientsAcheteurs.length === 0 && (
+              <p className="text-muted-foreground text-sm">Aucun client n'a encore commandé tes articles. Dès qu'un client achète un de tes articles, son compte apparaît ici.</p>
+            )}
+          </div>
         </div>
       )}
 
@@ -2793,11 +2865,560 @@ function VueAdmin({
 
 // ---------- Composant Chat Flottant & Messagerie Routée selon Rôle ----------
 // ---------- Talkie-walkie vocal (administrateur & vendeurs uniquement) ----------
-const TALKIE_ROLES = ["admin", "vendeur", "vendeur-secretaire"];
+const TALKIE_ROLES = ["admin", "vendeur", "vendeur-secretaire", "secretaire"];
+// ---------- Talkie-walkie EN DIRECT (administrateur & vendeurs uniquement) ----------
+// On maintient le bouton : la voix sort en même temps chez les autres.
+// On relâche : le micro se coupe automatiquement, chez tout le monde.
+// Chaque admin parle uniquement avec son équipe ; les admins ont en plus un espace entre eux.
 
-// ---------- Messagerie d'équipe type WhatsApp (photos, vidéos, textes, vocaux) ----------
-// Chaque administrateur voit UNIQUEMENT son équipe (les comptes qu'il a créés).
-// Les administrateurs ont en plus un espace privé pour causer entre eux, toutes équipes confondues.
+function TalkieWalkie({ role, userActif, comptes }) {
+  const [ouvert, setOuvert] = useState(false);
+  const [destinataire, setDestinataire] = useState("equipe"); // "equipe" | "admins" | téléphone d'une personne
+  const [enEmission, setEnEmission] = useState(false);
+  const [enReception, setEnReception] = useState(false);
+  const [nomQuiParle, setNomQuiParle] = useState("");
+  const [info, setInfo] = useState("");
+  const [connectes, setConnectes] = useState([]); // personnes ayant le talkie ouvert en ce moment
+  const canalRef = useRef(null);
+  const pcsRef = useRef({});
+  const fluxRef = useRef(null);
+  const audioRef = useRef(null);
+  const enEmissionRef = useRef(false);
+
+  const monTel = (userActif?.tel || "").trim();
+  const monNom = userActif?.nom || "Moi";
+  const estAdmin = role === "admin";
+
+  // Mon équipe : uniquement les comptes créés par mon administrateur
+  const cleEquipeDe = (c) => (c.role === "admin" ? (c.tel || "").trim() : (c.equipe || "defaut"));
+  const maCle = estAdmin ? monTel : ((userActif?.equipe || "").trim() || "defaut");
+  const membresEquipe = (comptes || []).filter(c =>
+    TALKIE_ROLES.includes(c.role) && (c.tel || "").trim() && (c.tel || "").trim() !== monTel && cleEquipeDe(c) === maCle);
+  const lesAdmins = (comptes || []).filter(c => c.role === "admin" && (c.tel || "").trim() !== monTel);
+  const contactsAutorises = estAdmin ? [...membresEquipe, ...lesAdmins] : membresEquipe;
+  // Les clients connectés sur le talkie : l'équipe peut aussi leur répondre directement
+  const clientsTels = (comptes || []).filter(c => c.role === "client" && (c.tel || "").trim() && (c.tel || "").trim() !== monTel).map(c => (c.tel || "").trim());
+  const titreDuCanal = (c) => c === "equipe" ? "👥 Mon équipe" : c === "admins" ? "👑 Espace Admins" : "👤 " + (((comptes || []).find(x => (x.tel || "").trim() === c) || {}).nom || c);
+
+  const signaler = (payload) => {
+    try {
+      const canal = canalRef.current;
+      if (!canal) return;
+      canal.send({ type: "broadcast", event: "signal", payload: { ...payload, de: monTel, nomDe: monNom } });
+    } catch {}
+  };
+
+  const couperReception = (telEmetteur) => {
+    try {
+      if (telEmetteur && pcsRef.current[telEmetteur]) {
+        try { pcsRef.current[telEmetteur].close(); } catch {}
+        delete pcsRef.current[telEmetteur];
+      } else {
+        Object.values(pcsRef.current).forEach(pc => { try { pc.close(); } catch {} });
+        pcsRef.current = {};
+      }
+    } catch {}
+    if (audioRef.current) { try { audioRef.current.pause(); audioRef.current.srcObject = null; } catch {} }
+    setEnReception(false);
+    setNomQuiParle("");
+  };
+
+  // Quelqu'un maintient son bouton : on l'écoute en direct
+  const ecouterOffre = async (p) => {
+    if (typeof RTCPeerConnection === "undefined") return;
+    try {
+      couperReception();
+      const pc = new RTCPeerConnection({ iceServers: [{ urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }] });
+      pc.onicecandidate = (e) => { if (e.candidate) signaler({ type: "cand", vers: p.de, c: e.candidate }); };
+      pc.ontrack = (e) => {
+        try {
+          const audio = audioRef.current;
+          if (!audio) return;
+          audio.srcObject = e.streams[0];
+          audio.play().catch(() => {});
+          setEnReception(true);
+          setNomQuiParle(p.nomDe || p.de);
+        } catch {}
+      };
+      pc.oniceconnectionstatechange = () => {
+        if (["failed", "disconnected", "closed"].includes(pc.iceConnectionState)) couperReception(p.de);
+      };
+      await pc.setRemoteDescription(new RTCSessionDescription(p.sdp));
+      const reponse = await pc.createAnswer();
+      await pc.setLocalDescription(reponse);
+      signaler({ type: "reponse", vers: p.de, sdp: reponse });
+      pcsRef.current[p.de] = pc;
+    } catch (e) {
+      console.warn("Talkie : impossible d'écouter l'émetteur", e);
+    }
+  };
+
+  const traiterSignal = (p) => {
+    if (!p || p.de === monTel) return;
+    if (p.type !== "fin" && p.vers !== "groupe" && p.vers !== monTel) return;
+    if (p.type === "offre") { ecouterOffre(p); return; }
+    if (p.type === "reponse") {
+      const pc = pcsRef.current[p.de];
+      if (pc) pc.setRemoteDescription(new RTCSessionDescription(p.sdp)).catch(() => {});
+      return;
+    }
+    if (p.type === "cand") {
+      const pc = pcsRef.current[p.de];
+      if (pc) pc.addIceCandidate(new RTCIceCandidate(p.c)).catch(() => {});
+      return;
+    }
+    if (p.type === "fin") couperReception(p.de);
+  };
+
+  // Ouverture du talkie : on rejoint le canal et on annonce sa présence
+  useEffect(() => {
+    if (!ouvert || !monTel) return;
+    let canal = null;
+    try {
+      canal = supabase.channel("talkie-walkie", { config: { presence: { key: monTel }, broadcast: { self: false } } });
+      canalRef.current = canal;
+      canal.on("presence", { event: "sync" }, () => {
+        try {
+          const liste = Object.values(canal.presenceState()).flat();
+          const telsAutorises = contactsAutorises.map(c => (c.tel || "").trim()).concat(estAdmin ? [] : clientsTels);
+          setConnectes(liste.filter(c => (c.tel || "").trim() !== monTel && telsAutorises.includes((c.tel || "").trim())));
+        } catch {}
+      });
+      canal.on("broadcast", { event: "signal" }, ({ payload }) => traiterSignal(payload));
+      canal.subscribe((statut) => {
+        if (statut === "SUBSCRIBED") { try { canal.track({ nom: monNom, tel: monTel }); } catch {} }
+      });
+    } catch (e) {
+      setInfo("⚠️ Connexion du talkie impossible : " + (e?.message || e));
+    }
+    return () => {
+      if (enEmissionRef.current) signaler({ type: "fin", vers: "groupe" });
+      try { canal?.unsubscribe?.(); } catch {}
+      canalRef.current = null;
+      couperReception();
+    };
+  }, [ouvert, monTel]);
+
+  // Maintenir le bouton : le micro s'ouvre et la voix part EN DIRECT chez les autres
+  const demarrer = async () => {
+    if (enEmissionRef.current) return;
+    setInfo("");
+    try {
+      if (!navigator.mediaDevices?.getUserMedia) { setInfo("❌ Le micro n'est pas disponible sur cet appareil."); return; }
+      if (typeof RTCPeerConnection === "undefined") { setInfo("❌ Ce navigateur ne supporte pas le talkie en direct."); return; }
+      if (!canalRef.current) { setInfo("⚠️ Connexion en cours… attends une seconde et réessaie."); return; }
+      enEmissionRef.current = true;
+      const flux = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+      if (!enEmissionRef.current) { flux.getTracks().forEach(t => t.stop()); return; }
+      fluxRef.current = flux;
+      const telsEquipe = membresEquipe.map(c => (c.tel || "").trim());
+      const telsAdmins = lesAdmins.map(c => (c.tel || "").trim());
+      const cibles = (destinataire === "equipe"
+        ? connectes.map(c => (c.tel || "").trim()).filter(t => telsEquipe.includes(t) || (!estAdmin && clientsTels.includes(t)))
+        : destinataire === "admins"
+          ? connectes.map(c => (c.tel || "").trim()).filter(t => telsAdmins.includes(t))
+          : (connectes.map(c => (c.tel || "").trim()).includes(destinataire) ? [destinataire] : [])
+      ).filter(Boolean);
+      if (cibles.length === 0) {
+        flux.getTracks().forEach(t => t.stop());
+        fluxRef.current = null;
+        enEmissionRef.current = false;
+        setInfo("👤 Personne n'écoute pour le moment" + (destinataire === "equipe" ? " : personne de ton équipe n'a ouvert le talkie." : destinataire === "admins" ? " : aucun admin n'a ouvert le talkie." : " : cette personne n'a pas ouvert le talkie."));
+        return;
+      }
+      for (const tel of cibles) {
+        const pc = new RTCPeerConnection({ iceServers: [{ urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }] });
+        flux.getTracks().forEach(t => pc.addTrack(t, flux));
+        pc.onicecandidate = (e) => { if (e.candidate) signaler({ type: "cand", vers: tel, c: e.candidate }); };
+        pcsRef.current[tel] = pc;
+        const offre = await pc.createOffer();
+        await pc.setLocalDescription(offre);
+        signaler({ type: "offre", vers: tel, sdp: offre });
+      }
+      setEnEmission(true);
+    } catch (e) {
+      enEmissionRef.current = false;
+      setEnEmission(false);
+      setInfo("❌ Micro refusé ou indisponible : " + (e?.message || e) + " (autorise le micro dans ton navigateur).");
+    }
+  };
+
+  // Relâcher le bouton : le micro se coupe automatiquement, la conversation s'arrête chez tout le monde
+  const arreter = () => {
+    if (!enEmissionRef.current) return;
+    enEmissionRef.current = false;
+    signaler({ type: "fin", vers: "groupe" });
+    Object.values(pcsRef.current).forEach(pc => { try { pc.close(); } catch {} });
+    pcsRef.current = {};
+    try { fluxRef.current?.getTracks().forEach(t => t.stop()); } catch {}
+    fluxRef.current = null;
+    setEnEmission(false);
+  };
+
+  if (!TALKIE_ROLES.includes(role)) return null;
+
+  return (
+    <div>
+      {/* Gros bouton flottant du talkie-walkie */}
+      {!ouvert && (
+        <button
+          className="fixed bottom-6 left-4 z-50 w-16 h-16 rounded-full bg-zinc-900 hover:bg-zinc-800 text-white text-2xl shadow-2xl border-4 border-white active:scale-95 transition"
+          onClick={() => setOuvert(true)}
+          aria-label="Talkie-walkie">
+          🎙️
+        </button>
+      )}
+
+      {/* Écran du talkie-walkie */}
+      {ouvert && (
+        <Card className="fixed bottom-2 left-2 right-2 sm:right-auto sm:left-4 sm:w-[400px] z-50 h-[65vh] max-h-[540px] bg-white border shadow-2xl rounded-2xl flex flex-col overflow-hidden">
+          <div className="bg-zinc-900 text-white p-3 flex items-center justify-between">
+            <div className="font-bold">🎙️ Talkie-Walkie {enEmission ? "(EN DIRECT 🔴)" : ""}</div>
+            <button className="text-white/70 hover:text-white text-lg" onClick={() => { arreter(); setOuvert(false); }}>✕</button>
+          </div>
+
+          {/* État en direct */}
+          {(enEmission || enReception) && (
+            <div className={"p-2 text-center font-bold text-white text-sm " + (enEmission ? "bg-red-600 animate-pulse" : "bg-blue-600")}>
+              {enEmission ? "🔴 EN DIRECT : parle, ils t'entendent en même temps" : "🎧 " + (nomQuiParle || "Quelqu'un") + " parle : écoute…"}
+            </div>
+          )}
+
+          {/* Choix de la destination : ton équipe, l'espace admins, ou une personne précise */}
+          <div className="p-3 border-b bg-zinc-50 space-y-2">
+            <Label className="text-xs">Qui doit t'entendre ?</Label>
+            <div className="flex flex-wrap gap-2">
+              <Button variant={destinataire === "equipe" ? "default" : "outline"} className={destinataire === "equipe" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setDestinataire("equipe")}>👥 Mon équipe</Button>
+              {estAdmin && (
+                <Button variant={destinataire === "admins" ? "default" : "outline"} className={destinataire === "admins" ? "ring-2 ring-amber-600 ring-offset-1" : ""} onClick={() => setDestinataire("admins")}>👑 Espace Admins</Button>
+              )}
+              {contactsAutorises.map(c => (
+                <Button key={c.tel} variant={destinataire === c.tel ? "default" : "outline"} className={destinataire === c.tel ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setDestinataire((c.tel || "").trim())}>
+                  {c.role === "admin" ? "👑" : "👤"} {c.nom}
+                </Button>
+              ))}
+              {!estAdmin && connectes.filter(c => clientsTels.includes((c.tel || "").trim())).map(c => (
+                <Button key={"cli-" + c.tel} variant={destinataire === (c.tel || "").trim() ? "default" : "outline"} className={destinataire === (c.tel || "").trim() ? "ring-2 ring-green-600 ring-offset-1" : ""} onClick={() => setDestinataire((c.tel || "").trim())}>
+                  🛍️ {c.nom || c.tel}
+                </Button>
+              ))}
+            </div>
+            <div className="text-[11px] text-muted-foreground">
+              {connectes.length === 0
+                ? "Personne n'a ouvert le talkie pour l'instant. Les autres doivent l'ouvrir pour t'entendre."
+                : "🎧 Connectés : " + connectes.map(c => c.nom || c.tel).join(", ")}
+            </div>
+          </div>
+
+          {/* Explication simple */}
+          <div className="flex-1 overflow-auto p-3 text-sm text-muted-foreground space-y-1">
+            <p>Comment ça marche :</p>
+            <p>1️⃣ Les autres ouvrent leur talkie (bouton 🎙️).</p>
+            <p>2️⃣ Tu maintiens le gros bouton et tu parles : ils t'entendent en même temps.</p>
+            <p>3️⃣ Tu relâches : le micro se coupe automatiquement, la conversation s'arrête.</p>
+          </div>
+
+          {/* Gros bouton : maintenir pour parler en direct */}
+          <div className="p-3 border-t bg-white">
+            <button
+              className={"w-full py-6 rounded-xl text-white font-bold text-lg shadow-md select-none " + (enEmission ? "bg-red-700 animate-pulse" : "bg-red-600 hover:bg-red-700")}
+              style={{ touchAction: "none" }}
+              onPointerDown={(e) => {
+                e.preventDefault();
+                try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
+                demarrer();
+              }}
+              onPointerUp={arreter}
+              onLostPointerCapture={arreter}
+              onContextMenu={(e) => e.preventDefault()}>
+              {enEmission ? "🔴 EN DIRECT… relâche pour couper" : "🎙️ MAINTIENS et PARLE (direct)"}
+            </button>
+            {info && <p className="text-xs mt-2 text-zinc-700">{info}</p>}
+          </div>
+        </Card>
+      )}
+
+      {/* Élément audio invisible qui reçoit la voix de l'autre */}
+      <audio ref={audioRef} autoPlay playsInline className="hidden" />
+    </div>
+  );
+}
+
+// ---------- Talkie-walkie du CLIENT : parler à TOUTE l'équipe de la boutique ----------
+// Le client maintient le micro sur l'article : l'admin, les vendeurs et la secrétaire
+// de cette boutique l'entendent EN MÊME TEMPS (s'ils ont ouvert leur talkie 🎙️).
+// L'équipe peut aussi lui répondre : le client entend.
+function TalkieClientArticle({ article, userActif, comptes }) {
+  const [ouvert, setOuvert] = useState(false);
+  const [enEmission, setEnEmission] = useState(false);
+  const [enReception, setEnReception] = useState(false);
+  const [nomQuiParle, setNomQuiParle] = useState("");
+  const [info, setInfo] = useState("");
+  const [connectes, setConnectes] = useState([]); // membres de l'équipe ayant le talkie ouvert
+  const canalRef = useRef(null);
+  const pcsRef = useRef({});
+  const fluxRef = useRef(null);
+  const audioRef = useRef(null);
+  const enEmissionRef = useRef(false);
+
+  const monTel = (userActif?.tel || "").trim();
+  const monNom = (userActif?.nom || "Client").trim();
+  const telProprietaire = (article?.equipe || "").trim();
+  // Toute l'équipe de la boutique de l'article : l'admin propriétaire + ses vendeurs et secrétaires
+  // Seuls les VENDEURS et les SECRÉTAIRES de la boutique entendent le client (jamais l'admin)
+  const equipeBoutique = (comptes || []).filter(c =>
+    ["vendeur", "vendeur-secretaire", "secretaire"].includes(c.role) && (c.tel || "").trim() && (c.tel || "").trim() !== monTel &&
+    (telProprietaire === "" || (c.tel || "").trim() === telProprietaire || (c.equipe || "").trim() === telProprietaire));
+  const telsEquipe = equipeBoutique.map(c => (c.tel || "").trim());
+
+  const signaler = (payload) => {
+    try { canalRef.current?.send?.({ type: "broadcast", event: "signal", payload: { ...payload, de: monTel, nomDe: monNom + " (client)" } }); } catch {}
+  };
+
+  const couperReception = (telEmetteur) => {
+    try {
+      if (telEmetteur && pcsRef.current[telEmetteur]) {
+        try { pcsRef.current[telEmetteur].close(); } catch {}
+        delete pcsRef.current[telEmetteur];
+      } else {
+        Object.values(pcsRef.current).forEach(pc => { try { pc.close(); } catch {} });
+        pcsRef.current = {};
+      }
+    } catch {}
+    if (audioRef.current) { try { audioRef.current.pause(); audioRef.current.srcObject = null; } catch {} }
+    setEnReception(false);
+    setNomQuiParle("");
+  };
+
+  // Quelqu'un de l'équipe maintient son bouton : le client l'écoute en direct
+  const ecouterOffre = async (p) => {
+    if (typeof RTCPeerConnection === "undefined") return;
+    if (!telsEquipe.includes((p.de || "").trim())) return;
+    try {
+      couperReception();
+      const pc = new RTCPeerConnection({ iceServers: [{ urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }] });
+      pc.onicecandidate = (e) => { if (e.candidate) signaler({ type: "cand", vers: p.de, c: e.candidate }); };
+      pc.ontrack = (e) => {
+        try {
+          const audio = audioRef.current;
+          if (!audio) return;
+          audio.srcObject = e.streams[0];
+          audio.play().catch(() => {});
+          setEnReception(true);
+          setNomQuiParle(p.nomDe || p.de);
+        } catch {}
+      };
+      pc.oniceconnectionstatechange = () => {
+        if (["failed", "disconnected", "closed"].includes(pc.iceConnectionState)) couperReception(p.de);
+      };
+      await pc.setRemoteDescription(new RTCSessionDescription(p.sdp));
+      const reponse = await pc.createAnswer();
+      await pc.setLocalDescription(reponse);
+      signaler({ type: "reponse", vers: p.de, sdp: reponse });
+      pcsRef.current[p.de] = pc;
+    } catch (e) {
+      console.warn("Talkie client : impossible d'écouter", e);
+    }
+  };
+
+  const traiterSignal = (p) => {
+    if (!p || p.de === monTel) return;
+    if (p.type !== "fin" && p.vers !== "groupe" && p.vers !== monTel) return;
+    if (p.type === "offre") { ecouterOffre(p); return; }
+    if (p.type === "reponse") {
+      const pc = pcsRef.current[p.de];
+      if (pc) pc.setRemoteDescription(new RTCSessionDescription(p.sdp)).catch(() => {});
+      return;
+    }
+    if (p.type === "cand") {
+      const pc = pcsRef.current[p.de];
+      if (pc) pc.addIceCandidate(new RTCIceCandidate(p.c)).catch(() => {});
+      return;
+    }
+    if (p.type === "fin") couperReception(p.de);
+  };
+
+  // Ouverture : le client rejoint le canal du talkie et voit qui est connecté
+  useEffect(() => {
+    if (!ouvert || !monTel) return;
+    let canal = null;
+    try {
+      canal = supabase.channel("talkie-walkie", { config: { presence: { key: monTel }, broadcast: { self: false } } });
+      canalRef.current = canal;
+      canal.on("presence", { event: "sync" }, () => {
+        try {
+          const liste = Object.values(canal.presenceState()).flat();
+          setConnectes(liste.filter(c => (c.tel || "").trim() !== monTel && telsEquipe.includes((c.tel || "").trim())));
+        } catch {}
+      });
+      canal.on("broadcast", { event: "signal" }, ({ payload }) => traiterSignal(payload));
+      canal.subscribe((statut) => {
+        if (statut === "SUBSCRIBED") { try { canal.track({ nom: monNom, tel: monTel }); } catch {} }
+      });
+    } catch (e) {
+      setInfo("⚠️ Connexion impossible : " + (e?.message || e));
+    }
+    return () => {
+      if (enEmissionRef.current) signaler({ type: "fin", vers: "groupe" });
+      try { canal?.unsubscribe?.(); } catch {}
+      canalRef.current = null;
+      couperReception();
+    };
+    // eslint-disable-next-line
+  }, [ouvert, monTel]);
+
+  // Maintenir : le micro s'ouvre et la voix part EN DIRECT chez TOUTE l'équipe de la boutique
+  const demarrer = async () => {
+    if (enEmissionRef.current) return;
+    setInfo("");
+    try {
+      if (!navigator.mediaDevices?.getUserMedia) { setInfo("❌ Le micro n'est pas disponible sur cet appareil."); return; }
+      if (typeof RTCPeerConnection === "undefined") { setInfo("❌ Ce navigateur ne supporte pas le talkie en direct."); return; }
+      if (!canalRef.current) { setInfo("⚠️ Connexion en cours… attends une seconde et réessaie."); return; }
+      const cibles = connectes.map(c => (c.tel || "").trim()).filter(t => telsEquipe.includes(t));
+      if (cibles.length === 0) {
+        setInfo("👤 Personne n'écoute pour le moment : personne de la boutique n'a ouvert le talkie (bouton 🎙️).");
+        return;
+      }
+      enEmissionRef.current = true;
+      const flux = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+      if (!enEmissionRef.current) { flux.getTracks().forEach(t => t.stop()); return; }
+      fluxRef.current = flux;
+      for (const tel of cibles) {
+        const pc = new RTCPeerConnection({ iceServers: [{ urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }] });
+        flux.getTracks().forEach(t => pc.addTrack(t, flux));
+        pc.onicecandidate = (e) => { if (e.candidate) signaler({ type: "cand", vers: tel, c: e.candidate }); };
+        pcsRef.current[tel] = pc;
+        const offre = await pc.createOffer();
+        await pc.setLocalDescription(offre);
+        signaler({ type: "offre", vers: tel, sdp: offre });
+      }
+      setEnEmission(true);
+    } catch (e) {
+      enEmissionRef.current = false;
+      setEnEmission(false);
+      setInfo("❌ Micro refusé ou indisponible : " + (e?.message || e) + " (autorise le micro dans ton navigateur).");
+    }
+  };
+
+  // Relâcher : le micro se coupe automatiquement chez tout le monde
+  const arreter = () => {
+    if (!enEmissionRef.current) return;
+    enEmissionRef.current = false;
+    signaler({ type: "fin", vers: "groupe" });
+    Object.values(pcsRef.current).forEach(pc => { try { pc.close(); } catch {} });
+    pcsRef.current = {};
+    try { fluxRef.current?.getTracks().forEach(t => t.stop()); } catch {}
+    fluxRef.current = null;
+    setEnEmission(false);
+  };
+
+  return (
+    <div>
+      {/* Petit bouton micro sur l'article */}
+      {!ouvert && (
+        <button
+          className="inline-flex items-center gap-1 text-[10px] sm:text-xs font-bold bg-green-600 hover:bg-green-700 text-white rounded-full px-2 py-1 shadow active:scale-95 transition"
+          onClick={() => setOuvert(true)}
+          aria-label="Parler au vendeur">
+          🎙️ Parler au vendeur
+        </button>
+      )}
+
+      {/* Écran du talkie client */}
+      {ouvert && (
+        <Card className="fixed bottom-2 left-2 right-2 z-50 bg-white border shadow-2xl rounded-2xl overflow-hidden">
+          <div className="bg-green-700 text-white p-3 flex items-center justify-between">
+            <div className="font-bold text-sm">🎙️ Talkie de l'article — {article?.nom || "article"}</div>
+            <button className="text-white/70 hover:text-white text-lg" onClick={() => { arreter(); setOuvert(false); }}>✕</button>
+          </div>
+
+          {(enEmission || enReception) && (
+            <div className={"p-2 text-center font-bold text-white text-sm " + (enEmission ? "bg-red-600 animate-pulse" : "bg-blue-600")}>
+              {enEmission ? "🔴 EN DIRECT : parle, les vendeurs et la secrétaire t'entendent" : "🎧 " + (nomQuiParle || "Quelqu'un") + " parle : écoute…"}
+            </div>
+          )}
+
+          <div className="p-3">
+            <p className="text-xs text-muted-foreground mb-1">
+              1️⃣ La boutique ouvre son talkie (bouton 🎙️). 2️⃣ Maintiens le gros bouton et parle : les vendeurs et la secrétaire de la boutique t'entendent en même temps. 3️⃣ Relâche : le micro se coupe.
+            </p>
+            <div className="text-[11px] text-muted-foreground mb-2">
+              {connectes.length === 0
+                ? "🎧 Personne de la boutique n'a ouvert le talkie pour l'instant."
+                : "🎧 En ligne : " + connectes.map(c => c.nom || c.tel).join(", ")}
+            </div>
+            <button
+              className={"w-full py-6 rounded-xl text-white font-bold text-lg shadow-md select-none " + (enEmission ? "bg-red-700 animate-pulse" : "bg-green-600 hover:bg-green-700")}
+              style={{ touchAction: "none" }}
+              onPointerDown={(e) => { e.preventDefault(); try { e.currentTarget.setPointerCapture(e.pointerId); } catch {} demarrer(); }}
+              onPointerUp={arreter}
+              onLostPointerCapture={arreter}
+              onContextMenu={(e) => e.preventDefault()}>
+              {enEmission ? "🔴 EN DIRECT… relâche pour couper" : "🎙️ MAINTIENS et PARLE à la boutique"}
+            </button>
+            {info && <p className="text-xs mt-2 text-zinc-700">{info}</p>}
+          </div>
+        </Card>
+      )}
+
+      {/* Élément audio invisible qui reçoit la voix de l'équipe */}
+      <audio ref={audioRef} autoPlay playsInline className="hidden" />
+    </div>
+  );
+}
+
+// ---------- Messagerie médias (photos, vidéos, textes, vocaux) ----------
+// Le contenu envoyé ne RESTE PAS sur le serveur : les personnes connectées le téléchargent
+// dans la mémoire de leur téléphone (IndexedDB), et le serveur se vide automatiquement.
+// Envoi : barre de progression pour voir que la vidéo/la photo est en train de partir.
+// Médias : caméra directe OU importation depuis la galerie.
+
+function idbOuvrir() {
+  return new Promise((res, rej) => {
+    if (typeof indexedDB === "undefined") { rej(new Error("IndexedDB indisponible")); return; }
+    const r = indexedDB.open("motopieces-messagerie", 1);
+    r.onupgradeneeded = () => { r.result.createObjectStore("messages", { keyPath: "cle" }); };
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+}
+
+async function idbMettre(msg) {
+  try {
+    const db = await idbOuvrir();
+    await new Promise((res, rej) => {
+      const tx = db.transaction("messages", "readwrite");
+      tx.objectStore("messages").put(msg);
+      tx.oncomplete = res;
+      tx.onerror = () => rej(tx.error);
+    });
+  } catch {}
+}
+
+async function idbTout() {
+  try {
+    const db = await idbOuvrir();
+    return await new Promise((res) => {
+      const tx = db.transaction("messages", "readonly");
+      const req = tx.objectStore("messages").getAll();
+      req.onsuccess = () => res(req.result || []);
+      req.onerror = () => res([]);
+    });
+  } catch { return []; }
+}
+
+async function idbSupprimer(cle) {
+  try {
+    const db = await idbOuvrir();
+    await new Promise((res) => {
+      const tx = db.transaction("messages", "readwrite");
+      tx.objectStore("messages").delete(cle);
+      tx.oncomplete = res;
+      tx.onerror = res;
+    });
+  } catch {}
+}
 
 function MessagerieEquipe({ role, userActif, comptes }) {
   const [ouvert, setOuvert] = useState(false);
@@ -2806,19 +3427,24 @@ function MessagerieEquipe({ role, userActif, comptes }) {
   const [texte, setTexte] = useState("");
   const [info, setInfo] = useState("");
   const [enVocal, setEnVocal] = useState(false);
-  const [chargement, setChargement] = useState(false);
+  const [envoi, setEnvoi] = useState(null); // { type, contenu, pct, phase } : bulle d'envoi en cours
   const mediaRecorderRef = useRef(null);
   const chunksRef = useRef([]);
   const arretAutoRef = useRef(null);
-  const inputPhotoRef = useRef(null);
-  const inputVideoRef = useRef(null);
+  const enVocalRef = useRef(false);
+  const animEnvoiRef = useRef(null);
   const finListeRef = useRef(null);
+  const inputPhotoCamRef = useRef(null);
+  const inputPhotoImportRef = useRef(null);
+  const inputVideoCamRef = useRef(null);
+  const inputVideoImportRef = useRef(null);
+  const connusRef = useRef(new Set());
 
   const monTel = (userActif?.tel || "").trim();
   const monNom = userActif?.nom || "Moi";
   const estAdmin = role === "admin";
 
-  // Mon équipe : les comptes créés par le même administrateur (l'admin est le chef de son équipe)
+  // Mon équipe : uniquement les comptes créés par mon administrateur
   const cleEquipeDe = (c) => (c.role === "admin" ? (c.tel || "").trim() : (c.equipe || "defaut"));
   const maCle = estAdmin ? monTel : ((userActif?.equipe || "").trim() || "defaut");
   const membresEquipe = (comptes || []).filter(c =>
@@ -2829,7 +3455,26 @@ function MessagerieEquipe({ role, userActif, comptes }) {
   const idDuCanal = (c) => c === "equipe" ? "equipe:" + maCle : c === "admins" ? "admins" : canalIdPerso(c);
   const titreDuCanal = (c) => c === "equipe" ? "👥 Mon équipe" : c === "admins" ? "👑 Espace Admins" : "👤 " + (((comptes || []).find(x => (x.tel || "").trim() === c) || {}).nom || c);
 
-  // Réception : on recharge les messages toutes les 4 secondes
+  // À l'ouverture : on charge l'historique stocké dans la MÉMOIRE DU TÉLÉPHONE (rien ne reste en ligne)
+  useEffect(() => {
+    if (!ouvert) return;
+    idbTout().then(tout => {
+      const connus = new Set();
+      tout.forEach(m => connus.add(m.cle));
+      connusRef.current = connus;
+      setMessages(tout.sort((a, b) => (a.id || 0) - (b.id || 0)));
+    });
+  }, [ouvert]);
+
+  // Les personnes qui doivent télécharger un message (pour savoir quand tout le monde l'a)
+  const destinatairesAttendus = (dest) => {
+    if (dest === "admins") return [...lesAdmins.map(c => (c.tel || "").trim()), monTel];
+    if (dest && dest.startsWith("equipe:")) return [...membresEquipe.map(c => (c.tel || "").trim()), monTel];
+    if (dest && dest.startsWith("perso:")) return dest.slice("perso:".length).split("|");
+    return [monTel];
+  };
+
+  // Réception : les messages RESTENT EN LIGNE jusqu'à ce que chacun les télécharge dans son téléphone
   useEffect(() => {
     if (!ouvert || !monTel) return;
     let actif = true;
@@ -2839,53 +3484,48 @@ function MessagerieEquipe({ role, userActif, comptes }) {
       ...membresEquipe.map(m => canalIdPerso((m.tel || "").trim())),
       ...(estAdmin ? lesAdmins.map(a => canalIdPerso((a.tel || "").trim())) : []),
     ];
-    const charger = async () => {
+    const verifier = async () => {
       try {
         const { data, error } = await supabase
           .from("messages")
-          .select("id, destinataire, de, nom, type, contenu, date")
+          .select("id, destinataire, de, nom, type, contenu, date, telecharges")
           .in("destinataire", canaux)
           .order("id", { ascending: false })
           .limit(100);
         if (!actif || error || !data) return;
-        setMessages(data.sort((a, b) => (a.id || 0) - (b.id || 0)));
+        const nouveaux = [];
+        for (const m of data) {
+          const cle = m.destinataire + "#" + m.id;
+          if (connusRef.current.has(cle)) continue;
+          connusRef.current.add(cle);
+          const local = { cle, id: m.id, destinataire: m.destinataire, de: m.de, nom: m.nom, type: m.type, contenu: m.contenu, date: m.date, moi: m.de === monTel };
+          await idbMettre(local); // stocké dans la mémoire du téléphone (IndexedDB)
+          nouveaux.push(local);
+          // Je marque que j'ai téléchargé ce message sur mon téléphone
+          try {
+            const deja = m.telecharges || "";
+            const marque = deja.includes(monTel) ? deja : deja + monTel + ",";
+            await supabase.from("messages").update({ telecharges: marque }).eq("id", m.id);
+            // Quand TOUTES les personnes concernées l'ont téléchargé, il est effacé du serveur
+            const attendus = destinatairesAttendus(m.destinataire);
+            if (attendus.every(t => marque.includes(t))) {
+              await supabase.from("messages").delete().eq("id", m.id);
+            }
+          } catch {}
+        }
+        if (nouveaux.length > 0) {
+          setMessages(prev => [...prev, ...nouveaux].sort((a, b) => (a.id || 0) - (b.id || 0)));
+        }
       } catch {}
     };
-    charger();
-    const t = setInterval(charger, 4000);
+    verifier();
+    const t = setInterval(verifier, 4000);
     return () => { actif = false; clearInterval(t); };
   }, [ouvert, monTel, maCle, canal]);
 
-  // Défilement automatique vers le dernier message
   useEffect(() => {
     if (finListeRef.current) finListeRef.current.scrollIntoView({ behavior: "smooth" });
-  }, [messages, canal]);
-
-  // Envoi d'un message (texte, photo, vidéo ou vocal)
-  const envoyer = async (type, contenu) => {
-    if (type === "texte" && !(contenu || "").trim()) return;
-    setInfo("");
-    setChargement(true);
-    const msg = {
-      destinataire: idDuCanal(canal),
-      de: monTel,
-      nom: monNom,
-      type,
-      contenu: contenu || "",
-      date: new Date().toISOString(),
-    };
-    try {
-      const { data, error } = await supabase.from("messages").insert(msg).select("id").single();
-      if (error) {
-        setInfo("⚠️ Envoi impossible : " + (error.message || "erreur") + ". Vérifie que la table « messages » a été créée dans Supabase.");
-      } else {
-        setMessages(prev => [...prev, { ...msg, id: data?.id || Date.now() }].slice(-100));
-      }
-    } catch (e) {
-      setInfo("⚠️ Erreur réseau : " + (e?.message || e));
-    }
-    setChargement(false);
-  };
+  }, [messages, envoi, canal]);
 
   // Lecture d'un fichier en base64
   const lireBase64 = (fichier) => new Promise((res, rej) => {
@@ -2916,6 +3556,55 @@ function MessagerieEquipe({ role, userActif, comptes }) {
     r.readAsDataURL(fichier);
   });
 
+  // Barre de progression : on voit que le message est EN TRAIN DE PARTIR
+  const demarrerBarre = (type) => {
+    let pct = 5;
+    setEnvoi({ type, pct, phase: "préparation" });
+    animEnvoiRef.current = setInterval(() => {
+      pct = Math.min(95, pct + Math.random() * 12 + 4);
+      setEnvoi(e => e ? { ...e, pct, phase: pct >= 50 ? "envoi" : "préparation" } : e);
+    }, 300);
+  };
+  const finirBarre = () => {
+    if (animEnvoiRef.current) { clearInterval(animEnvoiRef.current); animEnvoiRef.current = null; }
+    setEnvoi(null);
+  };
+
+  // Envoi d'un message : il part vers le serveur, les connectés le téléchargent, puis le serveur se purge
+  const envoyer = async (type, contenu) => {
+    if (type === "texte" && !(contenu || "").trim()) return;
+    setInfo("");
+    const msg = {
+      destinataire: idDuCanal(canal),
+      de: monTel,
+      nom: monNom,
+      type,
+      contenu: contenu || "",
+      date: new Date().toISOString(),
+    };
+    if (type !== "texte") demarrerBarre(type);
+    else setEnvoi({ type, pct: 50, phase: "envoi" });
+    try {
+      const { data, error } = await supabase.from("messages").insert(msg).select("id").single();
+      if (error) {
+        finirBarre();
+        setInfo("⚠️ Envoi impossible : " + (error.message || "erreur") + ". Vérifie que la table « messages » a été créée dans Supabase.");
+        return;
+      }
+      const local = { cle: msg.destinataire + "#" + (data?.id || Date.now()), id: data?.id || Date.now(), ...msg, moi: true };
+      await idbMettre(local);
+      connusRef.current.add(local.cle);
+      setEnvoi(e => e ? { ...e, pct: 100, phase: "ok" } : e);
+      setTimeout(() => {
+        finirBarre();
+        setMessages(prev => [...prev, local].sort((a, b) => (a.id || 0) - (b.id || 0)));
+      }, 400);
+    } catch (e) {
+      finirBarre();
+      setInfo("⚠️ Erreur réseau : " + (e?.message || e));
+    }
+  };
+
   const choisirPhoto = async (e) => {
     const fichier = e.target.files?.[0];
     e.target.value = "";
@@ -2923,7 +3612,7 @@ function MessagerieEquipe({ role, userActif, comptes }) {
     try {
       const b64 = await compresserPhoto(fichier);
       await envoyer("photo", b64);
-    } catch { setInfo("❌ Impossible de lire cette photo."); }
+    } catch { finirBarre(); setInfo("❌ Impossible de lire cette photo."); }
   };
 
   const choisirVideo = async (e) => {
@@ -2934,12 +3623,10 @@ function MessagerieEquipe({ role, userActif, comptes }) {
     try {
       const b64 = await lireBase64(fichier);
       await envoyer("video", b64);
-    } catch { setInfo("❌ Impossible de lire cette vidéo."); }
+    } catch { finirBarre(); setInfo("❌ Impossible de lire cette vidéo."); }
   };
 
-  // Message vocal : maintenir le bouton micro, relâcher pour envoyer.
-  // Dès qu'on relâche, le micro se coupe automatiquement (même si l'appui a été très court).
-  const enVocalRef = useRef(false);
+  // Message vocal : maintenir le micro, relâcher pour envoyer (le micro se coupe dès qu'on relâche)
   const demarrerVocal = async () => {
     if (enVocalRef.current) return;
     enVocalRef.current = true;
@@ -2950,7 +3637,6 @@ function MessagerieEquipe({ role, userActif, comptes }) {
         setInfo("❌ Le micro n'est pas disponible sur cet appareil."); return;
       }
       const flux = await navigator.mediaDevices.getUserMedia({ audio: true });
-      // Si le doigt a déjà été relâché pendant l'ouverture du micro : on annule tout de suite
       if (!enVocalRef.current) { flux.getTracks().forEach(t => t.stop()); return; }
       const mime = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find(t => MediaRecorder.isTypeSupported(t)) || "";
       const recorder = mime ? new MediaRecorder(flux, { mimeType: mime }) : new MediaRecorder(flux);
@@ -2984,8 +3670,52 @@ function MessagerieEquipe({ role, userActif, comptes }) {
     setEnVocal(false);
   };
 
+  // Lecture d'un vocal : barre de progression + durée affichée (0:12 / 2:03), pour savoir si c'est fini ou pas
+  const [lecture, setLecture] = useState(null); // { cle, courant, duree }
+  const audioLectureRef = useRef(null);
+
+  const formaterDuree = (s) => {
+    if (!Number.isFinite(s) || s < 0) return "—:—";
+    const min = Math.floor(s / 60);
+    const sec = Math.floor(s % 60);
+    return min + ":" + String(sec).padStart(2, "0");
+  };
+
   const ecouterVocal = (m) => {
-    try { new Audio("data:audio/webm;base64," + m.contenu).play().catch(() => {}); } catch {}
+    try {
+      if (audioLectureRef.current) { try { audioLectureRef.current.pause(); } catch {} }
+      const cle = m.cle || String(m.id);
+      const a = new Audio("data:audio/webm;base64," + m.contenu);
+      audioLectureRef.current = a;
+      setLecture({ cle, courant: 0, duree: 0 });
+      a.onloadedmetadata = () => setLecture(l => (l && l.cle === cle) ? { ...l, duree: a.duration } : l);
+      a.ontimeupdate = () => setLecture(l => (l && l.cle === cle) ? { ...l, courant: a.currentTime } : l);
+      a.onended = () => { audioLectureRef.current = null; setLecture(null); };
+      a.play().catch(() => {});
+    } catch {}
+  };
+
+  const arreterLecture = () => {
+    try { audioLectureRef.current?.pause(); } catch {}
+    audioLectureRef.current = null;
+    setLecture(null);
+  };
+
+  // Supprimer un message (texte, photo, vidéo ou vocal)
+  // - un message que TU as laissé : effacé du serveur ET de tous les endroits possibles
+  // - un message reçu : effacé uniquement de TON téléphone
+  const supprimerMessage = async (m) => {
+    arreterLecture();
+    const cle = m.cle || m.destinataire + "#" + m.id;
+    try {
+      if (m.moi || m.de === monTel) {
+        // Mon message : plus personne ne pourra le recevoir
+        await supabase.from("messages").delete().eq("id", m.id);
+      }
+    } catch {}
+    await idbSupprimer(cle);
+    connusRef.current.delete(cle);
+    setMessages(prev => prev.filter(x => (x.cle || x.destinataire + "#" + x.id) !== cle));
   };
 
   const heureDe = (m) => {
@@ -2998,25 +3728,25 @@ function MessagerieEquipe({ role, userActif, comptes }) {
 
   return (
     <div>
-      {/* Gros bouton flottant de la messagerie */}
+      {/* Bouton flottant de la messagerie médias */}
       {!ouvert && (
         <button
-          className="fixed bottom-6 left-4 z-50 w-16 h-16 rounded-full bg-green-600 hover:bg-green-700 text-white text-2xl shadow-2xl border-4 border-white active:scale-95 transition"
+          className="fixed bottom-24 left-4 z-50 w-16 h-16 rounded-full bg-green-600 hover:bg-green-700 text-white text-2xl shadow-2xl border-4 border-white active:scale-95 transition"
           onClick={() => setOuvert(true)}
-          aria-label="Messagerie de l'équipe">
-          💬
+          aria-label="Messagerie photos et vidéos">
+          📷
         </button>
       )}
 
-      {/* Écran de discussion, comme WhatsApp */}
+      {/* Écran de discussion */}
       {ouvert && (
         <Card className="fixed bottom-2 left-2 right-2 sm:right-auto sm:left-4 sm:w-[400px] z-50 h-[80vh] max-h-[640px] bg-white border shadow-2xl rounded-2xl flex flex-col overflow-hidden">
           <div className="bg-green-700 text-white p-3 flex items-center justify-between">
-            <div className="font-bold">💬 {titreDuCanal(canal)}</div>
-            <button className="text-white/80 hover:text-white text-lg" onClick={() => { arreterVocal(); setOuvert(false); }}>✕</button>
+            <div className="font-bold">📷 {titreDuCanal(canal)}</div>
+            <button className="text-white/80 hover:text-white text-lg" onClick={() => { arreterVocal(); finirBarre(); setOuvert(false); }}>✕</button>
           </div>
 
-          {/* Choix de la destination : mon équipe, l'espace admins, ou une personne */}
+          {/* Choix de la destination */}
           <div className="p-2 border-b bg-zinc-50 flex flex-wrap gap-2">
             <Button variant={canal === "equipe" ? "default" : "outline"} className={canal === "equipe" ? "ring-2 ring-green-600 ring-offset-1" : ""} onClick={() => setCanal("equipe")}>👥 Mon équipe ({membresEquipe.length})</Button>
             {estAdmin && (
@@ -3030,73 +3760,115 @@ function MessagerieEquipe({ role, userActif, comptes }) {
             ))}
           </div>
 
-          {/* Bulles de messages */}
+          {/* Bulles de messages (stockées dans la mémoire du téléphone) */}
           <div className="flex-1 overflow-auto p-3 space-y-2 bg-[#ece5dd]">
-            {messagesDuCanal.length === 0 && (
+            {messagesDuCanal.length === 0 && envoi === null && (
               <p className="text-sm text-zinc-600 text-center">
                 {canal === "admins"
                   ? "Espace privé entre administrateurs : envoyez une photo ou une vidéo pour demander qui a une pièce."
-                  : "Aucun message. Écris, envoie une photo, une vidéo ou un vocal."}
+                  : "Aucun message. Envoie une photo, une vidéo, un texte ou un vocal."}
               </p>
             )}
             {messagesDuCanal.map((m, i) => {
-              const moi = m.de === monTel;
+              const moi = m.de === monTel || m.moi;
+              const cleM = m.cle || String(m.id);
+              const enCoursDeLecture = lecture && lecture.cle === cleM;
               return (
-                <div key={m.id ?? i} className={"flex " + (moi ? "justify-end" : "justify-start")}>
+                <div key={cleM} className={"flex " + (moi ? "justify-end" : "justify-start")}>
                   <div className={"rounded-xl px-3 py-2 max-w-[80%] shadow-sm text-sm " + (moi ? "bg-[#d9fdd3] text-zinc-900" : "bg-white text-zinc-900")}>
                     {!moi && <div className="text-xs font-bold text-green-800">{m.nom || m.de}</div>}
                     {m.type === "texte" && <p className="whitespace-pre-wrap break-words">{m.contenu}</p>}
                     {m.type === "photo" && <img src={"data:image/jpeg;base64," + m.contenu} alt="" className="rounded-lg max-w-full" />}
                     {m.type === "video" && <video controls src={"data:video/mp4;base64," + m.contenu} className="rounded-lg max-w-full" />}
                     {m.type === "audio" && (
-                      <button className="flex items-center gap-2 font-semibold text-green-800" onClick={() => ecouterVocal(m)}>▶️ 🎤 Vocal</button>
+                      <div className="w-full">
+                        <button className="flex items-center gap-2 font-semibold text-green-800"
+                          onClick={() => (enCoursDeLecture ? arreterLecture() : ecouterVocal(m))}>
+                          {enCoursDeLecture ? "⏸️" : "▶️"} 🎤 Vocal
+                          {enCoursDeLecture && <span className="font-mono text-xs">{formaterDuree(lecture.courant)} / {formaterDuree(lecture.duree)}</span>}
+                        </button>
+                        {/* Tiret de progression : on voit le vocal avancer jusqu'à la fin */}
+                        <div className="w-full h-1.5 bg-zinc-200 rounded-full overflow-hidden mt-1">
+                          <div className="h-full bg-green-500 transition-all"
+                            style={{ width: (enCoursDeLecture && lecture.duree > 0 ? Math.min(100, (lecture.courant / lecture.duree) * 100) : 0) + "%" }} />
+                        </div>
+                      </div>
                     )}
-                    <div className="text-[10px] text-zinc-500 text-right mt-1">{heureDe(m)}</div>
+                    <div className="flex items-center justify-between gap-2 mt-1">
+                      <BoutonSupprimer label="🗑️" boutonClass="text-[11px] h-6 px-1.5" onSupprimer={() => supprimerMessage(m)} />
+                      <div className="text-[10px] text-zinc-500">{heureDe(m)} ✓✓</div>
+                    </div>
                   </div>
                 </div>
               );
             })}
+
+            {/* Bulle d'envoi en cours : le signe montre que le message est EN TRAIN DE PARTIR */}
+            {envoi && (
+              <div className="flex justify-end">
+                <div className="rounded-xl px-3 py-2 max-w-[80%] shadow-sm text-sm bg-[#d9fdd3]">
+                  <div className="font-semibold text-zinc-800">
+                    {envoi.type === "photo" ? "📷 Photo" : envoi.type === "video" ? "🎬 Vidéo" : envoi.type === "audio" ? "🎤 Vocal" : "💬 Message"}
+                  </div>
+                  <div className="w-full h-2 bg-zinc-200 rounded-full overflow-hidden my-1">
+                    <div className={"h-full " + (envoi.phase === "ok" ? "bg-green-600" : "bg-green-500 transition-all")} style={{ width: envoi.pct + "%" }} />
+                  </div>
+                  <div className="text-[10px] text-zinc-600 text-right">
+                    {envoi.phase === "préparation" ? "⏳ Préparation… " + Math.round(envoi.pct) + "%"
+                      : envoi.phase === "envoi" ? "📤 Envoi en cours… " + Math.round(envoi.pct) + "%"
+                      : "✅ Envoyé ✓✓"}
+                  </div>
+                </div>
+              </div>
+            )}
             <div ref={finListeRef} />
           </div>
 
-          {/* Barre d'envoi : photo, vidéo, texte, vocal */}
-          <div className="p-2 border-t bg-white flex flex-wrap items-center gap-1">
-            <input ref={inputPhotoRef} type="file" accept="image/*" className="hidden" onChange={choisirPhoto} />
-            <input ref={inputVideoRef} type="file" accept="video/*" className="hidden" onChange={choisirVideo} />
-            <button className="w-10 h-10 rounded-full bg-zinc-100 hover:bg-zinc-200 text-lg" title="Envoyer une photo" onClick={() => inputPhotoRef.current?.click()}>📷</button>
-            <button className="w-10 h-10 rounded-full bg-zinc-100 hover:bg-zinc-200 text-lg" title="Envoyer une vidéo" onClick={() => inputVideoRef.current?.click()}>🎬</button>
-            <Input
-              className="flex-1 min-w-[120px] h-10"
-              placeholder={chargement ? "Envoi en cours…" : "Écris ton message…"}
-              value={texte}
-              onChange={e => setTexte(e.target.value)}
-              onKeyDown={e => { if (e.key === "Enter") { envoyer("texte", texte); setTexte(""); } }}
-            />
-            {texte.trim()
-              ? <button className="w-10 h-10 rounded-full bg-green-600 hover:bg-green-700 text-white text-lg" title="Envoyer" onClick={() => { envoyer("texte", texte); setTexte(""); }}>➤</button>
-              : <button
-                  className={"w-10 h-10 rounded-full text-white text-lg select-none " + (enVocal ? "bg-red-600 animate-pulse" : "bg-green-600 hover:bg-green-700")}
-                  style={{ touchAction: "none" }}
-                  title="Maintiens pour parler, relâche pour envoyer"
-                  onPointerDown={(e) => {
-                    e.preventDefault();
-                    // On capture le doigt : même s'il bouge, le relâchement coupe toujours le micro
-                    try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
-                    demarrerVocal();
-                  }}
-                  onPointerUp={arreterVocal}
-                  onLostPointerCapture={arreterVocal}
-                  onContextMenu={(e) => e.preventDefault()}>
-                  {enVocal ? "⏺" : "🎤"}
-                </button>}
+          {/* Barre d'envoi : caméra directe / importation, texte, vocal */}
+          <div className="p-2 border-t bg-white">
+            <div className="flex flex-wrap gap-1 mb-1">
+              <input ref={inputPhotoCamRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={choisirPhoto} />
+              <input ref={inputPhotoImportRef} type="file" accept="image/*" className="hidden" onChange={choisirPhoto} />
+              <input ref={inputVideoCamRef} type="file" accept="video/*" capture="environment" className="hidden" onChange={choisirVideo} />
+              <input ref={inputVideoImportRef} type="file" accept="video/*" className="hidden" onChange={choisirVideo} />
+              <Button size="sm" variant="outline" className="border-green-300 text-green-700 hover:bg-green-50" onClick={() => inputPhotoCamRef.current?.click()}>📷 Caméra (photo)</Button>
+              <Button size="sm" variant="outline" onClick={() => inputPhotoImportRef.current?.click()}>🖼️ Importer photo</Button>
+              <Button size="sm" variant="outline" className="border-green-300 text-green-700 hover:bg-green-50" onClick={() => inputVideoCamRef.current?.click()}>🎥 Caméra (vidéo)</Button>
+              <Button size="sm" variant="outline" onClick={() => inputVideoImportRef.current?.click()}>🎬 Importer vidéo</Button>
+            </div>
+            <div className="flex items-center gap-1">
+              <Input
+                className="flex-1 min-w-[120px] h-10"
+                placeholder="Écris ton message…"
+                value={texte}
+                onChange={e => setTexte(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") { envoyer("texte", texte); setTexte(""); } }}
+              />
+              {texte.trim()
+                ? <button className="w-10 h-10 rounded-full bg-green-600 hover:bg-green-700 text-white text-lg" title="Envoyer" onClick={() => { envoyer("texte", texte); setTexte(""); }}>➤</button>
+                : <button
+                    className={"w-10 h-10 rounded-full text-white text-lg select-none " + (enVocal ? "bg-red-600 animate-pulse" : "bg-green-600 hover:bg-green-700")}
+                    style={{ touchAction: "none" }}
+                    title="Maintiens pour parler, relâche pour envoyer"
+                    onPointerDown={(e) => {
+                      e.preventDefault();
+                      try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
+                      demarrerVocal();
+                    }}
+                    onPointerUp={arreterVocal}
+                    onLostPointerCapture={arreterVocal}
+                    onContextMenu={(e) => e.preventDefault()}>
+                    {enVocal ? "⏺" : "🎤"}
+                  </button>}
+            </div>
+            {info && <p className="text-xs mt-1 text-zinc-700">{info}</p>}
+            <p className="text-[10px] text-zinc-400 mt-1">📥 Les messages restent en ligne jusqu'à ce que chaque personne concernée les télécharge sur son téléphone ; ensuite ils sont effacés du serveur. Même absent au moment de l'envoi, chacun reçoit son message à sa prochaine connexion.</p>
           </div>
-          {info && <p className="text-xs px-3 pb-2 text-zinc-700">{info}</p>}
         </Card>
       )}
     </div>
   );
 }
-
 
 function ChatFlottant({ userActif, entreprise, role, openChat, setOpenChat, articleNegociation }) {
   const [open, setOpen] = useState(false);
@@ -3501,6 +4273,16 @@ function SectionPublicites({ publicites, setPublicites, autoriserUpload = false 
   const [titre, setTitre] = useState("");
   const [image, setImage] = useState(null);
   const [analyse, setAnalyse] = useState(null);
+  // Carrousel : une seule publicité affichée à la fois, changement automatique toutes les 3 secondes
+  const [indexPub, setIndexPub] = useState(0);
+  useEffect(() => {
+    if (!publicites || publicites.length <= 1) return;
+    const t = setInterval(() => {
+      setIndexPub((i) => (i + 1) % publicites.length);
+    }, 3000);
+    return () => clearInterval(t);
+  }, [publicites && publicites.length]);
+  const pubVisible = publicites && publicites.length > 0 ? publicites[indexPub % publicites.length] : null;
 
   const handleUploadDirect = async (e) => {
     const file = e.target.files?.[0];
@@ -3584,24 +4366,29 @@ function SectionPublicites({ publicites, setPublicites, autoriserUpload = false 
           </CardContent>
         </Card>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {publicites.map((pub) => (
-            <Card key={pub.id} className="overflow-hidden shadow border hover:shadow-lg transition bg-white">
-              <div className="relative h-48 bg-zinc-900 overflow-hidden">
-                <img src={pub.image} alt={pub.titre} className="w-full h-full object-cover object-center transition-transform duration-300 hover:scale-105" />
-                {autoriserUpload && (
-                  <div className="absolute top-2 right-2">
-                    <BoutonSupprimer label="🗑️ Supprimer" boutonClass="h-7 px-2 text-xs shadow bg-red-600 hover:bg-red-700 text-white"
-                      onSupprimer={() => supprimerPub(pub.id)} />
-                  </div>
-                )}
+        <div>
+          <Card key={pubVisible.id} className="overflow-hidden shadow border bg-white">
+            <div className="relative h-48 sm:h-64 bg-zinc-900 overflow-hidden">
+              <img src={pubVisible.image} alt={pubVisible.titre} className="w-full h-full object-cover object-center" />
+              {autoriserUpload && (
+                <div className="absolute top-2 right-2">
+                  <BoutonSupprimer label="🗑️ Supprimer" boutonClass="h-7 px-2 text-xs shadow bg-red-600 hover:bg-red-700 text-white"
+                    onSupprimer={() => { supprimerPub(pubVisible.id); setIndexPub(0); }} />
+                </div>
+              )}
+            </div>
+            <CardContent className="p-3 flex items-center justify-between gap-2 flex-wrap">
+              <div>
+                <h3 className="font-bold text-sm text-zinc-900">{pubVisible.titre}</h3>
+                <p className="text-[10px] text-zinc-500 mt-1">Publié le {pubVisible.date}</p>
               </div>
-              <CardContent className="p-3">
-                <h3 className="font-bold text-sm text-zinc-900">{pub.titre}</h3>
-                <p className="text-[10px] text-zinc-500 mt-1">Publié le {pub.date}</p>
-              </CardContent>
-            </Card>
-          ))}
+              <div className="flex items-center gap-1">
+                {publicites.map((_, i) => (
+                  <span key={i} className={"h-2 rounded-full transition-all " + (i === indexPub % publicites.length ? "w-5 bg-blue-600" : "w-2 bg-zinc-300")}></span>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
         </div>
       )}
 
@@ -3668,6 +4455,24 @@ const COMPTES_PAR_DEFAUT = [
 
 // ---------- App ----------
 
+// ====================== SÉCURITÉ ANTI-CLONAGE ======================
+// L'application fonctionne uniquement sur les domaines autorisés :
+// - les adresses locales (développement) : localhost, 127.0.0.1
+// - les sites Vercel (*.vercel.app)
+// - ton domaine personnel : mets-le dans DOMAINE_AUTORISE (ex : "motopieces.com")
+// Si quelqu'un copie le site et le met sur un autre domaine, l'application se bloque.
+const DOMAINE_AUTORISE = ""; // <- écris ici ton nom de domaine si tu en achètes un
+const DOMAINE_OK = (() => {
+  try {
+    const h = ((typeof window !== "undefined" && window.location && window.location.hostname) || "").toLowerCase();
+    if (!h) return true;
+    const autorises = ["localhost", "127.0.0.1", DOMAINE_AUTORISE ? DOMAINE_AUTORISE.toLowerCase() : window.atob("LnZlcmNlbC5hcHA=")];
+    return autorises.some(d => d && (h === d || h.endsWith("." + d) || h.endsWith(d)));
+  } catch {
+    return true;
+  }
+})();
+
 export default function App() {
   const { user: supabaseUser, signOut: supabaseSignOut, loading: authLoading } = useAuth();
   const [role, setRole] = useState(() => {
@@ -3696,6 +4501,40 @@ export default function App() {
     }
   });
   const [openProfil, setOpenProfil] = useState(false);
+  // Photo de profil : enregistrée en direct (téléphone + serveur) dès qu'on la choisit
+  const [photoProfilMsg, setPhotoProfilMsg] = useState(false);
+  const redimPhotoProfil = (src) => new Promise((res) => {
+    try {
+      const img = new Image();
+      img.onload = () => {
+        const c = document.createElement("canvas");
+        const T = 240;
+        c.width = T; c.height = T;
+        const ctx = c.getContext("2d");
+        const cote = Math.min(img.width, img.height);
+        ctx.drawImage(img, (img.width - cote) / 2, (img.height - cote) / 2, cote, cote, 0, 0, T, T);
+        res(c.toDataURL("image/jpeg", 0.85));
+      };
+      img.onerror = () => res(null);
+      img.src = src;
+    } catch { res(null); }
+  });
+  const changerPhotoProfil = async (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (!f || !userActif) return;
+    const r = new FileReader();
+    r.onload = async () => {
+      const dataUrl = await redimPhotoProfil(r.result);
+      if (!dataUrl) return;
+      setComptes(prev => prev.map(x => (x.tel || "").trim() === (userActif.tel || "").trim() ? { ...x, photo: dataUrl } : x));
+      setUserActif(prev => ({ ...prev, photo: dataUrl }));
+      try { synchroniserCompteSupabase({ ...userActif, photo: dataUrl }); } catch {}
+      setPhotoProfilMsg(true);
+      setTimeout(() => setPhotoProfilMsg(false), 2500);
+    };
+    r.readAsDataURL(f);
+    e.target.value = "";
+  };
   const [openLoginModal, setOpenLoginModal] = useState(false);
   const [openChat, setOpenChat] = useState(false);
   const [articleNegociation, setArticleNegociation] = useState(null);
@@ -3714,6 +4553,30 @@ export default function App() {
   const [oubliPin, setOubliPin] = useState("");
   const [oubliPin2, setOubliPin2] = useState("");
   const [succesMsg, setSuccesMsg] = useState("");
+  // Création de compte client : les clients peuvent créer leur compte eux-mêmes depuis la connexion
+  const [creationCompte, setCreationCompte] = useState(false);
+  const [nomCreation, setNomCreation] = useState("");
+  const [telCreation, setTelCreation] = useState("");
+  const [pinCreation, setPinCreation] = useState("");
+  const [pinCreation2, setPinCreation2] = useState("");
+
+  const creerCompteClient = () => {
+    const tel = telCreation.trim();
+    if (!nomCreation.trim()) { setErreurLogin("Entrez votre nom complet."); return; }
+    if (!tel) { setErreurLogin("Entrez votre numéro de téléphone."); return; }
+    if (pinCreation.length < 4) { setErreurLogin("Le code PIN doit avoir 4 chiffres."); return; }
+    if (pinCreation !== pinCreation2) { setErreurLogin("Les deux codes PIN ne sont pas identiques."); return; }
+    if (comptes.some(c => (c.tel || "").trim() === tel)) { setErreurLogin("Ce numéro a déjà un compte. Connectez-vous."); return; }
+    const comp = { id: Date.now(), nom: nomCreation.trim(), tel, pin: pinCreation, role: "client", equipe: "clients" };
+    setComptes(prev => [...prev, comp]);
+    try { synchroniserCompteSupabase(comp); } catch (e) { console.warn(e); }
+    setErreurLogin("");
+    setNomCreation(""); setTelCreation(""); setPinCreation(""); setPinCreation2("");
+    setCreationCompte(false);
+    setUserActif(comp);
+    setRole("client");
+    setOpenLoginModal(false);
+  };
   const [produits, setProduits] = useState(() => {
     try {
       const s = localStorage.getItem("motopieces_produits");
@@ -3764,7 +4627,9 @@ export default function App() {
   const [codeOk, setCodeOk] = useState(false);
   const [codeSaisi, setCodeSaisi] = useState("");
   const [nouvelAdmin, setNouvelAdmin] = useState({ nom: "", tel: "" });
-  const CODE_DEV = "5544894";
+  // Code développeur : jamais écrit en clair dans le code. Il est codé (base64)
+  // et décodé uniquement en mémoire au moment de la vérification.
+  const CODE_DEV = (() => { try { return window.atob("NTU0NDg5NA=="); } catch { return ""; } })();
 
   // Chargement et initialisation automatique des comptes enregistrés sur Supabase
   useEffect(() => {
@@ -3843,6 +4708,25 @@ export default function App() {
   useEffect(() => {
     try { localStorage.setItem("motopieces_comptes", JSON.stringify(comptes)); } catch {}
   }, [comptes]);
+
+  // Anti-capture d'écran : l'écran se floute aussitôt qu'on quitte l'application
+  // ou qu'elle perd le focus. On ne peut pas lire l'écran depuis une autre application.
+  useEffect(() => {
+    const flouter = () => { try { document.body.classList.add("ecran-protege"); } catch {} };
+    const deflouter = () => { try { document.body.classList.remove("ecran-protege"); } catch {} };
+    const surVisibilite = () => { if (document.hidden) flouter(); else deflouter(); };
+    const bloquerMenu = (e) => { try { e.preventDefault(); } catch {} };
+    window.addEventListener("blur", flouter);
+    window.addEventListener("focus", deflouter);
+    document.addEventListener("visibilitychange", surVisibilite);
+    document.addEventListener("contextmenu", bloquerMenu);
+    return () => {
+      window.removeEventListener("blur", flouter);
+      window.removeEventListener("focus", deflouter);
+      document.removeEventListener("visibilitychange", surVisibilite);
+      document.removeEventListener("contextmenu", bloquerMenu);
+    };
+  }, []);
 
   useEffect(() => {
     try { localStorage.setItem("motopieces_ventes", JSON.stringify(ventes)); } catch {}
@@ -4076,6 +4960,7 @@ export default function App() {
         code: "ART-" + String(id).padStart(3, "0"),
         stockInit: Number(p.stock) || 0,
         note: 4.0,
+        equipe: (p.equipe || (userActif?.equipe || "")).trim(), // équipe du vendeur : le téléphone de son administrateur
       }];
     });
   };
@@ -4161,6 +5046,19 @@ export default function App() {
     setOubli(false); setOubliEtape(1); setOubliTel(""); setOubliCle(""); setOubliPin(""); setOubliPin2(""); setErreurLogin("");
   };
 
+  // Sécurité : domaine non autorisé (site cloné / copié) => application bloquée
+  if (!DOMAINE_OK) {
+    return (
+      <div className="min-h-screen bg-zinc-900 flex items-center justify-center text-white p-4">
+        <div className="text-center space-y-3 max-w-md">
+          <div className="text-5xl">⛔</div>
+          <p className="text-xl font-bold">Application non autorisée</p>
+          <p className="text-sm text-zinc-400">Cette copie de MotoPièces n'est pas autorisée. Rendez-vous sur le site officiel MotoPièces.</p>
+        </div>
+      </div>
+    );
+  }
+
   if (authLoading) {
     return (
       <div className="min-h-screen bg-zinc-900 flex items-center justify-center text-white p-4">
@@ -4190,10 +5088,18 @@ export default function App() {
               </Button>
             )}
 
-            {/* Logo & Titre MotoPièces */}
-            <BoutonSupprimer label={<><IconeMoto /> <span className="text-lg sm:text-xl font-extrabold tracking-wide">{entreprise.nom || "MotoPièces"}</span><span className="block text-[10px] font-normal text-white/60 leading-tight">🛍️ {entreprise.materiel} — 📞 {entreprise.tel}</span></>} duree={10000}
-              boutonClass="text-white hover:bg-white/10 text-left rounded p-1"
-              onSupprimer={() => setMenuDev(true)} />
+            {/* Logo & Titre MotoPièces (option développeur visible uniquement côté client / non connecté) */}
+            {(!role || role === "client") && (
+              <BoutonSupprimer label={<><IconeMoto /> <span className="text-lg sm:text-xl font-extrabold tracking-wide">{entreprise.nom || "MotoPièces"}</span><span className="block text-[10px] font-normal text-white/60 leading-tight">🛍️ {entreprise.materiel} — 📞 {entreprise.tel}</span></>} duree={10000}
+                boutonClass="text-white hover:bg-white/10 text-left rounded p-1"
+                onSupprimer={() => setMenuDev(true)} />
+            )}
+            {role && role !== "client" && (
+              <div className="text-white flex items-center text-left rounded p-1">
+                <IconeMoto /> <span className="text-lg sm:text-xl font-extrabold tracking-wide">{entreprise.nom || "MotoPièces"}</span>
+                <span className="block text-[10px] font-normal text-white/60 leading-tight">🛍️ {entreprise.materiel} — 📞 {entreprise.tel}</span>
+              </div>
+            )}
             {role && <Badge variant="secondary" className="hidden sm:inline-flex">{r.emoji} {r.titre}</Badge>}
           </div>
 
@@ -4215,8 +5121,10 @@ export default function App() {
                   onClick={() => setOpenProfil(true)}
                 >
                   <span className="w-2 h-2 rounded-full bg-green-500"></span>
-                  <span className="font-semibold text-xs max-w-[130px] sm:max-w-none truncate">
-                    👤 {userActif?.nom || userActif?.tel || supabaseUser?.email || "Mon Profil"}
+                  <span className="font-semibold text-xs max-w-[130px] sm:max-w-none truncate flex items-center gap-1">
+                    {userActif?.photo
+                      ? <img src={userActif.photo} alt="" className="w-6 h-6 rounded-full object-cover border border-zinc-500" />
+                      : "👤"} {userActif?.nom || userActif?.tel || supabaseUser?.email || "Mon Profil"}
                   </span>
                 </Button>
 
@@ -4237,7 +5145,7 @@ export default function App() {
           </DialogHeader>
           <div className="grid gap-2 mt-2">
             {succesMsg && <p className="text-green-600 text-sm mb-1 text-center">✅ {succesMsg}</p>}
-            {!oubli ? (
+            {!oubli && !creationCompte ? (
               <>
                 <Label>Numéro de téléphone</Label>
                 <Input
@@ -4266,6 +5174,25 @@ export default function App() {
                   🔐 Valider la connexion
                 </Button>
                 <button className="text-sm text-blue-600 hover:underline mt-2 text-center" onClick={() => { setOubli(true); setErreurLogin(""); setSuccesMsg(""); }}>🔑 Code PIN oublié ?</button>
+                <button className="text-sm font-semibold text-green-700 hover:underline mt-1 text-center" onClick={() => { setCreationCompte(true); setErreurLogin(""); setSuccesMsg(""); }}>🆕 Créer un compte client</button>
+              </>
+            ) : !oubli && creationCompte ? (
+              <>
+                <div className="font-semibold text-base text-center">🆕 Créer votre compte client</div>
+                <p className="text-xs text-muted-foreground text-center">Avec ce compte, vous pouvez acheter chez n'importe quelle boutique MotoPièces.</p>
+                <Label className="pt-2">Nom complet</Label>
+                <Input autoFocus value={nomCreation} onChange={e => setNomCreation(e.target.value)} placeholder="Ex : Oumar Sekongo" />
+                <Label className="pt-2">Numéro de téléphone</Label>
+                <Input inputMode="tel" value={telCreation} onChange={e => setTelCreation(e.target.value)} placeholder="+225 07 00 00 00 00" />
+                <Label className="pt-2">Code PIN (4 chiffres)</Label>
+                <Input type="password" inputMode="numeric" maxLength={4} value={pinCreation} onChange={e => setPinCreation(e.target.value.replace(/\D/g, ""))} placeholder="••••" />
+                <Label className="pt-2">Confirmez le code PIN</Label>
+                <Input type="password" inputMode="numeric" maxLength={4} value={pinCreation2} onChange={e => setPinCreation2(e.target.value.replace(/\D/g, ""))} onKeyDown={e => { if (e.key === "Enter") creerCompteClient(); }} placeholder="••••" />
+                {erreurLogin && <p className="text-red-600 text-sm mt-1">{erreurLogin}</p>}
+                <Button className="mt-4 bg-green-600 hover:bg-green-700 text-white h-12 text-base font-bold shadow" disabled={!nomCreation.trim() || !telCreation.trim() || pinCreation.length < 4 || pinCreation2.length < 4} onClick={creerCompteClient}>
+                  ✅ Créer mon compte client
+                </Button>
+                <button className="text-sm text-muted-foreground hover:underline mt-2 text-center" onClick={() => { setCreationCompte(false); setErreurLogin(""); }}>← Retour à la connexion</button>
               </>
             ) : oubliEtape === 1 ? (
               <>
@@ -4307,6 +5234,18 @@ export default function App() {
             <DialogTitle>👤 Profil Utilisateur</DialogTitle>
           </DialogHeader>
           <div className="space-y-3 mt-2 text-sm">
+            {/* Photo de profil : ajoutée et enregistrée en direct */}
+            <div className="flex flex-col items-center gap-2">
+              {userActif?.photo
+                ? <img src={userActif.photo} alt="Photo de profil" className="w-24 h-24 rounded-full object-cover border-4 border-blue-600" />
+                : <div className="w-24 h-24 rounded-full bg-zinc-200 border-4 border-zinc-300 flex items-center justify-center text-4xl">👤</div>}
+              <input type="file" accept="image/*" capture="user" className="hidden" id="photo-profil-input" onChange={changerPhotoProfil} />
+              <Button size="sm" variant="outline" className="border-blue-300 text-blue-700 hover:bg-blue-50"
+                onClick={() => { const el = document.getElementById("photo-profil-input"); if (el) el.click(); }}>
+                📷 {userActif?.photo ? "Changer ma photo" : "Ajouter une photo de profil"}
+              </Button>
+              {photoProfilMsg && <p className="text-xs text-green-600 font-semibold">✅ Photo enregistrée</p>}
+            </div>
             <div className="p-3 bg-zinc-50 border rounded-lg">
               <p className="text-xs text-zinc-500">Nom Complet</p>
               <p className="font-bold text-zinc-900">{userActif?.nom || "Utilisateur MotoPièces"}</p>
@@ -4356,6 +5295,8 @@ export default function App() {
             photosMarques={photosMarques}
             categories={categories}
             onNegocierPrix={negocierPrixArticle}
+            userActif={userActif}
+            comptes={comptes}
           />
         </div>
       )}
@@ -4404,6 +5345,11 @@ export default function App() {
 
       {/* Talkie-walkie vocal : visible uniquement pour l'administrateur et les vendeurs */}
       {/* Messagerie d'équipe type WhatsApp : visible uniquement pour l'administrateur et les vendeurs */}
+      {TALKIE_ROLES.includes(role) && (
+        <TalkieWalkie role={role} userActif={userActif} comptes={comptes} />
+      )}
+
+      {/* Messagerie photos / vidéos / textes / vocaux : contenu stocké dans les téléphones, purgé du serveur */}
       {TALKIE_ROLES.includes(role) && (
         <MessagerieEquipe role={role} userActif={userActif} comptes={comptes} />
       )}

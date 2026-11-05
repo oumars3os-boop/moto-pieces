@@ -23,6 +23,8 @@ export async function synchroniserCompteSupabase(compte) {
           role: compte.role || "vendeur",
           cle: compte.cle || null,
           bloque: Boolean(compte.bloque),
+          // Photo de profil (enregistrée en direct)
+          photo: compte.photo || null,
           // Équipe : le téléphone de l'administrateur qui a créé ce compte
           equipe: compte.equipe || null,
         },

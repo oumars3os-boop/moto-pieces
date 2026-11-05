@@ -56,3 +56,22 @@
   -ms-overflow-style: none;
   scrollbar-width: none;
 }
+
+/* ====================== Protection anti-capture ====================== */
+/* L'écran se floute quand l'application perd le focus ou passe derrière une autre app */
+.ecran-protege {
+  filter: blur(16px) brightness(0.7);
+  pointer-events: none;
+  transition: filter 0.15s ease;
+}
+/* Empêcher la copie facile du texte et des images par appui long */
+body {
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+input, textarea {
+  -webkit-user-select: text;
+  user-select: text;
+}
