@@ -255,7 +255,19 @@ function BoutonSupprimer({ onSupprimer, label = "🗑️ Supprimer", duree = 500
   const [progress, setProgress] = useState(0);
   const timerRef = useRef(null);
 
-  const demarrer = () => {
+  // Dès qu'on enlève le doigt, TOUT s'annule immédiatement : le compte à rebours ne peut jamais continuer seul.
+  const annuler = () => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+    setProgress(0);
+  };
+
+  const demarrer = (e) => {
+    if (timerRef.current) return; // déjà en cours : on ne relance pas un deuxième compte à rebours
+    // Capture du doigt : même s'il glisse un peu, le bouton garde le contrôle et l'annulation marchera toujours
+    try { e?.currentTarget?.setPointerCapture?.(e.pointerId); } catch {}
     const t0 = Date.now();
     setProgress(1);
     timerRef.current = setInterval(() => {
@@ -270,16 +282,19 @@ function BoutonSupprimer({ onSupprimer, label = "🗑️ Supprimer", duree = 500
     }, 50);
   };
 
-  const annuler = () => {
-    if (timerRef.current) clearInterval(timerRef.current);
-    timerRef.current = null;
-    setProgress(0);
-  };
+  // Si le bouton disparaît pendant le maintien, on annule aussi
+  useEffect(() => () => { if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; } }, []);
 
   return (
     <div className="relative inline-block w-full">
       <Button className={boutonClass} size="sm" variant="ghost"
-        onPointerDown={demarrer} onPointerUp={annuler} onPointerLeave={annuler} onPointerCancel={annuler}>
+        style={{ touchAction: "none" }}
+        onPointerDown={demarrer}
+        onPointerUp={annuler}
+        onPointerCancel={annuler}
+        onPointerLeave={annuler}
+        onLostPointerCapture={annuler}
+        onContextMenu={e => e.preventDefault()}>
         {progress > 0 ? `⏳ ${Math.ceil((100 - progress) * duree / 100 / 1000)}s…` : label}
       </Button>
       <div className="absolute bottom-0 left-1 right-1 h-1 bg-zinc-200 rounded overflow-hidden">
@@ -1102,7 +1117,7 @@ function VueVendeur({ produits, ventes, creerVente, categories = [], credits = [
                 </div>
               ) : (
                 <div className="space-y-4">
-                  <div className="flex gap-2 justify-center">
+                  <div className="flex flex-wrap gap-2 justify-center">
                     <Button variant={mode === "image" ? "default" : "outline"} className={mode === "image" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setMode("image")}>📷 Par image</Button>
                     <Button variant={mode === "code" ? "default" : "outline"} className={mode === "code" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setMode("code")}>⌨️ Par code</Button>
                   </div>
@@ -1271,7 +1286,7 @@ function VueVendeur({ produits, ventes, creerVente, categories = [], credits = [
               <div className="text-xl font-bold text-red-600">{ventes.filter(v => v.statut !== "payée").length}</div>
             </CardContent></Card>
           </div>
-          <div className="flex gap-2 mb-4">
+          <div className="flex flex-wrap gap-2 mb-4">
             <Button variant={filtreVentes === "toutes" ? "default" : "outline"} className={filtreVentes === "toutes" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setFiltreVentes("toutes")}>Toutes</Button>
             <Button variant={filtreVentes === "payée" ? "default" : "outline"} className={filtreVentes === "payée" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setFiltreVentes("payée")}>Payées</Button>
             <Button variant={filtreVentes === "attente" ? "default" : "outline"} className={filtreVentes === "attente" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setFiltreVentes("attente")}>En attente / Crédits</Button>
@@ -1351,8 +1366,8 @@ function TableauPieces({ produits, ventes }) {
     .filter(it => (it.p ? it.p.id : it.id) === p.id)
     .reduce((q, it) => q + (it.qte || 1), 0), 0);
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-sm">
+    <div className="w-full">
+      <table className="w-full text-[11px] sm:text-sm">
         <thead>
           <tr className="border-b bg-zinc-50 text-left">
             <th className="p-2 font-medium">Pièce</th>
@@ -1402,6 +1417,7 @@ function TableauPieces({ produits, ventes }) {
 // ---------- Gestion des crédits / dettes (vendeur & secrétaire) ----------
 function GestionCredits({ credits, ajouterCredit, ajouterVersement, validerCredit, modeVendeur }) {
   const [vue, setVue] = useState("recevoir"); // "recevoir" : ils nous doivent | "payer" : on leur doit
+  const [partie, setPartie] = useState("enregistrer"); // "enregistrer" : formulaire + tableau | "encours" : uniquement les crédits en cours, sans création
   const [filtre, setFiltre] = useState("encours"); // "encours" | "payes"
   const [ticket, setTicket] = useState(null); // crédit en cours d'impression
   const [form, setForm] = useState({ nom: "", tel: "", montant: "" });
@@ -1410,7 +1426,8 @@ function GestionCredits({ credits, ajouterCredit, ajouterVersement, validerCredi
   const resteDe = (c) => Math.max(0, (c.montant || 0) - (c.versements || []).reduce((s, v) => s + (v.montant || 0), 0));
   const enCours = credits.filter(c => (c.type || "recevoir") === vue && c.statut !== "payé");
   const termines = credits.filter(c => (c.type || "recevoir") === vue && c.statut === "payé");
-  const liste = filtre === "payes" ? termines : enCours;
+  const affichePayes = partie === "enregistrer" && filtre === "payes";
+  const liste = affichePayes ? termines : enCours;
   const totalRestant = enCours.reduce((s, c) => s + resteDe(c), 0);
   const nbRecette = credits.filter(c => c.type === "recevoir" && c.statut !== "payé").length;
   const nbDepense = credits.filter(c => c.type === "payer" && c.statut !== "payé").length;
@@ -1438,17 +1455,25 @@ function GestionCredits({ credits, ajouterCredit, ajouterVersement, validerCredi
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-4">
+      {/* Séparation en deux parties : d'un côté l'enregistrement et le tableau, de l'autre uniquement les crédits en cours */}
+      <div className="flex flex-wrap gap-2 mb-4">
+        <Button variant={partie === "enregistrer" ? "default" : "outline"} className={partie === "enregistrer" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setPartie("enregistrer")}>📝 Enregistrer / gérer les crédits</Button>
+        <Button variant={partie === "encours" ? "default" : "outline"} className={partie === "encours" ? "ring-2 ring-red-600 ring-offset-1" : ""} onClick={() => setPartie("encours")}>🔴 Crédits en cours ({enCours.length})</Button>
+      </div>
+
       {/* Onglets : argent qu'on nous doit / argent qu'on doit */}
       <div className="flex flex-wrap gap-2 mb-4">
         <Button variant={vue === "recevoir" ? "default" : "outline"} className={vue === "recevoir" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => { setVue("recevoir"); setFiltre("encours"); }}>💳 Ils nous doivent ({nbRecette})</Button>
         <Button variant={vue === "payer" ? "default" : "outline"} className={vue === "payer" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => { setVue("payer"); setFiltre("encours"); }}>🏦 On leur doit ({nbDepense})</Button>
       </div>
 
-      {/* Sous-onglets (dans la page du bouton cliqué) : crédits en cours / crédits validés */}
+      {/* Sous-onglets (uniquement dans la partie enregistrement) : crédits en cours / crédits validés */}
+      {partie === "enregistrer" && (
       <div className="flex flex-wrap gap-2 mb-4 ml-1 pl-3 border-l-4 border-zinc-300">
         <Button variant={filtre === "encours" ? "default" : "outline"} className={filtre === "encours" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setFiltre("encours")}>🔴 Crédits en cours ({enCours.length})</Button>
         <Button variant={filtre === "payes" ? "default" : "outline"} className={filtre === "payes" ? "ring-2 ring-green-600 ring-offset-1" : ""} onClick={() => setFiltre("payes")}>✅ Crédits validés ({termines.length})</Button>
       </div>
+      )}
 
       {/* Résumé */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
@@ -1466,8 +1491,8 @@ function GestionCredits({ credits, ajouterCredit, ajouterVersement, validerCredi
         </CardContent></Card>
       </div>
 
-      {/* Formulaire d'enregistrement (caché pour le vendeur : lui, il vend à crédit depuis la vente) */}
-      {!modeVendeur && (
+      {/* Formulaire d'enregistrement (uniquement dans la partie « Enregistrer » ; caché pour le vendeur : lui, il vend à crédit depuis la vente) */}
+      {partie === "enregistrer" && !modeVendeur && (
       <Card className="bg-white mb-4"><CardContent className="p-4 space-y-2">
         <div className="font-semibold text-sm">
           {vue === "recevoir"
@@ -1487,7 +1512,7 @@ function GestionCredits({ credits, ajouterCredit, ajouterVersement, validerCredi
       )}
 
       {/* Liste des crédits */}
-      {liste.length === 0 && <p className="text-muted-foreground">{filtre === "payes" ? "Aucun crédit validé pour le moment. Dès que quelqu'un finit de payer, il arrive ici automatiquement ✅" : "Aucun crédit en cours dans cette catégorie."}</p>}
+      {liste.length === 0 && <p className="text-muted-foreground">{affichePayes ? "Aucun crédit validé pour le moment. Dès que quelqu'un finit de payer, il arrive ici automatiquement ✅" : "Aucun crédit en cours dans cette catégorie."}</p>}
       {liste.map(c => {
         const paye = (c.montant || 0) - resteDe(c);
         const reste = resteDe(c);
@@ -1642,7 +1667,7 @@ function VueSecretaire({ ventes, confirmerPaiement, majPrixLigne, modePrix, entr
           <div className="text-2xl font-bold text-red-600">{totalAttente.toLocaleString("fr-FR")} FCFA</div>
         </CardContent></Card>
       </div>
-      <div className="flex gap-2 mb-4">
+      <div className="flex flex-wrap gap-2 mb-4">
         <Button variant={filtre === "toutes" ? "default" : "outline"} className={filtre === "toutes" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setFiltre("toutes")}>Toutes ({ventes.filter(v => v.statut !== "crédit").length})</Button>
         <Button variant={filtre === "attente" ? "default" : "outline"} className={filtre === "attente" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setFiltre("attente")}>En attente ({ventes.filter(v => v.statut === "en attente").length})</Button>
         <Button variant={filtre === "payée" ? "default" : "outline"} className={filtre === "payée" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setFiltre("payée")}>Payées ({ventes.filter(v => v.statut === "payée").length})</Button>
@@ -1812,7 +1837,7 @@ function VueVendeurSecretaire({ produits, marques, ventes, creerVente, confirmer
   const [vue, setVue] = useState("vendre");
   return (
     <div>
-      <div className="max-w-6xl mx-auto px-4 pt-3 flex gap-2">
+      <div className="max-w-6xl mx-auto px-4 pt-3 flex flex-wrap gap-2">
         <Button variant={vue === "vendre" ? "default" : "outline"} className={vue === "vendre" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setVue("vendre")}>📷 Espace vente</Button>
         <Button variant={vue === "secretaire" ? "default" : "outline"} className={vue === "secretaire" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setVue("secretaire")}>💰 Espace secrétariat</Button>
       </div>
@@ -2015,8 +2040,8 @@ function VueAdmin({
         <Button variant={onglet === "ventes" ? "default" : "outline"} className={onglet === "ventes" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("ventes")}>🧾 Ventes ({ventes.length})</Button>
       </div>
 
-      {/* Gros bouton unique qui réunit toutes les options de crédit : un seul endroit pour tout le crédit */}
-      {onglet !== "credits" && (
+      {/* Gros bouton unique qui réunit toutes les options de crédit : visible uniquement dans l'option Crédits */}
+      {onglet === "credits" && (
         <div className="max-w-6xl mx-auto px-4 pt-4">
           <Button size="lg" className="w-full py-6 text-lg bg-amber-600 hover:bg-amber-700 text-white font-bold shadow-md"
             onClick={() => setOnglet("credits")}>

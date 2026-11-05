@@ -32,6 +32,16 @@
     @apply border-border;
     -webkit-tap-highlight-color: transparent;
   }
+  /* Anti-glissement : aucune page ne peut jamais défiler de gauche à droite.
+     Tout doit être visible en plein écran : les éléments passent à la ligne au lieu de déborder. */
+  html, body {
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+  th, td {
+    word-break: break-word;
+    white-space: normal;
+  }
   body {
     @apply bg-background text-foreground antialiased;
     touch-action: manipulation;
