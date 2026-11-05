@@ -589,8 +589,27 @@ function VueClient({ produits, marques, creerVente, photosCategories, photosMarq
   const [cat, setCat] = useState("toutes");
   const [marque, setMarque] = useState("toutes");
   const [tri, setTri] = useState("pertinence");
-  const [panier, setPanier] = useState([]);
+
+  // Verrouillage et persistance de l'état du panier (ne revient jamais à zéro par accident)
+  const [panier, setPanier] = useState(() => {
+    try {
+      const s = localStorage.getItem("motopieces_panier");
+      return s ? JSON.parse(s) : [];
+    } catch {
+      return [];
+    }
+  });
+
   const [infos, setInfos] = useState(null);
+  const [chargementPhoto, setChargementPhoto] = useState(false);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("motopieces_panier", JSON.stringify(panier));
+    } catch (e) {
+      console.warn("Erreur de persistance du panier:", e);
+    }
+  }, [panier]);
 
   const liste = useMemo(() => {
     let l = produits.filter(p =>
@@ -603,7 +622,11 @@ function VueClient({ produits, marques, creerVente, photosCategories, photosMarq
     return l;
   }, [produits, recherche, cat, marque, tri]);
 
-  const total = panier.reduce((s, i) => s + i.p.prix * i.qte, 0);
+  // Calcul du total verrouillé sur l'état du panier
+  const total = useMemo(() => {
+    return panier.reduce((s, i) => s + ((i.p?.prix || i.prix || 0) * (i.qte || 1)), 0);
+  }, [panier]);
+
   const ajouter = (p) => setPanier(prev => {
     const ex = prev.find(i => i.p.id === p.id);
     return ex ? prev.map(i => i.p.id === p.id ? { ...i, qte: Math.min(i.qte + 1, p.stock) } : i) : [...prev, { p, qte: 1 }];
@@ -613,11 +636,33 @@ function VueClient({ produits, marques, creerVente, photosCategories, photosMarq
     .map(i => i.p.id === p.id ? { ...i, qte: i.qte - 1 } : i)
     .filter(i => i.qte > 0));
 
-  // Recherche rapide en bas : par nom ou par image
+  // Recherche rapide en bas : par nom ou par image (Recherche automatique dès capture)
   const [modeRecherche, setModeRecherche] = useState(null); // "nom" | "image"
   const [nomRecherche, setNomRecherche] = useState("");
   const [photoRecherche, setPhotoRecherche] = useState(null);
   const [resultatsImage, setResultatsImage] = useState([]);
+
+  // Lancement automatique du sélecteur/appareil photo dès le clic "Par image"
+  const declencherCaptureAutomatique = () => {
+    setModeRecherche("image");
+    setTimeout(() => {
+      const inputEl = document.getElementById("photo-recherche-client-auto");
+      if (inputEl) inputEl.click();
+    }, 100);
+  };
+
+  const handleCapturePhotoAutomatique = (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (!f) return;
+    setChargementPhoto(true);
+    const r = new FileReader();
+    r.onload = async () => {
+      await chercherParImage(r.result);
+      setChargementPhoto(false);
+    };
+    r.readAsDataURL(f);
+    e.target.value = "";
+  };
 
   const chercherParImage = async (src) => {
     setPhotoRecherche(src);
@@ -654,12 +699,15 @@ function VueClient({ produits, marques, creerVente, photosCategories, photosMarq
       vendeur: itemsSnapshot[0]?.boutique || "MotoPièces Principal",
     };
 
-    // Enregistrement garanti en base de données et dans l'état de vente
+    // Transmission et enregistrement de la vente
     await creerVente(commandePayload);
 
-    // Réinitialisation du panier UNIQUEMENT après confirmation et enregistrement final
+    // Réinitialisation du panier UNIQUEMENT après enregistrement complet
     setPanier([]);
     setInfos(null);
+    try {
+      localStorage.removeItem("motopieces_panier");
+    } catch {}
   };
 
   return (
@@ -724,17 +772,40 @@ function VueClient({ produits, marques, creerVente, photosCategories, photosMarq
 
       {modeRecherche === "image" && (
         <div className="fixed bottom-16 left-0 right-0 z-40 bg-white border-t shadow-lg p-3 max-h-64 overflow-auto">
-          <input type="file" accept="image/*" capture="environment" className="hidden" id="photo-recherche-client" onChange={e => {
-            const f = e.target.files && e.target.files[0];
-            if (!f) return;
-            const r = new FileReader();
-            r.onload = () => chercherParImage(r.result);
-            r.readAsDataURL(f);
-          }} />
-          <div className="flex items-center gap-2">
-            <Button size="sm" onClick={() => document.getElementById("photo-recherche-client").click()}>📷 Photographier la pièce</Button>
-            {photoRecherche && <img src={photoRecherche} alt="" className="w-10 h-10 rounded border object-contain" />}
+          <input
+            type="file"
+            accept="image/*"
+            capture="environment"
+            className="hidden"
+            id="photo-recherche-client-auto"
+            onChange={handleCapturePhotoAutomatique}
+          />
+          <div className="flex items-center justify-between gap-2 p-2 bg-blue-50 border border-blue-200 rounded-lg">
+            <span className="text-xs font-semibold text-blue-900 flex items-center gap-2">
+              📷 Capture & Recherche Automatique d'Image
+            </span>
+            <Button
+              size="sm"
+              className="bg-blue-600 hover:bg-blue-700 text-white text-xs h-8 px-3 font-bold"
+              onClick={() => document.getElementById("photo-recherche-client-auto").click()}
+            >
+              📷 Reprendre Photo
+            </Button>
           </div>
+
+          {chargementPhoto && (
+            <div className="p-3 mt-2 bg-amber-50 border border-amber-200 rounded-lg text-xs font-semibold text-amber-800 animate-pulse flex items-center gap-2">
+              <span>🔍 Analyse automatique de la pièce en cours... Recherche des correspondances...</span>
+            </div>
+          )}
+
+          {photoRecherche && (
+            <div className="mt-2 flex items-center gap-2">
+              <img src={photoRecherche} alt="" className="w-12 h-12 rounded border object-contain bg-zinc-100" />
+              <span className="text-xs text-zinc-500">Photo capturée — Correspondances trouvées :</span>
+            </div>
+          )}
+
           <div className="mt-2 space-y-1">
             {resultatsImage.map(p => (
               <button key={p.id} onClick={() => { ajouter(p); setPhotoRecherche(null); setResultatsImage([]); setModeRecherche(null); }}
@@ -743,24 +814,24 @@ function VueClient({ produits, marques, creerVente, photosCategories, photosMarq
                   {p.photo && <img src={p.photo} alt="" className="w-8 h-8 rounded object-contain border bg-zinc-100" />}
                   <span className="text-sm font-medium">{p.nom}</span>
                 </span>
-                <span className="text-xs">{p.prix.toLocaleString("fr-FR")} FCFA — Ajouter</span>
+                <span className="text-xs font-bold text-blue-600">{p.prix.toLocaleString("fr-FR")} FCFA — Ajouter</span>
               </button>
             ))}
-            {photoRecherche && resultatsImage.length === 0 && (
-              <p className="text-xs text-muted-foreground">Aucune correspondance trouvée — essayez la recherche par nom.</p>
+            {photoRecherche && resultatsImage.length === 0 && !chargementPhoto && (
+              <p className="text-xs text-muted-foreground p-2 text-center">Aucune correspondance trouvée — essayez la recherche par nom.</p>
             )}
           </div>
         </div>
       )}
 
-      {/* Barre du bas : recherche par nom ou par image */}
+      {/* Barre du bas : recherche par nom ou par image automatique */}
       <div className="fixed bottom-0 left-0 right-0 z-40 bg-white border-t shadow-lg p-2 flex justify-center gap-2">
         <Button variant={modeRecherche === "nom" ? "default" : "outline"}
-          className={modeRecherche === "nom" ? "ring-2 ring-blue-600 ring-offset-1" : ""}
+          className={modeRecherche === "nom" ? "ring-2 ring-blue-600 ring-offset-1 font-bold" : ""}
           onClick={() => setModeRecherche(modeRecherche === "nom" ? null : "nom")}>🔎 Par nom</Button>
         <Button variant={modeRecherche === "image" ? "default" : "outline"}
-          className={modeRecherche === "image" ? "ring-2 ring-blue-600 ring-offset-1" : ""}
-          onClick={() => setModeRecherche(modeRecherche === "image" ? null : "image")}>📷 Par image</Button>
+          className={modeRecherche === "image" ? "ring-2 ring-blue-600 ring-offset-1 font-bold" : ""}
+          onClick={declencherCaptureAutomatique}>📷 Par image (Auto)</Button>
       </div>
     </div>
   );
