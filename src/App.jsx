@@ -2860,6 +2860,23 @@ const TALKIE_ROLES = ["admin", "vendeur", "vendeur-secretaire", "secretaire"];
 // On relâche : le micro se coupe automatiquement, chez tout le monde.
 // Chaque admin parle uniquement avec son équipe ; les admins ont en plus un espace entre eux.
 
+// Fabrique 1 seconde de silence (petit fichier WAV fabriqué dans le téléphone).
+// Ce silence tourne en boucle volume 0 : le téléphone croit que l'application joue de la musique
+// et laisse donc le son du talkie marcher MÊME en arrière-plan ou écran éteint.
+function faireSilence() {
+  try {
+    const taux = 8000, nb = taux; // 1 seconde
+    const buffer = new ArrayBuffer(44 + nb);
+    const vue = new DataView(buffer);
+    const ecrire = (pos, txt) => { for (let i = 0; i < txt.length; i++) vue.setUint8(pos + i, txt.charCodeAt(i)); };
+    ecrire(0, "RIFF"); vue.setUint32(4, 36 + nb, true); ecrire(8, "WAVE");
+    ecrire(12, "fmt "); vue.setUint32(16, 16, true); vue.setUint16(20, 1, true); vue.setUint16(22, 1, true);
+    vue.setUint32(24, taux, true); vue.setUint32(28, taux, true); vue.setUint16(32, 1, true); vue.setUint16(34, 8, true);
+    ecrire(36, "data"); vue.setUint32(40, nb, true);
+    return URL.createObjectURL(new Blob([buffer], { type: "audio/wav" }));
+  } catch { return ""; }
+}
+
 function TalkieWalkie({ role, userActif, comptes }) {
   const [ouvert, setOuvert] = useState(false);
   const [destinataire, setDestinataire] = useState("equipe"); // "equipe" | "admins" | téléphone d'une personne
@@ -2868,6 +2885,8 @@ function TalkieWalkie({ role, userActif, comptes }) {
   const [nomQuiParle, setNomQuiParle] = useState("");
   const [info, setInfo] = useState("");
   const [connectes, setConnectes] = useState([]); // personnes ayant le talkie ouvert en ce moment
+  const [relance, setRelance] = useState(0); // +1 quand il faut se rebrancher tout seul
+  const gardeRef = useRef(null); // lecteur de silence qui garde le son actif en arrière-plan
   const canalRef = useRef(null);
   const pcsRef = useRef({});
   const fluxRef = useRef(null);
@@ -2930,6 +2949,8 @@ function TalkieWalkie({ role, userActif, comptes }) {
           audio.play().catch(() => {});
           setEnReception(true);
           setNomQuiParle(p.nomDe || p.de);
+          try { navigator.vibrate && navigator.vibrate(200); } catch {}
+          // Pas de notification à autoriser : la voix sort toute seule par le haut-parleur.
         } catch {}
       };
       pc.oniceconnectionstatechange = () => {
@@ -2989,7 +3010,52 @@ function TalkieWalkie({ role, userActif, comptes }) {
       canalRef.current = null;
       couperReception();
     };
+  }, [monTel, relance]);
+
+  // Chien de garde : si la connexion du talkie est tombée (réseau, veille, écran éteint), on se rebranche tout seul.
+  // On vérifie aussi à chaque fois qu'on revient sur l'application.
+  useEffect(() => {
+    if (!monTel) return;
+    const verifier = () => { if (!canalRef.current) setRelance((x) => x + 1); };
+    const chien = setInterval(verifier, 8000);
+    document.addEventListener("visibilitychange", verifier);
+    return () => { clearInterval(chien); document.removeEventListener("visibilitychange", verifier); };
+    // eslint-disable-next-line
   }, [monTel]);
+
+  // GARDE DU SON EN ARRIÈRE-PLAN : au premier toucher de l'écran (n'importe où),
+  // on lance 1 seconde de silence en boucle, volume 0. Le téléphone croit qu'on écoute de la musique,
+  // donc il laisse le talkie marcher même si l'application passe derrière, même écran éteint.
+  // Aucune autorisation à donner : le son de la voix sort tout seul par le haut-parleur.
+  useEffect(() => {
+    const demarrerGarde = () => {
+      try {
+        if (gardeRef.current) return;
+        const a = document.createElement("audio");
+        a.src = faireSilence(); a.loop = true; a.volume = 0;
+        a.setAttribute("playsinline", ""); a.setAttribute("webkit-playsinline", "");
+        const promesse = a.play();
+        if (promesse && promesse.then) promesse.then(() => { gardeRef.current = a; }).catch(() => { try { a.pause(); } catch {} });
+        else gardeRef.current = a;
+      } catch {}
+    };
+    document.addEventListener("pointerdown", demarrerGarde, { once: true });
+    document.addEventListener("touchstart", demarrerGarde, { once: true });
+    return () => { document.removeEventListener("pointerdown", demarrerGarde); document.removeEventListener("touchstart", demarrerGarde); };
+    // eslint-disable-next-line
+  }, []);
+
+  // Déblocage du son : certains téléphones refusent le son tant qu'on n'a pas touché l'écran une seule fois.
+  // Au premier toucher n'importe où dans l'application, on relance le son s'il attend.
+  useEffect(() => {
+    const relancer = () => {
+      try { const a = audioRef.current; if (a && a.srcObject && a.paused) a.play().catch(() => {}); } catch {}
+    };
+    document.addEventListener("pointerdown", relancer);
+    document.addEventListener("touchstart", relancer);
+    return () => { document.removeEventListener("pointerdown", relancer); document.removeEventListener("touchstart", relancer); };
+    // eslint-disable-next-line
+  }, []);
 
   // Sécurité : si l'application passe derrière une autre application, le micro se coupe tout seul
   useEffect(() => {
@@ -3097,6 +3163,13 @@ function TalkieWalkie({ role, userActif, comptes }) {
 
   return (
     <div>
+      {/* Bandeau rouge : quelqu'un te parle pendant que le talkie est fermé */}
+      {!ouvert && enReception && (
+        <div className="fixed bottom-24 right-4 z-50 bg-red-600 text-white font-bold text-sm px-4 py-2 rounded-full shadow-2xl animate-pulse border-2 border-white max-w-[70vw] truncate">
+          🔴 {nomQuiParle || "Quelqu'un"} te parle… écoute 🎧
+        </div>
+      )}
+
       {/* Gros bouton flottant du talkie-walkie */}
       {!ouvert && (
         <button
@@ -3215,6 +3288,8 @@ function TalkieClientArticle({ article, userActif, comptes }) {
   const [nomQuiParle, setNomQuiParle] = useState("");
   const [info, setInfo] = useState("");
   const [connectes, setConnectes] = useState([]); // membres de l'équipe ayant le talkie ouvert
+  const [relance, setRelance] = useState(0); // +1 quand il faut se rebrancher tout seul
+  const gardeRef = useRef(null); // lecteur de silence qui garde le son actif en arrière-plan
   const canalRef = useRef(null);
   const pcsRef = useRef({});
   const fluxRef = useRef(null);
@@ -3269,6 +3344,8 @@ function TalkieClientArticle({ article, userActif, comptes }) {
           audio.play().catch(() => {});
           setEnReception(true);
           setNomQuiParle(p.nomDe || p.de);
+          try { navigator.vibrate && navigator.vibrate(200); } catch {}
+          // Pas de notification à autoriser : la voix sort toute seule par le haut-parleur.
         } catch {}
       };
       pc.oniceconnectionstatechange = () => {
@@ -3328,7 +3405,52 @@ function TalkieClientArticle({ article, userActif, comptes }) {
       couperReception();
     };
     // eslint-disable-next-line
+  }, [monTel, relance]);
+
+  // Chien de garde : si la connexion du talkie est tombée (réseau, veille, écran éteint), on se rebranche tout seul.
+  // On vérifie aussi à chaque fois qu'on revient sur l'application.
+  useEffect(() => {
+    if (!monTel) return;
+    const verifier = () => { if (!canalRef.current) setRelance((x) => x + 1); };
+    const chien = setInterval(verifier, 8000);
+    document.addEventListener("visibilitychange", verifier);
+    return () => { clearInterval(chien); document.removeEventListener("visibilitychange", verifier); };
+    // eslint-disable-next-line
   }, [monTel]);
+
+  // GARDE DU SON EN ARRIÈRE-PLAN : au premier toucher de l'écran (n'importe où),
+  // on lance 1 seconde de silence en boucle, volume 0. Le téléphone croit qu'on écoute de la musique,
+  // donc il laisse le talkie marcher même si l'application passe derrière, même écran éteint.
+  // Aucune autorisation à donner : le son de la voix sort tout seul par le haut-parleur.
+  useEffect(() => {
+    const demarrerGarde = () => {
+      try {
+        if (gardeRef.current) return;
+        const a = document.createElement("audio");
+        a.src = faireSilence(); a.loop = true; a.volume = 0;
+        a.setAttribute("playsinline", ""); a.setAttribute("webkit-playsinline", "");
+        const promesse = a.play();
+        if (promesse && promesse.then) promesse.then(() => { gardeRef.current = a; }).catch(() => { try { a.pause(); } catch {} });
+        else gardeRef.current = a;
+      } catch {}
+    };
+    document.addEventListener("pointerdown", demarrerGarde, { once: true });
+    document.addEventListener("touchstart", demarrerGarde, { once: true });
+    return () => { document.removeEventListener("pointerdown", demarrerGarde); document.removeEventListener("touchstart", demarrerGarde); };
+    // eslint-disable-next-line
+  }, []);
+
+  // Déblocage du son : certains téléphones refusent le son tant qu'on n'a pas touché l'écran une seule fois.
+  // Au premier toucher n'importe où dans l'application, on relance le son s'il attend.
+  useEffect(() => {
+    const relancer = () => {
+      try { const a = audioRef.current; if (a && a.srcObject && a.paused) a.play().catch(() => {}); } catch {}
+    };
+    document.addEventListener("pointerdown", relancer);
+    document.addEventListener("touchstart", relancer);
+    return () => { document.removeEventListener("pointerdown", relancer); document.removeEventListener("touchstart", relancer); };
+    // eslint-disable-next-line
+  }, []);
 
   // Sécurité : si l'application passe derrière une autre application, le micro se coupe tout seul
   useEffect(() => {
@@ -3390,6 +3512,13 @@ function TalkieClientArticle({ article, userActif, comptes }) {
 
   return (
     <div>
+      {/* Bandeau rouge : la boutique te parle pendant que le micro de l'article est fermé */}
+      {!ouvert && enReception && (
+        <div className="fixed bottom-24 left-4 z-50 bg-red-600 text-white font-bold text-sm px-4 py-2 rounded-full shadow-2xl animate-pulse border-2 border-white max-w-[70vw] truncate">
+          🔴 {nomQuiParle || "La boutique"} te parle… écoute 🎧
+        </div>
+      )}
+
       {/* Petit bouton micro sur l'article */}
       {!ouvert && (
         <button
