@@ -15,6 +15,7 @@ import { supabase, synchroniserCompteSupabase, enregistrerVenteSupabase, charger
 import { extraireTexteImage } from "@/lib/ocr";
 import { demanderAssistantMistral } from "@/lib/mistral";
 import { verifierQualiteImage } from "@/lib/imageProcessor";
+import ModeRech from "@/components/ModeRech";
 
 // ---------- Données ----------
 
@@ -771,7 +772,20 @@ function VueClient({ produits, marques, creerVente, photosCategories, photosMarq
       )}
 
       {modeRecherche === "image" && (
-        <div className="fixed bottom-16 left-0 right-0 z-40 bg-white border-t shadow-lg p-3 max-h-64 overflow-auto">
+        <div className="fixed bottom-16 left-0 right-0 z-40 bg-zinc-900 border-t shadow-2xl p-3 max-h-[80vh] overflow-auto">
+          <ModeRech
+            onCaptureAuto={async (file) => {
+              setChargementPhoto(true);
+              const r = new FileReader();
+              r.onload = async () => {
+                await chercherParImage(r.result);
+                setChargementPhoto(false);
+              };
+              r.readAsDataURL(file);
+            }}
+            onFermer={() => setModeRecherche(null)}
+          />
+
           <input
             type="file"
             accept="image/*"
@@ -780,45 +794,33 @@ function VueClient({ produits, marques, creerVente, photosCategories, photosMarq
             id="photo-recherche-client-auto"
             onChange={handleCapturePhotoAutomatique}
           />
-          <div className="flex items-center justify-between gap-2 p-2 bg-blue-50 border border-blue-200 rounded-lg">
-            <span className="text-xs font-semibold text-blue-900 flex items-center gap-2">
-              📷 Capture & Recherche Automatique d'Image
-            </span>
-            <Button
-              size="sm"
-              className="bg-blue-600 hover:bg-blue-700 text-white text-xs h-8 px-3 font-bold"
-              onClick={() => document.getElementById("photo-recherche-client-auto").click()}
-            >
-              📷 Reprendre Photo
-            </Button>
-          </div>
 
           {chargementPhoto && (
-            <div className="p-3 mt-2 bg-amber-50 border border-amber-200 rounded-lg text-xs font-semibold text-amber-800 animate-pulse flex items-center gap-2">
-              <span>🔍 Analyse automatique de la pièce en cours... Recherche des correspondances...</span>
+            <div className="p-3 mt-3 bg-amber-500/20 border border-amber-500/50 rounded-lg text-xs font-semibold text-amber-200 animate-pulse flex items-center justify-center gap-2">
+              <span>🔍 Reconnaissance et analyse automatique en cours...</span>
             </div>
           )}
 
           {photoRecherche && (
-            <div className="mt-2 flex items-center gap-2">
-              <img src={photoRecherche} alt="" className="w-12 h-12 rounded border object-contain bg-zinc-100" />
-              <span className="text-xs text-zinc-500">Photo capturée — Correspondances trouvées :</span>
+            <div className="mt-3 flex items-center gap-2 bg-zinc-800 p-2 rounded-lg border border-zinc-700">
+              <img src={photoRecherche} alt="" className="w-12 h-12 rounded border object-contain bg-black" />
+              <span className="text-xs text-zinc-300">Article reconnu & correspondances :</span>
             </div>
           )}
 
           <div className="mt-2 space-y-1">
             {resultatsImage.map(p => (
               <button key={p.id} onClick={() => { ajouter(p); setPhotoRecherche(null); setResultatsImage([]); setModeRecherche(null); }}
-                className="w-full text-left border rounded-md p-2 hover:bg-zinc-100 flex justify-between items-center gap-2">
+                className="w-full text-left border border-zinc-700 bg-zinc-800 rounded-md p-2 hover:bg-zinc-700 flex justify-between items-center gap-2 text-white">
                 <span className="flex items-center gap-2">
-                  {p.photo && <img src={p.photo} alt="" className="w-8 h-8 rounded object-contain border bg-zinc-100" />}
+                  {p.photo && <img src={p.photo} alt="" className="w-8 h-8 rounded object-contain border bg-zinc-900" />}
                   <span className="text-sm font-medium">{p.nom}</span>
                 </span>
-                <span className="text-xs font-bold text-blue-600">{p.prix.toLocaleString("fr-FR")} FCFA — Ajouter</span>
+                <span className="text-xs font-bold text-green-400">{p.prix.toLocaleString("fr-FR")} FCFA — Ajouter</span>
               </button>
             ))}
             {photoRecherche && resultatsImage.length === 0 && !chargementPhoto && (
-              <p className="text-xs text-muted-foreground p-2 text-center">Aucune correspondance trouvée — essayez la recherche par nom.</p>
+              <p className="text-xs text-zinc-400 p-2 text-center">Aucune correspondance exacte — essayez la recherche par nom.</p>
             )}
           </div>
         </div>
