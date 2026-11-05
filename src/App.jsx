@@ -14,6 +14,7 @@ import { useAuth } from "@/context/AuthContext";
 import { supabase, synchroniserCompteSupabase, enregistrerVenteSupabase, chargerVentesSupabase } from "@/lib/supabase";
 import { extraireTexteImage } from "@/lib/ocr";
 import { demanderAssistantMistral } from "@/lib/mistral";
+import { verifierQualiteImage } from "@/lib/imageProcessor";
 
 // ---------- Données ----------
 
@@ -2494,20 +2495,42 @@ function ChatFlottant({ userActif, entreprise, role, openChat, setOpenChat, arti
   );
 }
 
-// ---------- Composant Section Publicités & Promotions ----------
+// ---------- Composant Section Publicités & Promotions avec Analyse Qualité Image ----------
 function SectionPublicites({ publicites, setPublicites, autoriserUpload = false }) {
   const [openModal, setOpenModal] = useState(false);
   const [titre, setTitre] = useState("");
   const [image, setImage] = useState(null);
+  const [analyse, setAnalyse] = useState(null);
 
-  const handleUpload = (e) => {
+  const handleUploadDirect = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      setImage(event.target.result);
-    };
-    reader.readAsDataURL(file);
+
+    setAnalyse({ enCours: true, message: "🔍 Analyse automatique de la qualité et conformité de l'image en cours..." });
+
+    const resultatAnalyse = await verifierQualiteImage(file);
+    setImage(resultatAnalyse.dataUrl);
+
+    if (resultatAnalyse.valide) {
+      setAnalyse({ enCours: false, valide: true, message: resultatAnalyse.message });
+
+      // Déclenchement automatique de la confirmation et redirection après analyse positive
+      setTimeout(() => {
+        const nouvellePub = {
+          id: Date.now(),
+          titre: titre.trim() || "Offre Spéciale MotoPièces",
+          image: resultatAnalyse.dataUrl,
+          date: new Date().toLocaleDateString("fr-FR"),
+        };
+        setPublicites((prev) => [nouvellePub, ...prev]);
+        setTitre("");
+        setImage(null);
+        setAnalyse(null);
+        setOpenModal(false);
+      }, 1000);
+    } else {
+      setAnalyse({ enCours: false, valide: false, message: resultatAnalyse.message });
+    }
   };
 
   const ajouterPublicite = () => {
@@ -2521,6 +2544,7 @@ function SectionPublicites({ publicites, setPublicites, autoriserUpload = false 
     setPublicites((prev) => [nouvellePub, ...prev]);
     setTitre("");
     setImage(null);
+    setAnalyse(null);
     setOpenModal(false);
   };
 
@@ -2538,7 +2562,7 @@ function SectionPublicites({ publicites, setPublicites, autoriserUpload = false 
           <Button
             size="sm"
             className="bg-blue-600 hover:bg-blue-700 text-white shadow"
-            onClick={() => setOpenModal(true)}
+            onClick={() => { setAnalyse(null); setOpenModal(true); }}
           >
             ➕ Publier une Image / Promo
           </Button>
@@ -2563,8 +2587,8 @@ function SectionPublicites({ publicites, setPublicites, autoriserUpload = false 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {publicites.map((pub) => (
             <Card key={pub.id} className="overflow-hidden shadow border hover:shadow-lg transition bg-white">
-              <div className="relative h-48 bg-zinc-900">
-                <img src={pub.image} alt={pub.titre} className="w-full h-full object-cover" />
+              <div className="relative h-48 bg-zinc-900 overflow-hidden">
+                <img src={pub.image} alt={pub.titre} className="w-full h-full object-cover object-center transition-transform duration-300 hover:scale-105" />
                 {autoriserUpload && (
                   <Button
                     size="sm"
@@ -2590,7 +2614,7 @@ function SectionPublicites({ publicites, setPublicites, autoriserUpload = false 
         <Dialog open={openModal} onOpenChange={setOpenModal}>
           <DialogContent className="bg-white rounded-lg p-6 max-w-md w-full">
             <DialogHeader>
-              <DialogTitle>📢 Publier une Image Promotionnelle</DialogTitle>
+              <DialogTitle>📢 Importation & Analyse de l'Image Promotionnelle</DialogTitle>
             </DialogHeader>
             <div className="grid gap-3 mt-2">
               <Label>Titre / Description de l'offre</Label>
@@ -2599,24 +2623,39 @@ function SectionPublicites({ publicites, setPublicites, autoriserUpload = false 
                 onChange={(e) => setTitre(e.target.value)}
                 placeholder="Ex : Remise -15% sur les kits chaîne & freins"
               />
-              <Label>Fichier Image (Upload)</Label>
+              <Label>Fichier Image (Import Direct)</Label>
               <input
                 type="file"
                 accept="image/*"
-                onChange={handleUpload}
-                className="border p-2 rounded text-sm w-full bg-zinc-50"
+                onChange={handleUploadDirect}
+                className="border p-2 rounded text-sm w-full bg-zinc-50 cursor-pointer"
               />
-              {image && (
-                <div className="mt-2 h-36 rounded border overflow-hidden bg-zinc-100">
-                  <img src={image} alt="Aperçu" className="w-full h-full object-cover" />
+
+              {/* Statut de vérification automatique */}
+              {analyse && (
+                <div className={`p-3 rounded-lg text-xs font-semibold flex items-center gap-2 ${
+                  analyse.enCours
+                    ? "bg-blue-50 text-blue-800 border border-blue-200 animate-pulse"
+                    : analyse.valide
+                    ? "bg-green-50 text-green-800 border border-green-200"
+                    : "bg-red-50 text-red-800 border border-red-200"
+                }`}>
+                  <span>{analyse.message}</span>
                 </div>
               )}
+
+              {image && (
+                <div className="mt-2 h-40 rounded-lg border overflow-hidden bg-zinc-100 relative">
+                  <img src={image} alt="Aperçu" className="w-full h-full object-cover object-center" />
+                </div>
+              )}
+
               <Button
-                className="mt-4 bg-blue-600 hover:bg-blue-700 text-white h-11"
-                disabled={!image}
+                className="mt-4 bg-blue-600 hover:bg-blue-700 text-white h-11 font-bold"
+                disabled={!image || (analyse && !analyse.valide)}
                 onClick={ajouterPublicite}
               >
-                ✅ Publier la bannière
+                ✅ Valider et Publier sur la Plateforme
               </Button>
             </div>
           </DialogContent>
