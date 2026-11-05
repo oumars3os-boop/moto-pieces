@@ -634,6 +634,34 @@ function VueClient({ produits, marques, creerVente, photosCategories, photosMarq
     ? produits.filter(p => p.nom.toLowerCase().includes(nomRecherche.trim().toLowerCase())).slice(0, 6)
     : [];
 
+  // Conservation garantie des données du panier jusqu'à la confirmation finale
+  const finaliserCommande = async () => {
+    if (!panier.length) return;
+
+    // Snapshot immuable des articles et du calcul du total AVANT réinitialisation de l'état
+    const itemsSnapshot = panier.map(i => ({
+      ...i.p,
+      qte: i.qte,
+      prixLigne: i.p.prix,
+    }));
+    const totalSnapshot = itemsSnapshot.reduce((sum, item) => sum + (item.prix * item.qte), 0);
+
+    const commandePayload = {
+      items: itemsSnapshot,
+      total: totalSnapshot,
+      client: infos?.nom?.trim() || "Client",
+      tel: infos?.tel?.trim() || "",
+      vendeur: itemsSnapshot[0]?.boutique || "MotoPièces Principal",
+    };
+
+    // Enregistrement garanti en base de données et dans l'état de vente
+    await creerVente(commandePayload);
+
+    // Réinitialisation du panier UNIQUEMENT après confirmation et enregistrement final
+    setPanier([]);
+    setInfos(null);
+  };
+
   return (
     <div>
       {panier.length > 0 && (
@@ -647,11 +675,8 @@ function VueClient({ produits, marques, creerVente, photosCategories, photosMarq
               <Panier items={panier} onRetirer={id => setPanier(prev => prev.filter(i => i.p.id !== id))}
                 onVider={() => setPanier([])}
                 boutonCommande={
-                  <Button className="w-full bg-blue-600 hover:bg-blue-700 text-white h-11 text-base" disabled={!panier.length}
-                    onClick={() => {
-                      creerVente({ items: panier.map(i => ({ ...i.p, qte: i.qte })), total, client: infos?.nom || "Client", tel: infos?.tel || "", vendeur: "Client" });
-                      setPanier([]); setInfos(null);
-                    }}>Confirmer la commande</Button>
+                  <Button className="w-full bg-blue-600 hover:bg-blue-700 text-white h-11 text-base font-bold" disabled={!panier.length}
+                    onClick={finaliserCommande}>Confirmer la commande</Button>
                 } />              <div className="grid gap-1.5 pt-2">
                 <Label>Nom</Label>
                 <Input value={infos?.nom || ""} onChange={e => setInfos({ ...(infos || { tel: "" }), nom: e.target.value })} placeholder="Votre nom" />
@@ -2922,13 +2947,22 @@ export default function App() {
     const maintenant = new Date();
     const dateVente = maintenant.toLocaleDateString("fr-FR") + " à " + maintenant.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
 
-    // Routage automatique des ventes et notifications vers la boutique / vendeur concerné
-    const premierProduit = v.items?.[0]?.p || v.items?.[0];
+    // Calcul garanti du total et sécurisation des articles de la commande
+    const itemsVente = (v.items || []).map(it => ({
+      ...it,
+      prixLigne: it.prixLigne ?? (it.p ? it.p.prix : it.prix) ?? 0,
+      qte: it.qte || 1,
+    }));
+
+    const totalVenteCalcule = v.total || itemsVente.reduce((s, it) => s + (it.prixLigne * it.qte), 0);
+    const premierProduit = itemsVente[0]?.p || itemsVente[0];
     const nomBoutique = premierProduit?.boutique || v.vendeur || userActif?.nom || entreprise.nom || "MotoPièces Principal";
 
     const nouvelleVente = {
       ...v,
       id: nextVente,
+      items: itemsVente,
+      total: totalVenteCalcule,
       vendeur: nomBoutique,
       boutique: nomBoutique,
       statut: "en attente",
@@ -2943,7 +2977,7 @@ export default function App() {
 
     // Décrément automatique du stock : 10 vendus → il reste 9
     setProduits(prev => prev.map(p => {
-      const ligne = v.items.find(it => (it.p ? it.p.id : it.id) === p.id);
+      const ligne = itemsVente.find(it => (it.p ? it.p.id : it.id) === p.id);
       if (!ligne) return p;
       const q = ligne.qte || 1;
       return { ...p, stock: Math.max(0, p.stock - q) };
