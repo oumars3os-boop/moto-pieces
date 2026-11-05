@@ -538,7 +538,9 @@ function LigneVente({ v, onConfirmer, onSaisirPrix, saisiePrix }) {
             <span className="font-bold whitespace-nowrap">{totalCalcule.toLocaleString("fr-FR")} FCFA</span>
             {v.statut === "payée"
               ? <Badge className="bg-green-600">Payée ✅</Badge>
-              : <Badge variant="destructive">En attente</Badge>}
+              : v.statut === "crédit"
+                ? <Badge className="bg-amber-600">Crédit 🔴</Badge>
+                : <Badge variant="destructive">En attente</Badge>}
           </div>
         </div>
 
@@ -845,7 +847,7 @@ function VueClient({ produits, marques, creerVente, photosCategories, photosMarq
 
 // ---------- Vue Vendeur ----------
 
-function VueVendeur({ produits, ventes, creerVente, categories, ajouterProduitVendeur, supprimerProduitVendeur }) {
+function VueVendeur({ produits, ventes, creerVente, categories = [], ajouterProduitVendeur = () => {}, supprimerProduitVendeur = () => {}, credits = [] }) {
   const [onglet, setOnglet] = useState("vendre");
   const [photos, setPhotos] = useState([]); // [{ src, article, qte }]
   // Ajout des marchandises par le vendeur
@@ -860,6 +862,9 @@ function VueVendeur({ produits, ventes, creerVente, categories, ajouterProduitVe
   const [vendu, setVendu] = useState(false);
   const [filtreVentes, setFiltreVentes] = useState("toutes");
   const [scanOuvert, setScanOuvert] = useState(false); // scanner caméra automatique
+  const [creditActif, setCreditActif] = useState(false); // vente à crédit activée
+  const [acompte, setAcompte] = useState(""); // montant déjà payé au moment de la vente
+  const [derniereVenteCredit, setDerniereVenteCredit] = useState(false); // la vente envoyée était-elle à crédit ?
 
   // Capture automatique du scanner : la photo devient un article et est reconnue tout de suite
   const scannerCapture = (fichier) => {
@@ -983,12 +988,16 @@ function VueVendeur({ produits, ventes, creerVente, categories, ajouterProduitVe
       total: totalAuto,
       client: client.nom || "Client", tel: client.tel, vendeur: "Vendeur",
       photo: liste[0].photo,
+      credit: creditActif, dejaPaye: Number(acompte) || 0,
     });
+    setDerniereVenteCredit(creditActif);
+    setCreditActif(false);
+    setAcompte("");
     setVendu(true);
   };
 
   const reinitialiser = () => {
-    setPhotos([]); setClient({ nom: "", tel: "" }); setVendu(false); setRecherche(""); setIdentification(null);
+    setPhotos([]); setClient({ nom: "", tel: "" }); setVendu(false); setRecherche(""); setIdentification(null); setDerniereVenteCredit(false);
   };
 
   return (
@@ -998,7 +1007,13 @@ function VueVendeur({ produits, ventes, creerVente, categories, ajouterProduitVe
         <Button variant={onglet === "articles" ? "default" : "outline"} className={onglet === "articles" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("articles")}>🧰 Mes articles ({produits.length})</Button>
         <Button variant={onglet === "ventes" ? "default" : "outline"} className={onglet === "ventes" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("ventes")}>📋 Ventes ({ventes.length})</Button>
         <Button variant={onglet === "historique" ? "default" : "outline"} className={onglet === "historique" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("historique")}>📊 Historique Global</Button>
+        <Button variant={onglet === "credits" ? "default" : "outline"} className={onglet === "credits" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("credits")}>💳 Crédits ({(credits || []).filter(c => c.statut !== "payé").length})</Button>
       </div>
+
+      {/* Onglet Crédits : suivi des ventes à crédit (les versements sont encaissés par la secrétaire) */}
+      {onglet === "credits" && (
+        <GestionCredits credits={credits || []} modeVendeur />
+      )}
 
       {/* Onglet Mes articles : le vendeur ajoute et gère SES marchandises */}
       {onglet === "articles" ? (
@@ -1078,8 +1093,10 @@ function VueVendeur({ produits, ventes, creerVente, categories, ajouterProduitVe
               {vendu ? (
                 <div className="text-center space-y-3 py-8">
                   <div className="text-4xl">✅</div>
-                  <div className="font-semibold text-lg">Vente envoyée à la secrétaire !</div>
-                  <p className="text-sm text-muted-foreground">La secrétaire confirmera le paiement dès réception de l'argent.</p>
+                  <div className="font-semibold text-lg">{derniereVenteCredit ? "Vente enregistrée à crédit 🔴" : "Vente envoyée à la secrétaire !"}</div>
+                  <p className="text-sm text-muted-foreground">{derniereVenteCredit
+                    ? "La marchandise est sortie et la commande est dans l'historique en « Crédit 🔴 ». La secrétaire encaisse les versements jusqu'à ce que tout soit payé."
+                    : "La secrétaire confirmera le paiement dès réception de l'argent."}</p>
                   <Button onClick={reinitialiser}>📷 Nouvelle vente</Button>
                 </div>
               ) : (
@@ -1206,7 +1223,26 @@ function VueVendeur({ produits, ventes, creerVente, categories, ajouterProduitVe
                           <Input placeholder="Nom du client" value={client.nom} onChange={e => setClient({ ...client, nom: e.target.value })} />
                           <Input placeholder="Téléphone" value={client.tel} onChange={e => setClient({ ...client, tel: e.target.value })} />
                           <Button disabled={identifies.length === 0 || photos.some(ph => !ph.article) || identifies.some(ph => !(ph.article.prix > 0))}
-                            onClick={envoyer}>➡️ Envoyer à la secrétaire</Button>
+                            onClick={envoyer}>{creditActif ? "💳 Envoyer la vente à crédit" : "➡️ Envoyer à la secrétaire"}</Button>
+                        </div>
+
+                        {/* Vente à crédit : la marchandise sort, le client paie après, au fur et à mesure ou tout d'un coup */}
+                        <div className="border-t pt-3 space-y-2">
+                          <Button size="lg" className={creditActif
+                            ? "w-full py-6 text-lg bg-amber-600 hover:bg-amber-700 text-white font-bold ring-2 ring-amber-600"
+                            : "w-full py-6 text-lg bg-zinc-200 hover:bg-amber-100 text-zinc-800 font-bold border-2 border-dashed border-amber-400"}
+                            onClick={() => setCreditActif(a => !a)}>
+                            {creditActif ? "✅ Vente à crédit ACTIVÉE — le client paiera après" : "💳 Vente à crédit (le client paie après)"}
+                          </Button>
+                          {creditActif && (
+                            <>
+                              <Input type="number" placeholder="Acompte payé tout de suite (FCFA) — laisser vide si le client ne paie rien encore"
+                                value={acompte} onChange={e => setAcompte(e.target.value)} />
+                              <p className="text-xs text-amber-700">
+                                La marchandise sort tout de suite, la commande part dans l'historique en « Crédit 🔴 ». La secrétaire encaisse les versements ; dès que tout est payé, la commande passe en « Payée ✅ » automatiquement.
+                              </p>
+                            </>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -1237,7 +1273,7 @@ function VueVendeur({ produits, ventes, creerVente, categories, ajouterProduitVe
           <div className="flex gap-2 mb-4">
             <Button variant={filtreVentes === "toutes" ? "default" : "outline"} className={filtreVentes === "toutes" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setFiltreVentes("toutes")}>Toutes</Button>
             <Button variant={filtreVentes === "payée" ? "default" : "outline"} className={filtreVentes === "payée" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setFiltreVentes("payée")}>Payées</Button>
-            <Button variant={filtreVentes === "attente" ? "default" : "outline"} className={filtreVentes === "attente" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setFiltreVentes("attente")}>En attente</Button>
+            <Button variant={filtreVentes === "attente" ? "default" : "outline"} className={filtreVentes === "attente" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setFiltreVentes("attente")}>En attente / Crédits</Button>
           </div>
           {ventes.length === 0 ? <p className="text-muted-foreground">Aucune vente enregistrée pour le moment.</p> :
             (filtreVentes === "toutes" ? ventes : ventes.filter(v => filtreVentes === "payée" ? v.statut === "payée" : v.statut !== "payée"))
@@ -1363,7 +1399,7 @@ function TableauPieces({ produits, ventes }) {
 }
 
 // ---------- Gestion des crédits / dettes (vendeur & secrétaire) ----------
-function GestionCredits({ credits, ajouterCredit, ajouterVersement, validerCredit }) {
+function GestionCredits({ credits, ajouterCredit, ajouterVersement, validerCredit, modeVendeur }) {
   const [vue, setVue] = useState("recevoir"); // "recevoir" : ils nous doivent | "payer" : on leur doit
   const [filtre, setFiltre] = useState("encours"); // "encours" | "payes"
   const [ticket, setTicket] = useState(null); // crédit en cours d'impression
@@ -1429,7 +1465,8 @@ function GestionCredits({ credits, ajouterCredit, ajouterVersement, validerCredi
         </CardContent></Card>
       </div>
 
-      {/* Formulaire d'enregistrement */}
+      {/* Formulaire d'enregistrement (caché pour le vendeur : lui, il vend à crédit depuis la vente) */}
+      {!modeVendeur && (
       <Card className="bg-white mb-4"><CardContent className="p-4 space-y-2">
         <div className="font-semibold text-sm">
           {vue === "recevoir"
@@ -1446,6 +1483,7 @@ function GestionCredits({ credits, ajouterCredit, ajouterVersement, validerCredi
           <p className="text-xs text-amber-600">⚠️ Cette personne a déjà un crédit en cours. Vous pouvez quand même enregistrer, mais pensez à solder l'ancien.</p>
         )}
       </CardContent></Card>
+      )}
 
       {/* Liste des crédits */}
       {liste.length === 0 && <p className="text-muted-foreground">{filtre === "payes" ? "Aucun crédit validé pour le moment. Dès que quelqu'un finit de payer, il arrive ici automatiquement ✅" : "Aucun crédit en cours dans cette catégorie."}</p>}
@@ -1472,6 +1510,11 @@ function GestionCredits({ credits, ajouterCredit, ajouterVersement, validerCredi
                 </div>
               </div>
 
+              {/* Lien vers la commande à crédit d'origine */}
+              {c.venteId && (
+                <div className="text-xs text-muted-foreground">🛒 Commande à crédit n°{c.venteId} — marchandise déjà sortie</div>
+              )}
+
               {/* Progression du paiement */}
               <div>
                 <div className="h-2 bg-zinc-200 rounded-full overflow-hidden">
@@ -1495,7 +1538,10 @@ function GestionCredits({ credits, ajouterCredit, ajouterVersement, validerCredi
               )}
 
               {/* Actions : versement (partiel ou total). Quand la totalité est atteinte, le crédit bascule AUTOMATIQUEMENT dans « ✅ Crédits validés » */ }
-              {c.statut !== "payé" && (
+              {c.statut !== "payé" && modeVendeur && (
+                <p className="text-xs text-muted-foreground">La secrétaire encaisse les versements et confirme le paiement.</p>
+              )}
+              {c.statut !== "payé" && !modeVendeur && (
                 <div className="flex flex-col sm:flex-row gap-2">
                   <Input type="number" placeholder="Montant reçu / versé" value={saisie[c.id] || ""} className="flex-1 h-9"
                     onChange={e => setSaisie(s => ({ ...s, [c.id]: e.target.value }))} />
@@ -1589,7 +1635,7 @@ function VueSecretaire({ ventes, confirmerPaiement, majPrixLigne, modePrix, entr
       </div>
       <div className="flex gap-2 mb-4">
         <Button variant={filtre === "toutes" ? "default" : "outline"} className={filtre === "toutes" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setFiltre("toutes")}>Toutes ({ventes.length})</Button>
-        <Button variant={filtre === "attente" ? "default" : "outline"} className={filtre === "attente" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setFiltre("attente")}>En attente ({ventes.filter(v => v.statut !== "payée").length})</Button>
+        <Button variant={filtre === "attente" ? "default" : "outline"} className={filtre === "attente" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setFiltre("attente")}>En attente / Crédits ({ventes.filter(v => v.statut !== "payée").length})</Button>
         <Button variant={filtre === "payée" ? "default" : "outline"} className={filtre === "payée" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setFiltre("payée")}>Payées ({ventes.filter(v => v.statut === "payée").length})</Button>
       </div>
       {liste.length === 0 ? <p className="text-muted-foreground">Aucune vente dans cette catégorie.</p> : liste.map(v => (
@@ -1747,7 +1793,7 @@ function ContenuMenuDev({ codeOk, setCodeOk, codeSaisi, setCodeSaisi, nouvelAdmi
   );
 }
 
-function VueVendeurSecretaire({ produits, marques, ventes, creerVente, confirmerPaiement, majPrixLigne, modePrix, entreprise, credits, ajouterCredit, ajouterVersement, validerCredit }) {
+function VueVendeurSecretaire({ produits, marques, ventes, creerVente, confirmerPaiement, majPrixLigne, modePrix, entreprise, credits, ajouterCredit, ajouterVersement, validerCredit, categories, ajouterProduitVendeur, supprimerProduitVendeur }) {
   const [vue, setVue] = useState("vendre");
   return (
     <div>
@@ -1757,7 +1803,7 @@ function VueVendeurSecretaire({ produits, marques, ventes, creerVente, confirmer
       </div>
       {vue === "vendre"
         ? <VueVendeur produits={produits} ventes={ventes} creerVente={creerVente}
-            categories={categories} ajouterProduitVendeur={ajouterProduitVendeur} supprimerProduitVendeur={supprimerProduitVendeur} />
+            categories={categories} ajouterProduitVendeur={ajouterProduitVendeur} supprimerProduitVendeur={supprimerProduitVendeur} credits={credits} />
         : <VueSecretaire ventes={ventes} confirmerPaiement={confirmerPaiement} majPrixLigne={majPrixLigne} modePrix={modePrix} entreprise={entreprise}
             credits={credits} ajouterCredit={ajouterCredit} ajouterVersement={ajouterVersement} validerCredit={validerCredit} />}
     </div>
@@ -3415,6 +3461,32 @@ export default function App() {
     const premierProduit = itemsVente[0]?.p || itemsVente[0];
     const nomBoutique = premierProduit?.boutique || v.vendeur || userActif?.nom || entreprise.nom || "MotoPièces Principal";
 
+    // ---------- Vente à crédit ----------
+    // La marchandise sort tout de suite ; un crédit lié à la commande est créé pour suivre les versements.
+    let idCreditLie = null;
+    if (v.credit) {
+      const dejaPaye = Math.max(0, Math.min(Number(v.dejaPaye) || 0, totalVenteCalcule));
+      idCreditLie = Date.now();
+      const soldeToutDeSuite = dejaPaye >= totalVenteCalcule;
+      setCredits(prev => [{
+        id: idCreditLie,
+        type: "recevoir",
+        nom: v.client || "Client",
+        tel: v.tel || "",
+        montant: totalVenteCalcule,
+        venteId: nextVente, // lien avec la commande : quand le crédit est soldé, la commande devient « payée »
+        versements: dejaPaye > 0 ? [{
+          montant: dejaPaye,
+          date: dateVente,
+          par: userActif?.nom || "—",
+        }] : [],
+        statut: soldeToutDeSuite ? "payé" : "en cours",
+        dateCreation: dateVente,
+        dateValidation: soldeToutDeSuite ? dateVente : null,
+        enregistrePar: userActif?.nom || "—",
+      }, ...prev]);
+    }
+
     const nouvelleVente = {
       ...v,
       id: nextVente,
@@ -3422,7 +3494,8 @@ export default function App() {
       total: totalVenteCalcule,
       vendeur: nomBoutique,
       boutique: nomBoutique,
-      statut: "en attente",
+      statut: v.credit ? "crédit" : "en attente",
+      creditId: idCreditLie, // lien inverse : quand la secrétaire confirme le paiement total, le crédit se solde aussi
       date: dateVente,
     };
 
@@ -3455,6 +3528,21 @@ export default function App() {
       venteValidee = { ...v, statut: "payée", total };
       return venteValidee;
     }));
+
+    // Vente à crédit : si la secrétaire confirme le paiement total, le crédit lié se solde aussi
+    if (venteValidee?.creditId) {
+      const maintenant = new Date();
+      const dateValidation = maintenant.toLocaleDateString("fr-FR") + " à " + maintenant.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+      setCredits(prev => prev.map(c => {
+        if (c.id !== venteValidee.creditId) return c;
+        const payeAvant = (c.versements || []).reduce((s, v) => s + (v.montant || 0), 0);
+        const reste = Math.max(0, (c.montant || 0) - payeAvant);
+        const versements = reste > 0
+          ? [...(c.versements || []), { montant: reste, date: dateValidation, par: userActif?.nom || "—" }]
+          : (c.versements || []);
+        return { ...c, versements, statut: "payé", dateValidation: c.dateValidation || dateValidation };
+      }));
+    }
 
     if (venteValidee) {
       // Mise à jour de la vente en ligne (prix réels + statut payée) — plus de doublon à 0 FCFA
@@ -3507,11 +3595,23 @@ export default function App() {
 
   const validerCredit = (idCredit) => {
     const mtn = new Date();
-    setCredits(prev => prev.map(c => c.id === idCredit ? {
-      ...c,
-      statut: "payé",
-      dateValidation: mtn.toLocaleDateString("fr-FR") + " à " + mtn.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }),
-    } : c));
+    const dateValidation = mtn.toLocaleDateString("fr-FR") + " à " + mtn.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+    let venteALier = null;
+    setCredits(prev => prev.map(c => {
+      if (c.id !== idCredit) return c;
+      if (c.venteId) venteALier = c.venteId;
+      return { ...c, statut: "payé", dateValidation };
+    }));
+    // Vente à crédit soldée : la commande liée passe en « payée » aussi (côté local + serveur)
+    if (venteALier != null) {
+      let venteMaj = null;
+      setVentes(prev => prev.map(v => {
+        if (v.id !== venteALier) return v;
+        venteMaj = { ...v, statut: "payée" };
+        return venteMaj;
+      }));
+      if (venteMaj) majVenteSupabase(venteMaj);
+    }
   };
 
   // La secrétaire peut fixer le prix de chaque ligne avant de confirmer
@@ -3746,13 +3846,14 @@ export default function App() {
 
       {/* Vues Métier réservées au personnel de l'entreprise */}
       {role === "vendeur" && <VueVendeur produits={produits} ventes={ventes} creerVente={creerVente}
-        categories={categories} ajouterProduitVendeur={ajouterProduitVendeur} supprimerProduitVendeur={supprimerProduitVendeur} />}
+        categories={categories} ajouterProduitVendeur={ajouterProduitVendeur} supprimerProduitVendeur={supprimerProduitVendeur} credits={credits} />}
       {role === "secretaire" && <VueSecretaire ventes={ventes} confirmerPaiement={confirmerPaiement} majPrixLigne={majPrixLigne} modePrix={modePrix} entreprise={entreprise}
         credits={credits} ajouterCredit={ajouterCredit} ajouterVersement={ajouterVersement} validerCredit={validerCredit} />}
       {role === "vendeur-secretaire" && (
         <VueVendeurSecretaire produits={produits} marques={marques} ventes={ventes} creerVente={creerVente}
           confirmerPaiement={confirmerPaiement} majPrixLigne={majPrixLigne} modePrix={modePrix} entreprise={entreprise}
-          credits={credits} ajouterCredit={ajouterCredit} ajouterVersement={ajouterVersement} validerCredit={validerCredit} />
+          credits={credits} ajouterCredit={ajouterCredit} ajouterVersement={ajouterVersement} validerCredit={validerCredit}
+          categories={categories} ajouterProduitVendeur={ajouterProduitVendeur} supprimerProduitVendeur={supprimerProduitVendeur} />
       )}
       {role === "admin" && (
         <VueAdmin produits={produits} setProduits={setProduits} marques={marques} setMarques={setMarques}
