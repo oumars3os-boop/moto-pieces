@@ -443,17 +443,6 @@ function Produit({ p, onAjout, onRetirer, admin, onEditer, categories, qteDansPa
               </div>
               <div className="flex items-center gap-2">
                 <Button
-                  type="button"
-                  variant="outline"
-                  className="border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 text-xs h-10 font-bold"
-                  onClick={() => {
-                    if (onNegocierPrix) onNegocierPrix(p);
-                    setOpenDetail(false);
-                  }}
-                >
-                  🤝 Négocier
-                </Button>
-                <Button
                   disabled={p.stock === 0}
                   className="bg-blue-600 hover:bg-blue-700 text-white px-4 h-10 font-bold"
                   onClick={() => { ajouterLocal(); setOpenDetail(false); }}
@@ -3062,7 +3051,7 @@ function TalkieWalkie({ role, userActif, comptes }) {
       {/* Gros bouton flottant du talkie-walkie */}
       {!ouvert && (
         <button
-          className="fixed bottom-6 left-4 z-50 w-16 h-16 rounded-full bg-zinc-900 hover:bg-zinc-800 text-white text-2xl shadow-2xl border-4 border-white active:scale-95 transition"
+          className="fixed bottom-6 right-4 z-50 w-16 h-16 rounded-full bg-zinc-900 hover:bg-zinc-800 text-white text-2xl shadow-2xl border-4 border-white active:scale-95 transition"
           onClick={() => setOuvert(true)}
           aria-label="Talkie-walkie">
           🎙️
@@ -3071,7 +3060,7 @@ function TalkieWalkie({ role, userActif, comptes }) {
 
       {/* Écran du talkie-walkie */}
       {ouvert && (
-        <Card className="fixed bottom-2 left-2 right-2 sm:right-auto sm:left-4 sm:w-[400px] z-50 h-[65vh] max-h-[540px] bg-white border shadow-2xl rounded-2xl flex flex-col overflow-hidden">
+        <Card className="fixed bottom-2 left-2 right-2 sm:left-auto sm:right-4 sm:w-[400px] z-50 h-[65vh] max-h-[540px] bg-white border shadow-2xl rounded-2xl flex flex-col overflow-hidden">
           <div className="bg-zinc-900 text-white p-3 flex items-center justify-between">
             <div className="font-bold">🎙️ Talkie-Walkie {enEmission ? "(EN DIRECT 🔴)" : ""}</div>
             <button className="text-white/70 hover:text-white text-lg" onClick={() => { arreter(); setOuvert(false); }}>✕</button>
@@ -3435,9 +3424,7 @@ function MessagerieEquipe({ role, userActif, comptes }) {
   const animEnvoiRef = useRef(null);
   const finListeRef = useRef(null);
   const inputPhotoCamRef = useRef(null);
-  const inputPhotoImportRef = useRef(null);
-  const inputVideoCamRef = useRef(null);
-  const inputVideoImportRef = useRef(null);
+  const inputFichierImportRef = useRef(null);
   const connusRef = useRef(new Set());
 
   const monTel = (userActif?.tel || "").trim();
@@ -3605,6 +3592,13 @@ function MessagerieEquipe({ role, userActif, comptes }) {
     }
   };
 
+  // Importer un fichier : une seule option pour tout (photo OU vidéo, le fichier décide tout seul)
+  const importerFichier = (e) => {
+    const fichier = e.target.files?.[0];
+    if (!fichier) return;
+    if ((fichier.type || "").startsWith("video")) choisirVideo(e);
+    else choisirPhoto(e);
+  };
   const choisirPhoto = async (e) => {
     const fichier = e.target.files?.[0];
     e.target.value = "";
@@ -3828,13 +3822,9 @@ function MessagerieEquipe({ role, userActif, comptes }) {
           <div className="p-2 border-t bg-white">
             <div className="flex flex-wrap gap-1 mb-1">
               <input ref={inputPhotoCamRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={choisirPhoto} />
-              <input ref={inputPhotoImportRef} type="file" accept="image/*" className="hidden" onChange={choisirPhoto} />
-              <input ref={inputVideoCamRef} type="file" accept="video/*" capture="environment" className="hidden" onChange={choisirVideo} />
-              <input ref={inputVideoImportRef} type="file" accept="video/*" className="hidden" onChange={choisirVideo} />
-              <Button size="sm" variant="outline" className="border-green-300 text-green-700 hover:bg-green-50" onClick={() => inputPhotoCamRef.current?.click()}>📷 Caméra (photo)</Button>
-              <Button size="sm" variant="outline" onClick={() => inputPhotoImportRef.current?.click()}>🖼️ Importer photo</Button>
-              <Button size="sm" variant="outline" className="border-green-300 text-green-700 hover:bg-green-50" onClick={() => inputVideoCamRef.current?.click()}>🎥 Caméra (vidéo)</Button>
-              <Button size="sm" variant="outline" onClick={() => inputVideoImportRef.current?.click()}>🎬 Importer vidéo</Button>
+              <input ref={inputFichierImportRef} type="file" accept="image/*,video/*" className="hidden" onChange={importerFichier} />
+              <Button size="sm" variant="outline" className="border-green-300 text-green-700 hover:bg-green-50" onClick={() => inputPhotoCamRef.current?.click()}>📷 Appareil photo</Button>
+              <Button size="sm" variant="outline" onClick={() => inputFichierImportRef.current?.click()}>📥 Importer un fichier</Button>
             </div>
             <div className="flex items-center gap-1">
               <Input
@@ -3867,403 +3857,6 @@ function MessagerieEquipe({ role, userActif, comptes }) {
         </Card>
       )}
     </div>
-  );
-}
-
-function ChatFlottant({ userActif, entreprise, role, openChat, setOpenChat, articleNegociation }) {
-  const [open, setOpen] = useState(false);
-  const [canal, setCanal] = useState("assistance"); // "assistance" | "negociation" | "developpeur"
-  const [messages, setMessages] = useState(() => {
-    try {
-      const s = localStorage.getItem("motopieces_chat_messages");
-      return s ? JSON.parse(s) : [
-        { id: 1, canal: "assistance", auteur: "Assistance MotoPièces", texte: "Bonjour ! Comment pouvons-nous vous aider aujourd'hui ?", date: "09:00", audioUrl: null }
-      ];
-    } catch {
-      return [
-        { id: 1, canal: "assistance", auteur: "Assistance MotoPièces", texte: "Bonjour ! Comment pouvons-nous vous aider aujourd'hui ?", date: "09:00", audioUrl: null }
-      ];
-    }
-  });
-
-  // Ouverture automatique et passage en canal négociation lorsqu'un client clique sur "Négocier"
-  useEffect(() => {
-    if (openChat) {
-      setOpen(true);
-      setCanal("negociation");
-    }
-  }, [openChat, articleNegociation]);
-
-  const [texte, setTexte] = useState("");
-  const [enEnregistrement, setEnEnregistrement] = useState(false);
-  const [dureeVocal, setDureeVocal] = useState(0);
-  const [enAnalyseOcr, setEnAnalyseOcr] = useState(false);
-  const mediaRecorderRef = useRef(null);
-  const audioChunksRef = useRef([]);
-  const timerVocalRef = useRef(null);
-  const chatEndRef = useRef(null);
-
-  const scannerImageOcr = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    setEnAnalyseOcr(true);
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-      const resultData = await extraireTexteImage(event.target.result);
-      setEnAnalyseOcr(false);
-
-      if (resultData.success && resultData.text) {
-        const refs = resultData.references.length > 0 ? ` (Réf : ${resultData.references.join(", ")})` : "";
-        setTexte((prev) => (prev ? `${prev} ${resultData.text}` : `🔍 [OCR] ${resultData.text}${refs}`));
-      } else {
-        alert("Aucun texte ou référence n'a pu être extrait de cette photo.");
-      }
-    };
-    reader.readAsDataURL(file);
-    e.target.value = "";
-  };
-
-  const estPersonnel = role === "vendeur" || role === "secretaire" || role === "vendeur-secretaire" || role === "admin";
-
-  useEffect(() => {
-    try {
-      // Correctif : les URLs audio (blob:) sont invalides après rechargement, on ne les sauvegarde pas
-      const aSauvegarder = messages.map(m => (m.audioUrl ? { ...m, audioUrl: null, texte: m.texte || "🎤 Message vocal" } : m));
-      localStorage.setItem("motopieces_chat_messages", JSON.stringify(aSauvegarder));
-    } catch {}
-    if (chatEndRef.current) {
-      chatEndRef.current.scrollIntoView({ behavior: "smooth" });
-    }
-  }, [messages, open, canal]);
-
-  // Démarrer l'enregistrement vocal via le micro
-  const demarrerEnregistrement = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      audioChunksRef.current = [];
-      const mediaRecorder = new MediaRecorder(stream);
-      mediaRecorderRef.current = mediaRecorder;
-
-      mediaRecorder.ondataavailable = (e) => {
-        if (e.data.size > 0) audioChunksRef.current.push(e.data);
-      };
-
-      mediaRecorder.onstop = () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm" });
-        const audioUrl = URL.createObjectURL(audioBlob);
-        envoyerVocal(audioUrl);
-        stream.getTracks().forEach(track => track.stop());
-      };
-
-      mediaRecorder.start();
-      setEnEnregistrement(true);
-      setDureeVocal(0);
-
-      timerVocalRef.current = setInterval(() => {
-        setDureeVocal((prev) => prev + 1);
-      }, 1000);
-    } catch (err) {
-      alert("Accès au microphone requis pour envoyer un message vocal.");
-    }
-  };
-
-  // Arrêter l'enregistrement vocal
-  const arreterEnregistrement = () => {
-    if (mediaRecorderRef.current && enEnregistrement) {
-      mediaRecorderRef.current.stop();
-      setEnEnregistrement(false);
-      clearInterval(timerVocalRef.current);
-    }
-  };
-
-  // Envoyer un message texte
-  const envoyerTexte = (e) => {
-    if (e) e.preventDefault();
-    const messageContenu = texte.trim();
-    if (!messageContenu) return;
-
-    const nouveauMsg = {
-      id: Date.now(),
-      canal,
-      auteur: userActif?.nom || "Client",
-      texte: messageContenu,
-      audioUrl: null,
-      date: new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }),
-    };
-
-    setMessages((prev) => [...prev, nouveauMsg]);
-    setTexte("");
-
-    // Appel à l'IA Mistral pour générer une réponse intelligente en temps réel
-    setTimeout(async () => {
-      let reponseAuteur = "🤖 IA MotoPièces (Mistral)";
-      let systemPrompt = "Tu es l'Assistant IA virtuel de la plateforme MotoPièces. Tu réponds poliment, clairement et brièvement en français aux clients sur les pièces détachées de moto (moteur, freins, bougies, kit chaîne, batteries) et les commandes.";
-
-      if (canal === "negociation") {
-        reponseAuteur = `🤖 Vendeur (${articleNegociation?.boutique || "MotoPièces"})`;
-        systemPrompt = `Tu es le gérant commercial de la boutique ${articleNegociation?.boutique || "MotoPièces"}. Un client souhaite négocier le prix de l'article ${articleNegociation?.nom || "pièce moto"} (Prix affiché: ${articleNegociation?.prix || "à négocier"} FCFA). Réponds-lui poliment avec une contre-proposition commerciale avantageuse et courte.`;
-      } else if (canal === "developpeur") {
-        reponseAuteur = "👨‍💻 Support Développeur Platform";
-        systemPrompt = "Tu es l'Ingénieur Support Développeur de la plateforme MotoPièces. Tu réponds aux vendeurs et administrateurs sur les fonctionnalités techniques de l'application.";
-      }
-
-      const reponseIA = await demanderAssistantMistral(
-        [{ role: "user", content: messageContenu }],
-        systemPrompt
-      );
-
-      const reponseTexte = reponseIA || (canal === "negociation"
-        ? `Offre reçue concernant ${articleNegociation?.nom || "votre demande"}. Notre vendeur étudie votre prix.`
-        : "Merci pour votre message ! Notre équipe étudie votre demande.");
-
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: Date.now() + 1,
-          canal,
-          auteur: reponseAuteur,
-          texte: reponseTexte,
-          audioUrl: null,
-          date: new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }),
-        },
-      ]);
-    }, 800);
-  };
-
-  // Envoyer la note vocale enregistrée
-  const envoyerVocal = (audioUrl) => {
-    const nouveauMsg = {
-      id: Date.now(),
-      canal,
-      auteur: userActif?.nom || "Client",
-      texte: `🎙️ Message vocal (${dureeVocal}s)`,
-      audioUrl,
-      date: new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }),
-    };
-
-    setMessages((prev) => [...prev, nouveauMsg]);
-
-    setTimeout(() => {
-      let reponseAuteur = "Assistance MotoPièces";
-      let reponseTexte = "Bien reçu votre note vocale ! Notre équipe écoute votre demande.";
-
-      if (canal === "negociation") {
-        reponseAuteur = `Vendeur (${articleNegociation?.boutique || "MotoPièces"})`;
-        reponseTexte = "Note vocale reçue par le vendeur. Nous étudions votre négociation de prix.";
-      } else if (canal === "developpeur") {
-        reponseAuteur = "👨‍💻 Support Développeur Platform";
-        reponseTexte = "Note vocale d'assistance technique transmise au développeur.";
-      }
-
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: Date.now() + 1,
-          canal,
-          auteur: reponseAuteur,
-          texte: reponseTexte,
-          audioUrl: null,
-          date: new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }),
-        },
-      ]);
-    }, 1500);
-  };
-
-  const messagesFiltres = messages.filter((m) => (m.canal || "assistance") === canal);
-
-  return (
-    <>
-      {/* Bouton Flottant Fixe en Bas à Droite */}
-      <div className="fixed bottom-6 right-6 z-50">
-        <Button
-          onClick={() => {
-            const nextState = !open;
-            setOpen(nextState);
-            if (!nextState && setOpenChat) setOpenChat(false);
-          }}
-          className="h-14 w-14 rounded-full bg-blue-600 hover:bg-blue-700 text-white shadow-2xl flex items-center justify-center transition-transform active:scale-90 border-2 border-white"
-          title="Ouvrir le Chat & Messagerie Vocale"
-        >
-          {open ? <span className="text-xl font-bold">✕</span> : <span className="text-2xl">💬</span>}
-        </Button>
-      </div>
-
-      {/* Fenêtre de Chat / Messagerie Instantanée Routée */}
-      {open && (
-        <Card className="fixed bottom-24 right-4 sm:right-6 z-50 w-[92vw] sm:w-[390px] h-[500px] bg-white border shadow-2xl rounded-2xl flex flex-col overflow-hidden animate-in slide-in-from-bottom-5">
-          {/* En-tête du Chat */}
-          <div className="bg-zinc-900 text-white p-3 px-4 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <span className="w-2.5 h-2.5 rounded-full bg-green-500 animate-pulse"></span>
-              <div>
-                <p className="font-bold text-sm leading-tight">💬 Chat {entreprise?.nom || "MotoPièces"}</p>
-                <p className="text-[10px] text-zinc-400">Routage dynamique par rôle</p>
-              </div>
-            </div>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="text-zinc-400 hover:text-white h-7 w-7 p-0"
-              onClick={() => {
-                setOpen(false);
-                if (setOpenChat) setOpenChat(false);
-              }}
-            >
-              ✕
-            </Button>
-          </div>
-
-          {/* Sélecteur de Canaux selon le Rôle */}
-          <div className="flex items-center border-b bg-zinc-100 p-1 gap-1 text-xs">
-            <button
-              onClick={() => setCanal("assistance")}
-              className={`flex-1 py-1.5 px-1.5 rounded font-medium transition ${
-                canal === "assistance" ? "bg-white text-blue-700 shadow-sm font-bold" : "text-zinc-600 hover:bg-zinc-200"
-              }`}
-            >
-              💬 Assistance
-            </button>
-            <button
-              onClick={() => setCanal("negociation")}
-              className={`flex-1 py-1.5 px-1.5 rounded font-medium transition ${
-                canal === "negociation" ? "bg-white text-blue-700 shadow-sm font-bold" : "text-zinc-600 hover:bg-zinc-200"
-              }`}
-            >
-              🤝 Négociation
-            </button>
-            {estPersonnel && (
-              <button
-                onClick={() => setCanal("developpeur")}
-                className={`flex-1 py-1.5 px-1.5 rounded font-medium transition ${
-                  canal === "developpeur" ? "bg-white text-amber-800 shadow-sm font-bold" : "text-zinc-600 hover:bg-zinc-200"
-                }`}
-              >
-                👨‍💻 Développeur
-              </button>
-            )}
-          </div>
-
-          {/* Info sur l'article en cours de négociation */}
-          {canal === "negociation" && articleNegociation && (
-            <div className="p-2 px-3 bg-amber-50 border-b border-amber-200 text-xs flex items-center justify-between">
-              <span className="truncate font-semibold text-amber-900">
-                📦 {articleNegociation.nom} ({articleNegociation.prix ? `${articleNegociation.prix.toLocaleString("fr-FR")} FCFA` : "Prix à négocier"})
-              </span>
-              <Badge className="bg-amber-600 text-white text-[9px] shrink-0">🏪 {articleNegociation.boutique || "MotoPièces"}</Badge>
-            </div>
-          )}
-
-          {/* Liste des Messages du Canal Sélectionné */}
-          <ScrollArea className="flex-1 p-3 space-y-3 bg-zinc-50">
-            {messagesFiltres.length === 0 ? (
-              <p className="text-xs text-zinc-400 py-8 text-center">
-                Aucun message dans ce canal. Envoyez votre premier message ou note vocale ci-dessous !
-              </p>
-            ) : (
-              messagesFiltres.map((m) => {
-                const estMoi = m.auteur === (userActif?.nom || "Client");
-                return (
-                  <div
-                    key={m.id}
-                    className={`flex flex-col mb-3 ${estMoi ? "items-end" : "items-start"}`}
-                  >
-                    <span className="text-[10px] text-zinc-400 mb-0.5 px-1">{m.auteur} • {m.date}</span>
-                    <div
-                      className={`p-3 rounded-2xl max-w-[85%] text-xs shadow-sm ${
-                        estMoi
-                          ? "bg-blue-600 text-white rounded-br-none"
-                          : "bg-white text-zinc-900 border rounded-bl-none"
-                      }`}
-                    >
-                      <p className="font-medium">{m.texte}</p>
-                      {m.audioUrl && (
-                        <audio controls src={m.audioUrl} className="mt-2 w-full max-w-[220px] h-8 rounded" />
-                      )}
-                    </div>
-                  </div>
-                );
-              })
-            )}
-            <div ref={chatEndRef} />
-          </ScrollArea>
-
-          {/* Barre de Saisie, Scanner OCR & Option Vocale */}
-          <div className="p-2 border-t bg-white flex flex-col gap-1.5">
-            {enAnalyseOcr && (
-              <div className="p-2 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800 font-medium animate-pulse flex items-center justify-between">
-                <span>🔍 Analyse OCR de la photo... Extraction des références...</span>
-              </div>
-            )}
-            {enEnregistrement ? (
-              <div className="flex items-center justify-between p-2 bg-red-50 border border-red-200 rounded-lg animate-pulse">
-                <span className="text-xs text-red-600 font-bold flex items-center gap-2">
-                  🔴 Enregistrement vocal ({dureeVocal}s)
-                </span>
-                <Button
-                  size="sm"
-                  className="bg-red-600 hover:bg-red-700 text-white text-xs h-8 px-3 font-bold"
-                  onClick={arreterEnregistrement}
-                >
-                  ⏹️ Envoyer le vocal
-                </Button>
-              </div>
-            ) : (
-              <form onSubmit={envoyerTexte} className="flex items-center gap-1.5">
-                <input
-                  type="file"
-                  accept="image/*"
-                  capture="environment"
-                  className="hidden"
-                  id="chat-ocr-file"
-                  onChange={scannerImageOcr}
-                />
-                <Input
-                  value={texte}
-                  onChange={(e) => setTexte(e.target.value)}
-                  placeholder={
-                    canal === "negociation"
-                      ? "Proposez votre prix au vendeur..."
-                      : canal === "developpeur"
-                      ? "Message d'assistance technique..."
-                      : "Écrivez un message..."
-                  }
-                  className="flex-1 text-xs h-9"
-                />
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  className="h-9 px-2 text-xs border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100"
-                  onClick={() => document.getElementById("chat-ocr-file").click()}
-                  title="Scanner le texte ou la référence d'une photo (OCR)"
-                >
-                  🔍 OCR
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  className="h-9 px-2 text-xs border-blue-200 text-blue-700 hover:bg-blue-50"
-                  onClick={demarrerEnregistrement}
-                  title="Envoyer un message vocal"
-                >
-                  🎙️
-                </Button>
-                <Button
-                  type="submit"
-                  size="sm"
-                  className="h-9 bg-blue-600 hover:bg-blue-700 text-white text-xs px-3 font-bold"
-                  disabled={!texte.trim()}
-                >
-                  Envoyer
-                </Button>
-              </form>
-            )}
-          </div>
-        </Card>
-      )}
-    </>
   );
 }
 
@@ -5332,16 +4925,6 @@ export default function App() {
           cases={cases} setCases={setCases}
           chefEquipe={userActif?.tel} />
       )}
-
-      {/* Bouton Flottant & Chat Routé par Rôle avec Option Vocale */}
-      <ChatFlottant
-        userActif={userActif}
-        entreprise={entreprise}
-        role={role}
-        openChat={openChat}
-        setOpenChat={setOpenChat}
-        articleNegociation={articleNegociation}
-      />
 
       {/* Talkie-walkie vocal : visible uniquement pour l'administrateur et les vendeurs */}
       {/* Messagerie d'équipe type WhatsApp : visible uniquement pour l'administrateur et les vendeurs */}
