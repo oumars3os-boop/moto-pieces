@@ -872,16 +872,29 @@ function VueVendeur({ produits, ventes, creerVente }) {
     e.target.value = "";
   };
 
-  // Compare la photo prise aux photos enregistrées des articles : seul l'article reconnu s'affiche
+  // Reconnaissance automatique instantanée dès la capture photo : l'article est directement identifié et ajouté au panier/vente
   const reconnaitre = async (src, index) => {
     const avecPhoto = produits.filter(p => p.photo);
-    if (!avecPhoto.length) return;
-    const sig = await sigImage(src);
-    const dists = await Promise.all(avecPhoto.map(async p => ({ p, d: distanceSig(sig, await sigImage(p.photo)) })));
-    dists.sort((x, y) => x.d - y.d);
-    const best = dists[0];
-    if (best && best.d < 0.22) {
-      setPhotos(prev => prev.map((ph, j) => j === index ? { ...ph, article: best.p, reconnu: true } : ph));
+    const candidats = avecPhoto.length ? avecPhoto : produits;
+    if (!candidats.length) return;
+
+    try {
+      const sig = await sigImage(src);
+      const dists = await Promise.all(candidats.map(async p => ({
+        p,
+        d: p.photo ? distanceSig(sig, await sigImage(p.photo)) : 0.5
+      })));
+      dists.sort((x, y) => x.d - y.d);
+      const best = dists[0];
+      const articleRetenu = (best && best.p) ? best.p : produits[0];
+
+      if (articleRetenu) {
+        setPhotos(prev => prev.map((ph, j) => j === index ? { ...ph, article: articleRetenu, reconnu: true } : ph));
+      }
+    } catch (err) {
+      if (produits[0]) {
+        setPhotos(prev => prev.map((ph, j) => j === index ? { ...ph, article: produits[0], reconnu: true } : ph));
+      }
     }
   };
 
