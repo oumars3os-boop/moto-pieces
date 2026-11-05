@@ -2873,6 +2873,9 @@ function TalkieWalkie({ role, userActif, comptes }) {
   const fluxRef = useRef(null);
   const audioRef = useRef(null);
   const enEmissionRef = useRef(false);
+  const [niveau, setNiveau] = useState(0); // 0 à 1 : force de la voix (pour les barres animées)
+  const analyseurRef = useRef(null);
+  const boucleAnimRef = useRef(null);
 
   const monTel = (userActif?.tel || "").trim();
   const monNom = userActif?.nom || "Moi";
@@ -3008,6 +3011,40 @@ function TalkieWalkie({ role, userActif, comptes }) {
       const flux = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
       if (!enEmissionRef.current) { flux.getTracks().forEach(t => t.stop()); return; }
       fluxRef.current = flux;
+      // Analyse du son du micro : sert à faire bouger les barres (preuve que le micro entend la voix)
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const src = ctx.createMediaStreamSource(flux);
+        const an = ctx.createAnalyser(); an.fftSize = 512;
+        src.connect(an);
+        analyseurRef.current = { ctx, an };
+        const donnees = new Uint8Array(an.frequencyBinCount);
+        boucleAnimRef.current = setInterval(() => {
+          try {
+            an.getByteFrequencyData(donnees);
+            let somme = 0;
+            for (let i = 0; i < donnees.length; i++) somme += donnees[i];
+            setNiveau(Math.min(1, (somme / donnees.length) / 90));
+          } catch {}
+        }, 100);
+      } catch {}
+      // Analyse du son du micro : sert à faire bouger les barres (preuve que le micro entend la voix)
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const src = ctx.createMediaStreamSource(flux);
+        const an = ctx.createAnalyser(); an.fftSize = 512;
+        src.connect(an);
+        analyseurRef.current = { ctx, an };
+        const donnees = new Uint8Array(an.frequencyBinCount);
+        boucleAnimRef.current = setInterval(() => {
+          try {
+            an.getByteFrequencyData(donnees);
+            let somme = 0;
+            for (let i = 0; i < donnees.length; i++) somme += donnees[i];
+            setNiveau(Math.min(1, (somme / donnees.length) / 90));
+          } catch {}
+        }, 100);
+      } catch {}
       const telsEquipe = membresEquipe.map(c => (c.tel || "").trim());
       const telsAdmins = lesAdmins.map(c => (c.tel || "").trim());
       const cibles = (destinataire === "equipe"
@@ -3049,6 +3086,10 @@ function TalkieWalkie({ role, userActif, comptes }) {
     pcsRef.current = {};
     try { fluxRef.current?.getTracks().forEach(t => t.stop()); } catch {}
     fluxRef.current = null;
+    if (boucleAnimRef.current) { clearInterval(boucleAnimRef.current); boucleAnimRef.current = null; }
+    try { analyseurRef.current?.ctx?.close?.(); } catch {}
+    analyseurRef.current = null;
+    setNiveau(0);
     setEnEmission(false);
   };
 
@@ -3115,10 +3156,18 @@ function TalkieWalkie({ role, userActif, comptes }) {
             <p>3️⃣ Tu relâches : le micro se coupe automatiquement, la conversation s'arrête.</p>
           </div>
 
-          {/* Gros bouton : maintenir pour parler en direct */}
+          {/* Le bouton passe au VERT dès que quelqu'un de la destination a ouvert son talkie (il nous attend), sinon il reste ROUGE */}
+          {(() => {
+            const presents = connectes.map(c => (c.tel || "").trim()).filter(Boolean);
+            const ecoute = destinataire === "equipe"
+              ? presents.some(t => membresEquipe.some(c => (c.tel || "").trim() === t) || clientsTels.includes(t))
+              : destinataire === "admins"
+                ? presents.some(t => lesAdmins.some(c => (c.tel || "").trim() === t))
+                : presents.includes(destinataire);
+            return (
           <div className="p-3 border-t bg-white">
             <button
-              className={"w-full py-6 rounded-xl text-white font-bold text-lg shadow-md select-none " + (enEmission ? "bg-red-700 animate-pulse" : "bg-red-600 hover:bg-red-700")}
+              className={"w-full py-6 rounded-xl text-white font-bold text-lg shadow-md select-none " + (enEmission ? "bg-red-700 animate-pulse" : ecoute ? "bg-green-600 hover:bg-green-700" : "bg-red-600 hover:bg-red-700")}
               style={{ touchAction: "none" }}
               onPointerDown={(e) => {
                 e.preventDefault();
@@ -3130,10 +3179,22 @@ function TalkieWalkie({ role, userActif, comptes }) {
               onPointerLeave={arreter}
               onLostPointerCapture={arreter}
               onContextMenu={(e) => e.preventDefault()}>
-              {enEmission ? "🔴 EN DIRECT… relâche pour couper" : "🎙️ MAINTIENS et PARLE (direct)"}
+              {enEmission
+                ? (<span className="flex flex-col items-center gap-1">
+                    <span className="flex items-end justify-center gap-1 h-7">
+                  {[0.45, 0.75, 1, 0.75, 0.45].map((c, i) => (
+                    <span key={i} className="w-2 rounded-sm bg-white inline-block" style={{ height: Math.max(4, Math.round(niveau * 26 * c)) + "px", transition: "height 0.1s" }} />
+                  ))}
+                </span>
+                    <span>🔴 MIC ACTIF — ils t'entendent… relâche pour couper</span>
+                  </span>)
+                : ecoute ? "🎙️ MAINTIENS et PARLE — on t'attend ✅"
+                : "🔴 Personne n'est en ligne (ouvre son talkie)"}
             </button>
             {info && <p className="text-xs mt-2 text-zinc-700">{info}</p>}
           </div>
+            );
+          })()}
         </Card>
       )}
 
@@ -3159,6 +3220,9 @@ function TalkieClientArticle({ article, userActif, comptes }) {
   const fluxRef = useRef(null);
   const audioRef = useRef(null);
   const enEmissionRef = useRef(false);
+  const [niveau, setNiveau] = useState(0); // 0 à 1 : force de la voix (pour les barres animées)
+  const analyseurRef = useRef(null);
+  const boucleAnimRef = useRef(null);
 
   const monTel = (userActif?.tel || "").trim();
   const monNom = (userActif?.nom || "Client").trim();
@@ -3317,6 +3381,10 @@ function TalkieClientArticle({ article, userActif, comptes }) {
     pcsRef.current = {};
     try { fluxRef.current?.getTracks().forEach(t => t.stop()); } catch {}
     fluxRef.current = null;
+    if (boucleAnimRef.current) { clearInterval(boucleAnimRef.current); boucleAnimRef.current = null; }
+    try { analyseurRef.current?.ctx?.close?.(); } catch {}
+    analyseurRef.current = null;
+    setNiveau(0);
     setEnEmission(false);
   };
 
@@ -3356,7 +3424,7 @@ function TalkieClientArticle({ article, userActif, comptes }) {
                 : "🎧 En ligne : " + connectes.map(c => c.nom || c.tel).join(", ")}
             </div>
             <button
-              className={"w-full py-6 rounded-xl text-white font-bold text-lg shadow-md select-none " + (enEmission ? "bg-red-700 animate-pulse" : "bg-green-600 hover:bg-green-700")}
+              className={"w-full py-6 rounded-xl text-white font-bold text-lg shadow-md select-none " + (enEmission ? "bg-red-700 animate-pulse" : connectes.length > 0 ? "bg-green-600 hover:bg-green-700" : "bg-red-600 hover:bg-red-700")}
               style={{ touchAction: "none" }}
               onPointerDown={(e) => { e.preventDefault(); try { e.currentTarget.setPointerCapture(e.pointerId); } catch {} demarrer(); }}
               onPointerUp={arreter}
@@ -3364,7 +3432,17 @@ function TalkieClientArticle({ article, userActif, comptes }) {
               onPointerLeave={arreter}
               onLostPointerCapture={arreter}
               onContextMenu={(e) => e.preventDefault()}>
-              {enEmission ? "🔴 EN DIRECT… relâche pour couper" : "🎙️ MAINTIENS et PARLE à la boutique"}
+              {enEmission
+                ? (<span className="flex flex-col items-center gap-1">
+                    <span className="flex items-end justify-center gap-1 h-7">
+                  {[0.45, 0.75, 1, 0.75, 0.45].map((c, i) => (
+                    <span key={i} className="w-2 rounded-sm bg-white inline-block" style={{ height: Math.max(4, Math.round(niveau * 26 * c)) + "px", transition: "height 0.1s" }} />
+                  ))}
+                </span>
+                    <span>🔴 MIC ACTIF — la boutique t'entend… relâche pour couper</span>
+                  </span>)
+                : connectes.length > 0 ? "🎙️ MAINTIENS et PARLE — la boutique t'attend ✅"
+                : "🔴 Personne de la boutique n'est en ligne"}
             </button>
             {info && <p className="text-xs mt-2 text-zinc-700">{info}</p>}
           </div>
