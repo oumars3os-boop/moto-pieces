@@ -3137,23 +3137,6 @@ function TalkieWalkie({ role, userActif, comptes }) {
           } catch {}
         }, 100);
       } catch {}
-      // Analyse du son du micro : sert à faire bouger les barres (preuve que le micro entend la voix)
-      try {
-        const ctx = new (window.AudioContext || window.webkitAudioContext)();
-        const src = ctx.createMediaStreamSource(flux);
-        const an = ctx.createAnalyser(); an.fftSize = 512;
-        src.connect(an);
-        analyseurRef.current = { ctx, an };
-        const donnees = new Uint8Array(an.frequencyBinCount);
-        boucleAnimRef.current = setInterval(() => {
-          try {
-            an.getByteFrequencyData(donnees);
-            let somme = 0;
-            for (let i = 0; i < donnees.length; i++) somme += donnees[i];
-            setNiveau(Math.min(1, (somme / donnees.length) / 90));
-          } catch {}
-        }, 100);
-      } catch {}
       const telsEquipe = membresEquipe.map(c => (c.tel || "").trim());
       const telsAdmins = lesAdmins.map(c => (c.tel || "").trim());
       const cibles = (destinataire === "equipe"
@@ -3569,6 +3552,23 @@ function TalkieClientArticle({ article, userActif, comptes }) {
       const flux = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
       if (!enEmissionRef.current) { flux.getTracks().forEach(t => t.stop()); return; }
       fluxRef.current = flux;
+      // Analyse du son du micro : sert à faire bouger les barres (preuve que le micro entend la voix)
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const src = ctx.createMediaStreamSource(flux);
+        const an = ctx.createAnalyser(); an.fftSize = 512;
+        src.connect(an);
+        analyseurRef.current = { ctx, an };
+        const donnees = new Uint8Array(an.frequencyBinCount);
+        boucleAnimRef.current = setInterval(() => {
+          try {
+            an.getByteFrequencyData(donnees);
+            let somme = 0;
+            for (let i = 0; i < donnees.length; i++) somme += donnees[i];
+            setNiveau(Math.min(1, (somme / donnees.length) / 90));
+          } catch {}
+        }, 100);
+      } catch {}
       for (const tel of cibles) {
         // Connexion déjà chaude d'avant ? On envoie le son DEDANS tout de suite : ZÉRO attente.
         const ancien = pcsRef.current[tel];
@@ -4028,7 +4028,18 @@ function MessagerieEquipe({ role, userActif, comptes }) {
     try {
       if (audioLectureRef.current) { try { audioLectureRef.current.pause(); } catch {} }
       const cle = m.cle || String(m.id);
-      const a = new Audio("data:audio/webm;base64," + m.contenu);
+      // iPhone enregistre en mp4, Android en webm : on reconnaît le format au début du fichier
+      const format = (m.contenu || "").slice(0, 8).startsWith("AAAA") ? "audio/mp4" : "audio/webm";
+      const a = new Audio("data:" + format + ";base64," + m.contenu);
+      // Secours : si le format choisi ne marche pas, on essaie l'autre
+      a.onerror = () => {
+        try {
+          const autre = new Audio("data:" + (format === "audio/webm" ? "audio/mp4" : "audio/webm") + ";base64," + m.contenu);
+          audioLectureRef.current = autre;
+          autre.onended = () => { audioLectureRef.current = null; setLecture(null); };
+          autre.play().catch(() => {});
+        } catch {}
+      };
       audioLectureRef.current = a;
       setLecture({ cle, courant: 0, duree: 0 });
       a.onloadedmetadata = () => setLecture(l => (l && l.cle === cle) ? { ...l, duree: a.duration } : l);
@@ -4213,6 +4224,8 @@ function MessagerieEquipe({ role, userActif, comptes }) {
                       demarrerVocal();
                     }}
                     onPointerUp={arreterVocal}
+                    onPointerCancel={arreterVocal}
+                    onPointerLeave={arreterVocal}
                     onLostPointerCapture={arreterVocal}
                     onContextMenu={(e) => e.preventDefault()}>
                     {enVocal ? "⏺" : "🎤"}
