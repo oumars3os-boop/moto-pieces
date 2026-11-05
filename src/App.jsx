@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/context/AuthContext";
-import { supabase, synchroniserCompteSupabase } from "@/lib/supabase";
+import { supabase, synchroniserCompteSupabase, enregistrerVenteSupabase, chargerVentesSupabase } from "@/lib/supabase";
 import { extraireTexteImage } from "@/lib/ocr";
 import { demanderAssistantMistral } from "@/lib/mistral";
 
@@ -2728,7 +2728,20 @@ export default function App() {
         console.warn("Notice initialisation comptes Supabase:", e);
       }
     }
+
+    async function chargerVentesEnLigne() {
+      try {
+        const ventesEnLigne = await chargerVentesSupabase();
+        if (ventesEnLigne && ventesEnLigne.length > 0) {
+          setVentes(ventesEnLigne);
+        }
+      } catch (e) {
+        console.warn("Notice chargement ventes Supabase:", e);
+      }
+    }
+
     chargerComptesSupabase();
+    chargerVentesEnLigne();
   }, []);
 
   // Synchronisation directe avec l'état d'authentification Supabase en ligne
@@ -2866,7 +2879,7 @@ export default function App() {
     }
   };
 
-  const creerVente = (v) => {
+  const creerVente = async (v) => {
     const maintenant = new Date();
     const dateVente = maintenant.toLocaleDateString("fr-FR") + " à " + maintenant.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
 
@@ -2886,6 +2899,9 @@ export default function App() {
     setVentes(prev => [nouvelleVente, ...prev]);
     setNextVente(n => n + 1);
 
+    // Enregistrement de la transaction dans la table d'historique des ventes Supabase (public.sales & public.sale_items)
+    await enregistrerVenteSupabase(nouvelleVente);
+
     // Décrément automatique du stock : 10 vendus → il reste 9
     setProduits(prev => prev.map(p => {
       const ligne = v.items.find(it => (it.p ? it.p.id : it.id) === p.id);
@@ -2895,12 +2911,18 @@ export default function App() {
     }));
   };
 
-  const confirmerPaiement = (id) => {
+  const confirmerPaiement = async (id) => {
+    let venteValidee = null;
     setVentes(prev => prev.map(v => {
       if (v.id !== id) return v;
       const total = v.items.reduce((s, it) => s + (it.prixLigne ?? (it.p ? it.p.prix : it.prix)) * (it.qte || 1), 0);
-      return { ...v, statut: "payée", total };
+      venteValidee = { ...v, statut: "payée", total };
+      return venteValidee;
     }));
+
+    if (venteValidee) {
+      await enregistrerVenteSupabase(venteValidee);
+    }
   };
 
   // La secrétaire peut fixer le prix de chaque ligne avant de confirmer
