@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/context/AuthContext";
-import { supabase, synchroniserCompteSupabase, enregistrerVenteSupabase, chargerVentesSupabase } from "@/lib/supabase";
+import { supabase, synchroniserCompteSupabase, enregistrerVenteSupabase, majVenteSupabase, chargerVentesSupabase } from "@/lib/supabase";
 import { extraireTexteImage } from "@/lib/ocr";
 import { demanderAssistantMistral } from "@/lib/mistral";
 import { verifierQualiteImage } from "@/lib/imageProcessor";
@@ -3110,11 +3110,15 @@ export default function App() {
       try {
         const ventesEnLigne = await chargerVentesSupabase();
         // Correctif : fusion avec les ventes locales au lieu de les écraser.
-        // On ignore les lignes serveur vides (total 0 sans article) qui affichaient « 0 FCFA ».
-        const lignesValides = (ventesEnLigne || []).filter(s => (Number(s.total) > 0) || (s.items || []).length > 0);
+        // On ne charge QUE les ventes réellement payées avec un total positif :
+        // les anciennes lignes « en attente » à 0 FCFA ne reviennent plus dans l'historique.
+        // On ignore aussi les ventes déjà connues localement (même identifiant serveur).
+        const lignesValides = (ventesEnLigne || []).filter(s =>
+          s.statut === "payée" && (Number(s.total) > 0) && (s.items || []).length > 0);
         if (lignesValides.length > 0) {
           setVentes(prev => {
             const idsConnus = new Set(prev.map(v => String(v.id)));
+            (prev || []).forEach(v => { if (v.supabase_id) idsConnus.add(String(v.supabase_id)); });
             const nouvelles = lignesValides.filter(s => !idsConnus.has(String(s.id)));
             return nouvelles.length ? [...nouvelles, ...prev] : prev;
           });
@@ -3305,7 +3309,13 @@ export default function App() {
     setNextVente(n => n + 1);
 
     // Enregistrement de la transaction dans la table d'historique des ventes Supabase (public.sales & public.sale_items)
-    await enregistrerVenteSupabase(nouvelleVente);
+    // On garde l'identifiant serveur (supabase_id) : à la validation, on mettra à jour CETTE ligne
+    // (total réel + prix réels) au lieu d'insérer une seconde ligne à 0 FCFA.
+    const resultatSupabase = await enregistrerVenteSupabase(nouvelleVente);
+    const idSupabase = resultatSupabase?.data?.id;
+    if (idSupabase) {
+      setVentes(prev => prev.map(v => v.id === nouvelleVente.id ? { ...v, supabase_id: idSupabase } : v));
+    }
 
     // Décrément automatique du stock : 10 vendus → il reste 9
     setProduits(prev => prev.map(p => {
@@ -3326,7 +3336,8 @@ export default function App() {
     }));
 
     if (venteValidee) {
-      await enregistrerVenteSupabase(venteValidee);
+      // Mise à jour de la vente en ligne (prix réels + statut payée) — plus de doublon à 0 FCFA
+      await majVenteSupabase(venteValidee);
     }
   };
 

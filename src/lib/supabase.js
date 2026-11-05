@@ -95,6 +95,55 @@ export async function enregistrerVenteSupabase(vente) {
 }
 
 /**
+ * Met à jour une vente déjà enregistrée dans Supabase (prix et statut réels après validation),
+ * au lieu d'insérer une seconde ligne. Crée la vente si elle n'existe pas encore en ligne.
+ */
+export async function majVenteSupabase(vente) {
+  try {
+    const idSup = vente?.supabase_id;
+    const totalVente = vente.total || (vente.items || []).reduce((s, it) => {
+      const p = it.prixLigne ?? (it.p ? it.p.prix : it.prix) ?? 0;
+      return s + (p * (it.qte || 1));
+    }, 0) || 0;
+
+    if (!idSup) return enregistrerVenteSupabase(vente); // pas encore en ligne : première insertion
+
+    // 1) Mettre à jour la ligne principale (total réel + statut payée)
+    const { error: majError } = await supabase
+      .from("sales")
+      .update({
+        total: totalVente,
+        statut: vente.statut || "payée",
+        date_vente: vente.date || new Date().toLocaleString("fr-FR"),
+      })
+      .eq("id", idSup);
+
+    if (majError) {
+      console.warn("Notice mise à jour Supabase sales:", majError.message);
+      return { success: false, error: majError };
+    }
+
+    // 2) Réécrire les lignes d'articles avec les prix réels (prix fixés par le vendeur/secrétaire)
+    await supabase.from("sale_items").delete().eq("sale_id", idSup);
+    const itemsPayload = (vente.items || []).map((it) => ({
+      sale_id: idSup,
+      part_id: typeof it.p?.id === "number" ? it.p.id : (typeof it.id === "number" ? it.id : null),
+      nom: it.p?.nom || it.nom || "Article",
+      quantite: it.qte || 1,
+      prix_unitaire: it.prixLigne ?? (it.p ? it.p.prix : it.prix) ?? 0,
+    }));
+    if (itemsPayload.length > 0) {
+      const { error: itemsError } = await supabase.from("sale_items").insert(itemsPayload);
+      if (itemsError) console.warn("Notice mise à jour Supabase sale_items:", itemsError.message);
+    }
+    return { success: true };
+  } catch (err) {
+    console.warn("Erreur réseau mise à jour vente Supabase:", err);
+    return { error: err };
+  }
+}
+
+/**
  * Récupère l'historique complet des transactions terminées depuis la base de données Supabase
  */
 export async function chargerVentesSupabase() {
@@ -114,6 +163,7 @@ export async function chargerVentesSupabase() {
 
     return (sales || []).map((s) => ({
       id: s.id,
+      supabase_id: s.id,
       vendeur: s.vendeur_nom || "Vendeur",
       client: s.client_nom || "Client",
       tel: s.client_tel || "",
