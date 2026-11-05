@@ -2855,6 +2855,16 @@ function VueAdmin({
 // ---------- Composant Chat Flottant & Messagerie Routée selon Rôle ----------
 // ---------- Talkie-walkie vocal (administrateur & vendeurs uniquement) ----------
 const TALKIE_ROLES = ["admin", "vendeur", "vendeur-secretaire", "secretaire"];
+
+// Serveurs qui aident la voix à passer entre les téléphones.
+// STUN = aide à trouver le chemin direct. TURN = relais de secours quand le chemin direct
+// est bloqué par le réseau mobile (très fréquent en 4G). Sans TURN, souvent personne n'entend.
+const GLACE = [
+  { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] },
+  { urls: "turn:openrelay.metered.ca:80", username: "openrelayproject", credential: "openrelayproject" },
+  { urls: "turn:openrelay.metered.ca:443", username: "openrelayproject", credential: "openrelayproject" },
+  { urls: "turn:openrelay.metered.ca:443?transport=tcp", username: "openrelayproject", credential: "openrelayproject" },
+];
 // ---------- Talkie-walkie EN DIRECT (administrateur & vendeurs uniquement) ----------
 // On maintient le bouton : la voix sort en même temps chez les autres.
 // On relâche : le micro se coupe automatiquement, chez tout le monde.
@@ -2939,7 +2949,7 @@ function TalkieWalkie({ role, userActif, comptes }) {
     if (typeof RTCPeerConnection === "undefined") return;
     try {
       couperReception();
-      const pc = new RTCPeerConnection({ iceServers: [{ urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }] });
+      const pc = new RTCPeerConnection({ iceServers: GLACE });
       pc.onicecandidate = (e) => { if (e.candidate) signaler({ type: "cand", vers: p.de, c: e.candidate }); };
       pc.ontrack = (e) => {
         try {
@@ -3000,6 +3010,11 @@ function TalkieWalkie({ role, userActif, comptes }) {
       canal.on("broadcast", { event: "signal" }, ({ payload }) => traiterSignal(payload));
       canal.subscribe((statut) => {
         if (statut === "SUBSCRIBED") { try { canal.track({ nom: monNom, tel: monTel }); } catch {} }
+        // Si le canal tombe (réseau faible), on le jette : le chien de garde rebranche en 3 secondes max
+        if (statut === "CHANNEL_ERROR" || statut === "TIMED_OUT") {
+          try { canal.unsubscribe?.(); } catch {}
+          if (canalRef.current === canal) canalRef.current = null;
+        }
       });
     } catch (e) {
       setInfo("⚠️ Connexion du talkie impossible : " + (e?.message || e));
@@ -3017,7 +3032,7 @@ function TalkieWalkie({ role, userActif, comptes }) {
   useEffect(() => {
     if (!monTel) return;
     const verifier = () => { if (!canalRef.current) setRelance((x) => x + 1); };
-    const chien = setInterval(verifier, 8000);
+    const chien = setInterval(verifier, 3000);
     document.addEventListener("visibilitychange", verifier);
     return () => { clearInterval(chien); document.removeEventListener("visibilitychange", verifier); };
     // eslint-disable-next-line
@@ -3127,7 +3142,7 @@ function TalkieWalkie({ role, userActif, comptes }) {
         return;
       }
       for (const tel of cibles) {
-        const pc = new RTCPeerConnection({ iceServers: [{ urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }] });
+        const pc = new RTCPeerConnection({ iceServers: GLACE });
         flux.getTracks().forEach(t => pc.addTrack(t, flux));
         pc.onicecandidate = (e) => { if (e.candidate) signaler({ type: "cand", vers: tel, c: e.candidate }); };
         pcsRef.current[tel] = pc;
@@ -3334,7 +3349,7 @@ function TalkieClientArticle({ article, userActif, comptes }) {
     if (!telsEquipe.includes((p.de || "").trim())) return;
     try {
       couperReception();
-      const pc = new RTCPeerConnection({ iceServers: [{ urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }] });
+      const pc = new RTCPeerConnection({ iceServers: GLACE });
       pc.onicecandidate = (e) => { if (e.candidate) signaler({ type: "cand", vers: p.de, c: e.candidate }); };
       pc.ontrack = (e) => {
         try {
@@ -3394,6 +3409,11 @@ function TalkieClientArticle({ article, userActif, comptes }) {
       canal.on("broadcast", { event: "signal" }, ({ payload }) => traiterSignal(payload));
       canal.subscribe((statut) => {
         if (statut === "SUBSCRIBED") { try { canal.track({ nom: monNom, tel: monTel }); } catch {} }
+        // Si le canal tombe (réseau faible), on le jette : le chien de garde rebranche en 3 secondes max
+        if (statut === "CHANNEL_ERROR" || statut === "TIMED_OUT") {
+          try { canal.unsubscribe?.(); } catch {}
+          if (canalRef.current === canal) canalRef.current = null;
+        }
       });
     } catch (e) {
       setInfo("⚠️ Connexion impossible : " + (e?.message || e));
@@ -3412,7 +3432,7 @@ function TalkieClientArticle({ article, userActif, comptes }) {
   useEffect(() => {
     if (!monTel) return;
     const verifier = () => { if (!canalRef.current) setRelance((x) => x + 1); };
-    const chien = setInterval(verifier, 8000);
+    const chien = setInterval(verifier, 3000);
     document.addEventListener("visibilitychange", verifier);
     return () => { clearInterval(chien); document.removeEventListener("visibilitychange", verifier); };
     // eslint-disable-next-line
@@ -3478,7 +3498,7 @@ function TalkieClientArticle({ article, userActif, comptes }) {
       if (!enEmissionRef.current) { flux.getTracks().forEach(t => t.stop()); return; }
       fluxRef.current = flux;
       for (const tel of cibles) {
-        const pc = new RTCPeerConnection({ iceServers: [{ urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }] });
+        const pc = new RTCPeerConnection({ iceServers: GLACE });
         flux.getTracks().forEach(t => pc.addTrack(t, flux));
         pc.onicecandidate = (e) => { if (e.candidate) signaler({ type: "cand", vers: tel, c: e.candidate }); };
         pcsRef.current[tel] = pc;
