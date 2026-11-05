@@ -79,6 +79,7 @@ export async function enregistrerVenteSupabase(vente) {
         nom: it.p?.nom || it.nom || "Article",
         quantite: it.qte || 1,
         prix_unitaire: it.prixLigne ?? (it.p ? it.p.prix : it.prix) ?? 0,
+        photo: it.photo || it.p?.photo || null,
       }));
 
       const { error: itemsError } = await supabase
@@ -134,6 +135,7 @@ export async function majVenteSupabase(vente) {
       nom: it.p?.nom || it.nom || "Article",
       quantite: it.qte || 1,
       prix_unitaire: it.prixLigne ?? (it.p ? it.p.prix : it.prix) ?? 0,
+      photo: it.photo || it.p?.photo || null,
     }));
     if (itemsPayload.length > 0) {
       const { error: itemsError } = await supabase.from("sale_items").insert(itemsPayload);
@@ -178,6 +180,7 @@ export async function chargerVentesSupabase() {
         nom: it.nom,
         qte: it.quantite,
         prix: Number(it.prix_unitaire),
+        photo: it.photo || null,
       })),
     }));
   } catch (err) {

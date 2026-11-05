@@ -67,34 +67,45 @@ export default function HistoriqueGlobal({ ventes: ventesProps = [] }) {
             <div className="space-y-4">
               {ventesParJour[date].map((vente, index) => {
                 const totalMontant = vente.total || vente.montant || (vente.items || []).reduce((s, it) => s + ((it.prixLigne ?? it.prix ?? it.p?.prix ?? 0) * (it.qte || 1)), 0);
-                const premierItem = vente.items?.[0] || {};
-                const imageArticle = vente.image || premierItem.photo || premierItem.p?.photo;
+                const articles = vente.items || [];
 
                 return (
                   <div key={vente.id || index} className="flex flex-col md:flex-row justify-between items-start md:items-center bg-gray-50 p-4 rounded-lg border border-gray-100 hover:shadow-sm transition">
 
-                    {/* Détails de l'article et de la photo */}
-                    <div className="flex items-center space-x-4">
-                      {imageArticle ? (
-                        <img
-                          src={imageArticle}
-                          alt="Article scanné"
-                          className="w-16 h-16 object-cover rounded-md border shadow-sm shrink-0"
-                        />
-                      ) : (
-                        <div className="w-16 h-16 bg-gray-200 rounded-md flex items-center justify-center text-xs text-gray-500 shrink-0">
-                          📦 Pas d'image
+                    {/* Détails de la commande + TOUTES les photos des articles */}
+                    <div className="flex flex-col gap-2 w-full">
+                      <div className="flex items-center space-x-3">
+                        <div>
+                          <p className="font-bold text-gray-800">Commande #{vente.id || index + 1} — Client : {vente.client || "Comptoir"}</p>
+                          <p className="text-sm text-gray-600">
+                            👤 Vendeur : <span className="font-medium text-blue-700">{vente.vendeur || "MotoPièces"}</span> | ⏰ Date : {vente.date || "--:--"}
+                          </p>
+                          <p className="text-xs text-gray-500">
+                            Articles : {articles.length} article(s) inclus
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Toutes les photos des articles de la commande */}
+                      {articles.length > 0 && (
+                        <div className="grid grid-cols-3 sm:grid-cols-5 md:grid-cols-6 gap-2">
+                          {articles.map((it, i) => {
+                            const photoArt = it.photo || it.p?.photo || null;
+                            const nomArt = it.p?.nom || it.nom || "Article";
+                            return (
+                              <div key={i} className="bg-white rounded-md border border-gray-200 p-1.5 text-center">
+                                {photoArt ? (
+                                  <img src={photoArt} alt={nomArt} className="w-full h-16 object-cover rounded border border-gray-200" />
+                                ) : (
+                                  <div className="w-full h-16 bg-gray-200 rounded flex items-center justify-center text-lg">📦</div>
+                                )}
+                                <p className="text-[10px] font-semibold text-gray-700 mt-1 leading-tight truncate">{nomArt}</p>
+                                <p className="text-[10px] text-gray-500">{it.qte || 1} × {Number(it.prixLigne ?? it.prix ?? it.p?.prix ?? 0).toLocaleString("fr-FR")} F</p>
+                              </div>
+                            );
+                          })}
                         </div>
                       )}
-                      <div>
-                        <p className="font-bold text-gray-800">Commande #{vente.id || index + 1} — Client : {vente.client || "Comptoir"}</p>
-                        <p className="text-sm text-gray-600">
-                          👤 Vendeur : <span className="font-medium text-blue-700">{vente.vendeur || "MotoPièces"}</span> | ⏰ Date : {vente.date || "--:--"}
-                        </p>
-                        <p className="text-xs text-gray-500">
-                          Articles : {vente.items ? vente.items.length : 1} article(s) inclus
-                        </p>
-                      </div>
                     </div>
 
                     {/* Montant total et Statut de la commande */}

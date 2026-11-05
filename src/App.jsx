@@ -845,9 +845,12 @@ function VueClient({ produits, marques, creerVente, photosCategories, photosMarq
 
 // ---------- Vue Vendeur ----------
 
-function VueVendeur({ produits, ventes, creerVente }) {
+function VueVendeur({ produits, ventes, creerVente, categories, ajouterProduitVendeur, supprimerProduitVendeur }) {
   const [onglet, setOnglet] = useState("vendre");
   const [photos, setPhotos] = useState([]); // [{ src, article, qte }]
+  // Ajout des marchandises par le vendeur
+  const [npV, setNpV] = useState({ nom: "", cat: "", marque: "", prix: "", stock: "", photo: null });
+  const [msgArticle, setMsgArticle] = useState("");
   const [enAnalyse, setEnAnalyse] = useState(false);
   const [recherche, setRecherche] = useState("");
   const [identification, setIdentification] = useState(null); // index de la photo à identifier
@@ -856,6 +859,24 @@ function VueVendeur({ produits, ventes, creerVente }) {
   const [client, setClient] = useState({ nom: "", tel: "" });
   const [vendu, setVendu] = useState(false);
   const [filtreVentes, setFiltreVentes] = useState("toutes");
+  const [scanOuvert, setScanOuvert] = useState(false); // scanner caméra automatique
+
+  // Capture automatique du scanner : la photo devient un article et est reconnue tout de suite
+  const scannerCapture = (fichier) => {
+    if (!fichier) return;
+    const r = new FileReader();
+    r.onload = () => {
+      const src = r.result;
+      setPhotos(prev => {
+        const index = prev.length;
+        reconnaitre(src, index);
+        return [...prev, { src, article: null, qte: 1, reconnu: false }];
+      });
+      setEnAnalyse(true);
+      setTimeout(() => setEnAnalyse(false), 800);
+    };
+    r.readAsDataURL(fichier);
+  };
 
   const prendrePhotos = (e) => {
     const fichiers = Array.from(e.target.files || []);
@@ -974,11 +995,83 @@ function VueVendeur({ produits, ventes, creerVente }) {
     <div>
       <div className="max-w-6xl mx-auto px-4 pt-4 flex gap-2 flex-wrap">
         <Button variant={onglet === "vendre" ? "default" : "outline"} className={onglet === "vendre" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("vendre")}>📷 Vendre</Button>
+        <Button variant={onglet === "articles" ? "default" : "outline"} className={onglet === "articles" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("articles")}>🧰 Mes articles ({produits.length})</Button>
         <Button variant={onglet === "ventes" ? "default" : "outline"} className={onglet === "ventes" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("ventes")}>📋 Ventes ({ventes.length})</Button>
         <Button variant={onglet === "historique" ? "default" : "outline"} className={onglet === "historique" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("historique")}>📊 Historique Global</Button>
       </div>
 
-      {onglet === "vendre" ? (
+      {/* Onglet Mes articles : le vendeur ajoute et gère SES marchandises */}
+      {onglet === "articles" ? (
+        <div className="max-w-3xl mx-auto px-4 py-4 space-y-4">
+          <Card className="bg-white"><CardContent className="p-4 space-y-2">
+            <div className="font-semibold">➕ Ajouter un nouvel article (votre marchandise)</div>
+            <Input placeholder="Nom de l'article (ex : Bougie NG)" value={npV.nom}
+              onChange={e => { setNpV({ ...npV, nom: e.target.value }); setMsgArticle(""); }} />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <select className="h-10 rounded-md border border-zinc-300 px-3 bg-white text-sm"
+                value={npV.cat} onChange={e => setNpV({ ...npV, cat: e.target.value })}>
+                <option value="">Catégorie…</option>
+                {(categories || []).map(c => <option key={c.id} value={c.id}>{c.emoji} {c.label}</option>)}
+              </select>
+              <Input placeholder="Marque (ex : GN, CG125…)" value={npV.marque}
+                onChange={e => setNpV({ ...npV, marque: e.target.value })} />
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <Input type="number" placeholder="Prix (FCFA)" value={npV.prix}
+                onChange={e => setNpV({ ...npV, prix: e.target.value })} />
+              <Input type="number" placeholder="Stock" value={npV.stock}
+                onChange={e => setNpV({ ...npV, stock: e.target.value })} />
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground">Photo de l'article (optionnel) :</label>
+              <input type="file" accept="image/*" className="text-sm w-full mt-1"
+                onChange={e => {
+                  const f = e.target.files?.[0];
+                  if (!f) return;
+                  const fr = new FileReader();
+                  fr.onload = ev => setNpV(prev => ({ ...prev, photo: ev.target.result }));
+                  fr.readAsDataURL(f);
+                }} />
+              {npV.photo && <img src={npV.photo} alt="" className="mt-2 w-20 h-20 object-cover rounded-md border" />}
+            </div>
+            <Button className="w-full h-11 bg-blue-600 hover:bg-blue-700 text-white font-bold"
+              disabled={!npV.nom.trim() || !(Number(npV.prix) > 0)}
+              onClick={() => {
+                ajouterProduitVendeur({
+                  nom: npV.nom.trim(), cat: npV.cat || "autres", marque: npV.marque.trim() || "Autre",
+                  prix: Number(npV.prix) || 0, stock: Number(npV.stock) || 0, photo: npV.photo,
+                  desc: "", boutique: "MotoPièces Principal",
+                });
+                setNpV({ nom: "", cat: "", marque: "", prix: "", stock: "", photo: null });
+                setMsgArticle("✅ Article enregistré ! Il est maintenant disponible dans l'espace vente.");
+              }}>💾 Enregistrer l'article</Button>
+            {msgArticle && <p className="text-xs text-green-700 font-semibold">{msgArticle}</p>}
+            <p className="text-xs text-muted-foreground">L'article doit avoir un prix pour pouvoir être vendu.</p>
+          </CardContent></Card>
+
+          <div className="font-semibold text-sm">📦 Vos articles ({produits.length})</div>
+          {produits.length === 0 ? (
+            <p className="text-muted-foreground text-sm">Aucun article pour le moment. Ajoutez votre première marchandise avec le formulaire ci-dessus.</p>
+          ) : (
+            <div className="space-y-2">
+              {produits.map(p => (
+                <Card key={p.id} className="bg-white"><CardContent className="p-2 flex items-center gap-3">
+                  {p.photo ? <img src={p.photo} alt="" className="w-12 h-12 object-cover rounded-md border" />
+                    : <div className="w-12 h-12 bg-zinc-200 rounded-md flex items-center justify-center text-lg">📦</div>}
+                  <div className="flex-1 min-w-0">
+                    <div className="font-semibold text-sm truncate">{p.nom}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {(p.prix || 0).toLocaleString("fr-FR")} FCFA — Stock : {p.stock ?? 0}{p.marque ? ` — ${p.marque}` : ""}
+                    </div>
+                  </div>
+                  <Button size="sm" variant="outline" className="h-8 border-red-300 text-red-600 hover:bg-red-50"
+                    onClick={() => supprimerProduitVendeur(p.id)}>🗑️</Button>
+                </CardContent></Card>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : onglet === "vendre" ? (
         <div className="max-w-3xl mx-auto px-4 py-6">
           <Card className="bg-white">
             <CardContent className="p-6 space-y-4">
@@ -1018,16 +1111,21 @@ function VueVendeur({ produits, ventes, creerVente }) {
                   {mode === "image" && (
                   <>
                   <div className="text-center space-y-2">
-                    <div className="text-4xl">📷</div>
-                    <div className="font-semibold text-lg">Photographiez les marchandises</div>
+                    <div className="text-4xl">🔍</div>
+                    <div className="font-semibold text-lg">Scanner la marchandise</div>
                     <p className="text-sm text-muted-foreground">
-                      Vous pouvez prendre <b>plusieurs photos en même temps</b> : chaque photo devient un article de la vente et le total se calcule automatiquement.
+                      Appuyez sur le scanner et pointez la caméra sur l'objet : la photo est prise <b>automatiquement</b> et l'article est recherché tout de suite dans vos marchandises.
                     </p>
-                    <input type="file" accept="image/*" capture="environment" className="hidden" id="photos-articles" onChange={prendrePhotos} />
-                    <Button size="lg" onClick={() => document.getElementById("photos-articles").click()}>
-                      📷 Prendre les photos des articles
+                    <Button size="lg" className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-6 text-lg" onClick={() => setScanOuvert(true)}>
+                      🔍 Scanner un article
                     </Button>
                   </div>
+
+                  {scanOuvert && (
+                    <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-3 overflow-auto">
+                      <ModeRech onCaptureAuto={scannerCapture} onFermer={() => setScanOuvert(false)} />
+                    </div>
+                  )}
 
                   {enAnalyse && (
                     <div className="text-center space-y-1 border rounded-md p-4 bg-zinc-50">
@@ -1085,8 +1183,8 @@ function VueVendeur({ produits, ventes, creerVente }) {
                       </div>
 
                       <Button variant="outline" className="w-full border-dashed py-6"
-                        onClick={() => document.getElementById("photos-articles").click()}>
-                        📷 Photographier un autre article
+                        onClick={() => setScanOuvert(true)}>
+                        🔍 Scanner un autre article
                       </Button>
 
                       <div className="border rounded-md p-3 bg-amber-50 space-y-3">
@@ -1527,15 +1625,25 @@ function VueSecretaire({ ventes, confirmerPaiement, majPrixLigne, modePrix, entr
             Tel : {recuA4.tel}
           </div>
           <div className="text-[10px]">================================</div>
-          {recuA4.items.map((it, i) => (
-            <div key={i} className="text-[10px]">
-              <div className="font-semibold">{it.p ? it.p.nom : it.nom}</div>
-              <div className="flex justify-between">
-                <span>{it.qte || 1} x {((it.prixLigne ?? (it.p ? it.p.prix : it.prix))).toLocaleString("fr-FR")}</span>
-                <span>{((it.prixLigne ?? (it.p ? it.p.prix : it.prix)) * (it.qte || 1)).toLocaleString("fr-FR")} F</span>
+          {recuA4.items.map((it, i) => {
+            const photoItem = it.photo || it.p?.photo || null;
+            return (
+              <div key={i} className="flex gap-2 items-start py-1 border-b border-dotted border-zinc-300">
+                {photoItem ? (
+                  <img src={photoItem} alt="" className="w-12 h-12 object-cover rounded border border-zinc-400 shrink-0" />
+                ) : (
+                  <div className="w-12 h-12 rounded border border-dashed border-zinc-400 shrink-0 flex items-center justify-center text-[8px] text-zinc-500">📦</div>
+                )}
+                <div className="text-[10px] flex-1">
+                  <div className="font-semibold">{it.p ? it.p.nom : it.nom}</div>
+                  <div className="flex justify-between">
+                    <span>{it.qte || 1} x {((it.prixLigne ?? (it.p ? it.p.prix : it.prix))).toLocaleString("fr-FR")}</span>
+                    <span>{((it.prixLigne ?? (it.p ? it.p.prix : it.prix)) * (it.qte || 1)).toLocaleString("fr-FR")} F</span>
+                  </div>
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
           <div className="text-[10px]">================================</div>
           <div className="flex justify-between font-bold text-sm mt-1">
             <span>TOTAL</span>
@@ -1648,7 +1756,8 @@ function VueVendeurSecretaire({ produits, marques, ventes, creerVente, confirmer
         <Button variant={vue === "secretaire" ? "default" : "outline"} className={vue === "secretaire" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setVue("secretaire")}>💰 Espace secrétariat</Button>
       </div>
       {vue === "vendre"
-        ? <VueVendeur produits={produits} marques={marques} ventes={ventes} creerVente={creerVente} />
+        ? <VueVendeur produits={produits} ventes={ventes} creerVente={creerVente}
+            categories={categories} ajouterProduitVendeur={ajouterProduitVendeur} supprimerProduitVendeur={supprimerProduitVendeur} />
         : <VueSecretaire ventes={ventes} confirmerPaiement={confirmerPaiement} majPrixLigne={majPrixLigne} modePrix={modePrix} entreprise={entreprise}
             credits={credits} ajouterCredit={ajouterCredit} ajouterVersement={ajouterVersement} validerCredit={validerCredit} />}
     </div>
@@ -1797,7 +1906,7 @@ function VueAdmin({
   const confirmerMarque = (complet) => {
     const m = marqueAAjouter;
     if (m && !marques.includes(m)) setMarques(prev => [...prev, m]);
-    if (complet && m) genererMarque(m);
+    // Plus de génération automatique de pièces : le vendeur ajoute lui-même ses marchandises.
     setMarqueAAjouter(null);
   };
 
@@ -3057,7 +3166,8 @@ export default function App() {
       const s = localStorage.getItem("motopieces_produits");
       if (s) return JSON.parse(s);
     } catch {}
-    return PRODUITS.map(p => ({ ...p, code: p.code || ("ART-" + String(p.id).padStart(3, "0")), stockInit: p.stock }));
+    // Plus de catalogue par défaut : chaque vendeur ajoute ses propres marchandises.
+    return [];
   });
   const [marques, setMarques] = useState([]);
   const [categories, setCategories] = useState(CATEGORIES_DEFAUT);
@@ -3352,6 +3462,24 @@ export default function App() {
     }
   };
 
+  // ---------- Marchandises ajoutées par le vendeur ----------
+  const ajouterProduitVendeur = (p) => {
+    setProduits(prev => {
+      const id = prev.length ? Math.max(...prev.map(x => Number(x.id) || 0)) + 1 : 1;
+      return [...prev, {
+        ...p,
+        id,
+        code: "ART-" + String(id).padStart(3, "0"),
+        stockInit: Number(p.stock) || 0,
+        note: 4.0,
+      }];
+    });
+  };
+
+  const supprimerProduitVendeur = (id) => {
+    setProduits(prev => prev.filter(x => x.id !== id));
+  };
+
   // ---------- Crédits / Dettes (vendeur & secrétaire) ----------
   const ajouterCredit = (c) => {
     const maintenant = new Date();
@@ -3395,14 +3523,8 @@ export default function App() {
   };
 
   const genererMarque = (m) => {
-    let id = nextId;
-    const nouveaux = PIECES_STANDARDS.map(ps => ({
-      id: id++, nom: `${ps.nom} ${m}`, cat: ps.cat, marque: m,
-      prix: 0, stock: 10, stockInit: 10, note: 4.0, desc: `${ps.nom} pour ${m}.`,
-      code: "ART-" + String(id).padStart(3, "0"),
-    }));
-    setNextId(id);
-    setProduits(prev => [...prev, ...nouveaux]);
+    // Désactivé : les marchandises ne sont plus générées automatiquement.
+    void m;
   };
 
   // Oubli de code PIN : les clients/vendeurs/secrétaires utilisent une clé donnée par l'admin
@@ -3623,7 +3745,8 @@ export default function App() {
       )}
 
       {/* Vues Métier réservées au personnel de l'entreprise */}
-      {role === "vendeur" && <VueVendeur produits={produits} marques={marques} ventes={ventes} creerVente={creerVente} />}
+      {role === "vendeur" && <VueVendeur produits={produits} ventes={ventes} creerVente={creerVente}
+        categories={categories} ajouterProduitVendeur={ajouterProduitVendeur} supprimerProduitVendeur={supprimerProduitVendeur} />}
       {role === "secretaire" && <VueSecretaire ventes={ventes} confirmerPaiement={confirmerPaiement} majPrixLigne={majPrixLigne} modePrix={modePrix} entreprise={entreprise}
         credits={credits} ajouterCredit={ajouterCredit} ajouterVersement={ajouterVersement} validerCredit={validerCredit} />}
       {role === "vendeur-secretaire" && (

@@ -94,7 +94,8 @@ CREATE TABLE public.sale_items (
     part_id BIGINT REFERENCES public.parts(id) ON DELETE SET NULL,
     nom TEXT NOT NULL,
     quantite INT NOT NULL DEFAULT 1,
-    prix_unitaire NUMERIC(12, 2) NOT NULL
+    prix_unitaire NUMERIC(12, 2) NOT NULL,
+    photo TEXT -- photo de l'article (affichée sur le reçu et dans l'historique)
 );
 
 -- ====================================================================
