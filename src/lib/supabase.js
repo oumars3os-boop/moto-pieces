@@ -38,7 +38,7 @@ export async function synchroniserCompteSupabase(compte) {
 }
 
 /**
- * Enregistre ou met à jour une transaction terminée dans l'historique de la base de données Supabase
+ * Exécute une requête d'écriture serveur directe dans la table d'historique des ventes public.sales de Supabase
  */
 export async function enregistrerVenteSupabase(vente) {
   try {
@@ -47,24 +47,28 @@ export async function enregistrerVenteSupabase(vente) {
       return s + (p * (it.qte || 1));
     }, 0) || 0;
 
+    // Écriture serveur directe vers la table sales
     const { data: saleData, error: saleError } = await supabase
       .from("sales")
-      .upsert({
-        vendeur_nom: vente.vendeur || "MotoPièces Principal",
-        client_nom: vente.client || "Client",
-        client_tel: vente.tel || "",
-        total: totalVente,
-        statut: vente.statut || "payée",
-        date_vente: vente.date || new Date().toLocaleString("fr-FR"),
-      })
+      .insert([
+        {
+          vendeur_nom: vente.vendeur || "MotoPièces Principal",
+          client_nom: vente.client || "Client",
+          client_tel: vente.tel || "",
+          total: totalVente,
+          statut: vente.statut || "payée",
+          date_vente: vente.date || new Date().toLocaleString("fr-FR"),
+        }
+      ])
       .select()
       .single();
 
     if (saleError) {
-      console.warn("Notice enregistrement Supabase sales:", saleError.message);
+      console.warn("Notice écriture serveur Supabase sales:", saleError.message);
       return { success: false, error: saleError };
     }
 
+    // Écriture serveur directe des lignes d'articles vers la table sale_items
     if (saleData && vente.items && vente.items.length > 0) {
       const itemsPayload = vente.items.map((it) => ({
         sale_id: saleData.id,
@@ -76,16 +80,16 @@ export async function enregistrerVenteSupabase(vente) {
 
       const { error: itemsError } = await supabase
         .from("sale_items")
-        .upsert(itemsPayload);
+        .insert(itemsPayload);
 
       if (itemsError) {
-        console.warn("Notice enregistrement Supabase sale_items:", itemsError.message);
+        console.warn("Notice écriture serveur Supabase sale_items:", itemsError.message);
       }
     }
 
     return { success: true, data: saleData };
   } catch (err) {
-    console.warn("Erreur réseau enregistrement vente Supabase:", err);
+    console.warn("Erreur réseau écriture vente Supabase:", err);
     return { success: false, error: err };
   }
 }
