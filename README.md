@@ -29,12 +29,23 @@ npx cap open android
 Dans Android Studio : **Build → Build App Bundle(s) / APK(s) → Build APK(s)**.
 L'APK est généré dans `android/app/build/outputs/apk/debug/app-debug.apk`.
 
-Après chaque modification du code :
+## MISES À JOUR AUTOMATIQUES (sans recompiler l'APK)
 
-```bash
-npm run build
-npx cap sync
-```
+L'application est configurée pour charger directement le site en ligne :
+**https://moto-pieces.vercel.app** (voir `capacitor.config.json` → `server.url`).
+
+Une fois le nouvel APK installé, vous n'avez **plus jamais besoin d'Android Studio**.
+Pour mettre à jour l'application sur tous les téléphones :
+
+1. Mettre à jour le code du site
+2. Compiler le site : `npm run build`
+3. Déployer le dossier `dist` sur Vercel (glisser-déposer sur vercel.com/new,
+   ou `npx vercel --prod`)
+4. C'est fini : au prochain lancement de l'application, la nouvelle version
+   se charge automatiquement sur le téléphone (penser à actualiser / rouvrir l'app)
+
+⚠️ Important : avec ce mode, l'application a besoin d'une connexion internet
+au lancement, puisqu'elle charge le site en ligne.
 
 ## Structure du projet
 

@@ -3,6 +3,8 @@
   "appName": "MotoPièces",
   "webDir": "dist",
   "server": {
-    "androidScheme": "https"
+    "url": "https://moto-pieces.vercel.app",
+    "androidScheme": "https",
+    "cleartext": false
   }
 }

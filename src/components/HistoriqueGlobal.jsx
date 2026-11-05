@@ -8,8 +8,12 @@ export default function HistoriqueGlobal({ ventes: ventesProps = [] }) {
     async function chargerVentesCompletes() {
       try {
         const ventesSupabase = await chargerVentesSupabase();
-        if (ventesSupabase && ventesSupabase.length > 0) {
-          setVentes(ventesSupabase);
+        // Correctif : on ne garde que les ventes complètes et valides.
+        // Les vieilles lignes « payées à 0 FCFA » sans article (ancien bug) ne s'afficheront plus jamais.
+        const lignesValides = (ventesSupabase || []).filter(v =>
+          (v.items || []).length > 0 && (v.statut === "payée" ? Number(v.total) > 0 : true));
+        if (lignesValides.length > 0) {
+          setVentes(lignesValides);
           return;
         }
       } catch (e) {
@@ -18,7 +22,9 @@ export default function HistoriqueGlobal({ ventes: ventesProps = [] }) {
 
       const local = JSON.parse(localStorage.getItem("motopieces_ventes")) ||
                     JSON.parse(localStorage.getItem("historique_ventes")) || [];
-      setVentes(local.length ? local : ventesProps);
+      // Même filtre de sécurité sur les ventes locales
+      const localValide = local.filter(v => (v.items || []).length > 0);
+      setVentes(localValide.length ? localValide : ventesProps);
     }
 
     chargerVentesCompletes();
@@ -59,7 +65,7 @@ export default function HistoriqueGlobal({ ventes: ventesProps = [] }) {
 
             <div className="space-y-4">
               {ventesParJour[date].map((vente, index) => {
-                const totalMontant = vente.total || vente.montant || (vente.items || []).reduce((s, it) => s + ((it.prix || it.p?.prix || 0) * (it.qte || 1)), 0);
+                const totalMontant = vente.total || vente.montant || (vente.items || []).reduce((s, it) => s + ((it.prixLigne ?? it.prix ?? it.p?.prix ?? 0) * (it.qte || 1)), 0);
                 const premierItem = vente.items?.[0] || {};
                 const imageArticle = vente.image || premierItem.photo || premierItem.p?.photo;
 

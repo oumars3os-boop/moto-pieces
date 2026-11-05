@@ -1,6 +1,20 @@
 -- ====================================================================
--- SCRIPT SQL DE STRUCTURE ET DONNÉES POUR MOTOPİÈCES (SUPABASE)
--- Exécutez ce script dans l'Éditeur SQL de votre Dashboard Supabase
+-- MOTOPÈCES — SCRIPT SQL COMPLET (VERSION 2 — REMISE À ZÉRO TOTALE)
+-- Date : 05/11/2026
+--
+-- CE SCRIPT EFFACE ET RECONSTRUIT TOUTE LA BASE DE DONNÉES :
+--   ventes, articles, comptes, catégories, entreprise — tout repart à zéro.
+--
+-- COMMENT L'UTILISER :
+--   1. Ouvrez votre projet sur supabase.com
+--   2. Menu gauche : SQL Editor (Éditeur SQL)
+--   3. Collez TOUT ce script, puis cliquez sur RUN (Exécuter)
+--   4. Attendez le message « Success. No rows returned » : la base est
+--      reconstruite proprement, avec les tables, la sécurité et les
+--      données de départ (produits, catégories, compte administrateur).
+--
+-- COMPTE ADMINISTRATEUR PAR DÉFAUT (à changer ensuite dans l'application) :
+--   Téléphone : +225 07 00 00 00 00 — Code PIN : 1234
 -- ====================================================================
 
 -- 1. Nettoyage préventif des tables si elles existent
