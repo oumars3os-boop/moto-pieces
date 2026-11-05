@@ -2988,6 +2988,14 @@ function TalkieWalkie({ role, userActif, comptes }) {
     };
   }, [ouvert, monTel]);
 
+  // Sécurité : si l'application passe derrière une autre application, le micro se coupe tout seul
+  useEffect(() => {
+    const couperSiCache = () => { try { if (document.hidden && enEmissionRef.current) arreter(); } catch {} };
+    document.addEventListener("visibilitychange", couperSiCache);
+    return () => document.removeEventListener("visibilitychange", couperSiCache);
+    // eslint-disable-next-line
+  }, []);
+
   // Maintenir le bouton : le micro s'ouvre et la voix part EN DIRECT chez les autres
   const demarrer = async () => {
     if (enEmissionRef.current) return;
@@ -3118,6 +3126,8 @@ function TalkieWalkie({ role, userActif, comptes }) {
                 demarrer();
               }}
               onPointerUp={arreter}
+              onPointerCancel={arreter}
+              onPointerLeave={arreter}
               onLostPointerCapture={arreter}
               onContextMenu={(e) => e.preventDefault()}>
               {enEmission ? "🔴 EN DIRECT… relâche pour couper" : "🎙️ MAINTIENS et PARLE (direct)"}
@@ -3256,6 +3266,14 @@ function TalkieClientArticle({ article, userActif, comptes }) {
     // eslint-disable-next-line
   }, [ouvert, monTel]);
 
+  // Sécurité : si l'application passe derrière une autre application, le micro se coupe tout seul
+  useEffect(() => {
+    const couperSiCache = () => { try { if (document.hidden && enEmissionRef.current) arreter(); } catch {} };
+    document.addEventListener("visibilitychange", couperSiCache);
+    return () => document.removeEventListener("visibilitychange", couperSiCache);
+    // eslint-disable-next-line
+  }, []);
+
   // Maintenir : le micro s'ouvre et la voix part EN DIRECT chez TOUTE l'équipe de la boutique
   const demarrer = async () => {
     if (enEmissionRef.current) return;
@@ -3342,6 +3360,8 @@ function TalkieClientArticle({ article, userActif, comptes }) {
               style={{ touchAction: "none" }}
               onPointerDown={(e) => { e.preventDefault(); try { e.currentTarget.setPointerCapture(e.pointerId); } catch {} demarrer(); }}
               onPointerUp={arreter}
+              onPointerCancel={arreter}
+              onPointerLeave={arreter}
               onLostPointerCapture={arreter}
               onContextMenu={(e) => e.preventDefault()}>
               {enEmission ? "🔴 EN DIRECT… relâche pour couper" : "🎙️ MAINTIENS et PARLE à la boutique"}
@@ -3417,6 +3437,9 @@ function MessagerieEquipe({ role, userActif, comptes }) {
   const [info, setInfo] = useState("");
   const [enVocal, setEnVocal] = useState(false);
   const [envoi, setEnvoi] = useState(null); // { type, contenu, pct, phase } : bulle d'envoi en cours
+  const [notification, setNotification] = useState(null); // bandeau en haut : nouveau message reçu
+  const [nonLus, setNonLus] = useState(0); // messages reçus pas encore ouverts
+  const notifTimerRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const chunksRef = useRef([]);
   const arretAutoRef = useRef(null);
@@ -3462,8 +3485,9 @@ function MessagerieEquipe({ role, userActif, comptes }) {
   };
 
   // Réception : les messages RESTENT EN LIGNE jusqu'à ce que chacun les télécharge dans son téléphone
+  // Le contrôle tourne TOUJOURS (même messagerie fermée) : une notification s'affiche en haut dès qu'un message arrive
   useEffect(() => {
-    if (!ouvert || !monTel) return;
+    if (!monTel) return;
     let actif = true;
     const canaux = [
       "equipe:" + maCle,
@@ -3502,6 +3526,16 @@ function MessagerieEquipe({ role, userActif, comptes }) {
         }
         if (nouveaux.length > 0) {
           setMessages(prev => [...prev, ...nouveaux].sort((a, b) => (a.id || 0) - (b.id || 0)));
+          // Notification en haut de l'écran pour les messages REÇUS (pas les miens)
+          const recus = nouveaux.filter(n => !n.moi);
+          if (recus.length > 0 && !ouvert) {
+            const dernier = recus[recus.length - 1];
+            setNotification({ nom: dernier.nom || dernier.de || "Quelqu'un", type: dernier.type });
+            setNonLus(p => p + recus.length);
+            try { if (navigator.vibrate) navigator.vibrate(200); } catch {}
+            if (notifTimerRef.current) clearTimeout(notifTimerRef.current);
+            notifTimerRef.current = setTimeout(() => setNotification(null), 8000);
+          }
         }
       } catch {}
     };
@@ -3722,13 +3756,31 @@ function MessagerieEquipe({ role, userActif, comptes }) {
 
   return (
     <div>
+      {/* Notification en haut : quelqu'un a envoyé une photo, une vidéo, un vocal ou un message */}
+      {notification && !ouvert && (
+        <button
+          className="fixed top-2 left-1/2 -translate-x-1/2 z-[60] w-[92%] sm:w-auto max-w-md bg-green-600 hover:bg-green-700 text-white rounded-xl shadow-2xl px-4 py-3 flex items-center gap-3 animate-pulse"
+          onClick={() => { setNotification(null); setNonLus(0); setOuvert(true); }}>
+          <span className="text-2xl shrink-0">{notification.type === "photo" ? "📷" : notification.type === "video" ? "🎬" : notification.type === "audio" ? "🎤" : "💬"}</span>
+          <span className="text-sm font-bold text-left">
+            🔔 {notification.nom} t'a envoyé {notification.type === "photo" ? "une photo" : notification.type === "video" ? "une vidéo" : notification.type === "audio" ? "un vocal" : "un message"}
+            <span className="block text-[11px] font-normal">Appuie ici pour ouvrir la messagerie</span>
+          </span>
+        </button>
+      )}
+
       {/* Bouton flottant de la messagerie médias */}
       {!ouvert && (
         <button
-          className="fixed bottom-24 left-4 z-50 w-16 h-16 rounded-full bg-green-600 hover:bg-green-700 text-white text-2xl shadow-2xl border-4 border-white active:scale-95 transition"
-          onClick={() => setOuvert(true)}
+          className="fixed bottom-6 left-4 z-50 w-16 h-16 rounded-full bg-green-600 hover:bg-green-700 text-white text-2xl shadow-2xl border-4 border-white active:scale-95 transition"
+          onClick={() => { setNonLus(0); setNotification(null); setOuvert(true); }}
           aria-label="Messagerie photos et vidéos">
           📷
+          {nonLus > 0 && (
+            <span className="absolute -top-1 -right-1 bg-red-600 text-white text-xs font-bold rounded-full min-w-5 h-5 px-1 flex items-center justify-center border-2 border-white">
+              {nonLus}
+            </span>
+          )}
         </button>
       )}
 
@@ -4042,7 +4094,7 @@ function SectionPublicites({ publicites, setPublicites, autoriserUpload = false 
 }
 
 const COMPTES_PAR_DEFAUT = [
-  { id: 1, nom: "Administrateur Principal", tel: "+225 07 00 00 00 00", pin: "1234", role: "admin" },
+  { id: 1, nom: "Administrateur Principal", tel: "+225 05 55 44 89 45", pin: "5544", role: "admin" },
   { id: 2, nom: "Vendeur Exemple", tel: "+225 05 00 00 00 00", pin: "0000", role: "vendeur" }
 ];
 
@@ -4205,7 +4257,7 @@ export default function App() {
   });
   const [entreprise, setEntreprise] = useState(() => {
     try { const s = localStorage.getItem("motopieces_entreprise"); if (s) return JSON.parse(s); } catch {}
-    return { nom: "MotoPièces", tel: "+225 07 00 00 00 00", materiel: "Pièces de moto" };
+    return { nom: "MotoPièces", tel: "+225 05 55 44 89 45", materiel: "Pièces de moto" };
   });
   const [modePrix, setModePrix] = useState("admin");
   const [nextVente, setNextVente] = useState(() => {
