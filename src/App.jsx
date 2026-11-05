@@ -2896,6 +2896,7 @@ function TalkieWalkie({ role, userActif, comptes }) {
   const [info, setInfo] = useState("");
   const [connectes, setConnectes] = useState([]); // personnes ayant le talkie ouvert en ce moment
   const [relance, setRelance] = useState(0); // +1 quand il faut se rebrancher tout seul
+  const pretsRef = useRef({}); // qui a confirmé qu'il écoute (pour repartir instantanément)
   const gardeRef = useRef(null); // lecteur de silence qui garde le son actif en arrière-plan
   const canalRef = useRef(null);
   const pcsRef = useRef({});
@@ -2932,14 +2933,14 @@ function TalkieWalkie({ role, userActif, comptes }) {
   const couperReception = (telEmetteur) => {
     try {
       if (telEmetteur && pcsRef.current[telEmetteur]) {
-        try { pcsRef.current[telEmetteur].close(); } catch {}
-        delete pcsRef.current[telEmetteur];
+        // On GARDE la connexion chaude : la prochaine voix partira tout de suite, sans attendre
       } else {
         Object.values(pcsRef.current).forEach(pc => { try { pc.close(); } catch {} });
         pcsRef.current = {};
       }
     } catch {}
-    if (audioRef.current) { try { audioRef.current.pause(); audioRef.current.srcObject = null; } catch {} }
+    // On garde le fil du son branché pour repartir instantanément
+    if (audioRef.current) { try { audioRef.current.pause(); } catch {} }
     setEnReception(false);
     setNomQuiParle("");
   };
@@ -2990,6 +2991,19 @@ function TalkieWalkie({ role, userActif, comptes }) {
       if (pc) pc.addIceCandidate(new RTCIceCandidate(p.c)).catch(() => {});
       return;
     }
+    if (p.type === "parle") {
+      // Quelqu'un repart sur une connexion déjà chaude : on remet le son TOUT DE SUITE
+      const pc = pcsRef.current[p.de];
+      if (pc && ["connected", "completed"].includes(pc.iceConnectionState)) {
+        try { const a = audioRef.current; if (a && a.srcObject) a.play().catch(() => {}); } catch {}
+        setEnReception(true);
+        setNomQuiParle(p.nomDe || p.de);
+        try { navigator.vibrate && navigator.vibrate(200); } catch {}
+      }
+      signaler({ type: "pret", vers: p.de });
+      return;
+    }
+    if (p.type === "pret") { try { if (pretsRef.current) pretsRef.current[p.de] = true; } catch {} return; }
     if (p.type === "fin") couperReception(p.de);
   };
 
@@ -3080,6 +3094,20 @@ function TalkieWalkie({ role, userActif, comptes }) {
     // eslint-disable-next-line
   }, []);
 
+  // Crée une connexion complète vers une personne (la première fois, ou après une coupure).
+  // Les fois suivantes, on réutilise la connexion chaude : la voix part instantanément.
+  const refaireConnexion = async (tel) => {
+    const flux = fluxRef.current;
+    if (!flux) return;
+    const pc = new RTCPeerConnection({ iceServers: GLACE });
+    flux.getTracks().forEach(t => pc.addTrack(t, flux));
+    pc.onicecandidate = (e) => { if (e.candidate) signaler({ type: "cand", vers: tel, c: e.candidate }); };
+    pcsRef.current[tel] = pc;
+    const offre = await pc.createOffer();
+    await pc.setLocalDescription(offre);
+    signaler({ type: "offre", vers: tel, sdp: offre });
+  };
+
   // Maintenir le bouton : le micro s'ouvre et la voix part EN DIRECT chez les autres
   const demarrer = async () => {
     if (enEmissionRef.current) return;
@@ -3142,13 +3170,29 @@ function TalkieWalkie({ role, userActif, comptes }) {
         return;
       }
       for (const tel of cibles) {
-        const pc = new RTCPeerConnection({ iceServers: GLACE });
-        flux.getTracks().forEach(t => pc.addTrack(t, flux));
-        pc.onicecandidate = (e) => { if (e.candidate) signaler({ type: "cand", vers: tel, c: e.candidate }); };
-        pcsRef.current[tel] = pc;
-        const offre = await pc.createOffer();
-        await pc.setLocalDescription(offre);
-        signaler({ type: "offre", vers: tel, sdp: offre });
+        // Connexion déjà chaude d'avant ? On envoie le son DEDANS tout de suite : ZÉRO attente.
+        const ancien = pcsRef.current[tel];
+        const piste = flux.getAudioTracks()[0] || flux.getTracks()[0];
+        if (ancien && ancien.getSenders().length > 0 && ["connected", "completed"].includes(ancien.iceConnectionState)) {
+          let ok = false;
+          try { await ancien.getSenders()[0].replaceTrack(piste); ok = true; } catch { ok = false; }
+          if (ok) {
+            pretsRef.current[tel] = false;
+            signaler({ type: "parle", vers: tel });
+            // Filet de sécurité : si l'autre ne confirme pas en 1,5 seconde, on refait une connexion complète
+            setTimeout(() => {
+              if (enEmissionRef.current && !pretsRef.current[tel]) {
+                try { ancien.close(); } catch {}
+                delete pcsRef.current[tel];
+                refaireConnexion(tel).catch(() => {});
+              }
+            }, 1500);
+            continue;
+          }
+          try { ancien.close(); } catch {}
+          delete pcsRef.current[tel];
+        }
+        refaireConnexion(tel).catch(() => {});
       }
       setEnEmission(true);
     } catch (e) {
@@ -3163,8 +3207,8 @@ function TalkieWalkie({ role, userActif, comptes }) {
     if (!enEmissionRef.current) return;
     enEmissionRef.current = false;
     signaler({ type: "fin", vers: "groupe" });
-    Object.values(pcsRef.current).forEach(pc => { try { pc.close(); } catch {} });
-    pcsRef.current = {};
+    // On GARDE les connexions chaudes : le prochain appui partira instantanément, sans attendre
+    Object.values(pcsRef.current).forEach(pc => { try { pc.getSenders()[0]?.replaceTrack(null); } catch {} });
     try { fluxRef.current?.getTracks().forEach(t => t.stop()); } catch {}
     fluxRef.current = null;
     if (boucleAnimRef.current) { clearInterval(boucleAnimRef.current); boucleAnimRef.current = null; }
@@ -3304,6 +3348,7 @@ function TalkieClientArticle({ article, userActif, comptes }) {
   const [info, setInfo] = useState("");
   const [connectes, setConnectes] = useState([]); // membres de l'équipe ayant le talkie ouvert
   const [relance, setRelance] = useState(0); // +1 quand il faut se rebrancher tout seul
+  const pretsRef = useRef({}); // qui a confirmé qu'il écoute (pour repartir instantanément)
   const gardeRef = useRef(null); // lecteur de silence qui garde le son actif en arrière-plan
   const canalRef = useRef(null);
   const pcsRef = useRef({});
@@ -3331,14 +3376,14 @@ function TalkieClientArticle({ article, userActif, comptes }) {
   const couperReception = (telEmetteur) => {
     try {
       if (telEmetteur && pcsRef.current[telEmetteur]) {
-        try { pcsRef.current[telEmetteur].close(); } catch {}
-        delete pcsRef.current[telEmetteur];
+        // On GARDE la connexion chaude : la prochaine voix partira tout de suite, sans attendre
       } else {
         Object.values(pcsRef.current).forEach(pc => { try { pc.close(); } catch {} });
         pcsRef.current = {};
       }
     } catch {}
-    if (audioRef.current) { try { audioRef.current.pause(); audioRef.current.srcObject = null; } catch {} }
+    // On garde le fil du son branché pour repartir instantanément
+    if (audioRef.current) { try { audioRef.current.pause(); } catch {} }
     setEnReception(false);
     setNomQuiParle("");
   };
@@ -3390,6 +3435,19 @@ function TalkieClientArticle({ article, userActif, comptes }) {
       if (pc) pc.addIceCandidate(new RTCIceCandidate(p.c)).catch(() => {});
       return;
     }
+    if (p.type === "parle") {
+      // Quelqu'un repart sur une connexion déjà chaude : on remet le son TOUT DE SUITE
+      const pc = pcsRef.current[p.de];
+      if (pc && ["connected", "completed"].includes(pc.iceConnectionState)) {
+        try { const a = audioRef.current; if (a && a.srcObject) a.play().catch(() => {}); } catch {}
+        setEnReception(true);
+        setNomQuiParle(p.nomDe || p.de);
+        try { navigator.vibrate && navigator.vibrate(200); } catch {}
+      }
+      signaler({ type: "pret", vers: p.de });
+      return;
+    }
+    if (p.type === "pret") { try { if (pretsRef.current) pretsRef.current[p.de] = true; } catch {} return; }
     if (p.type === "fin") couperReception(p.de);
   };
 
@@ -3480,6 +3538,20 @@ function TalkieClientArticle({ article, userActif, comptes }) {
     // eslint-disable-next-line
   }, []);
 
+  // Crée une connexion complète vers une personne (la première fois, ou après une coupure).
+  // Les fois suivantes, on réutilise la connexion chaude : la voix part instantanément.
+  const refaireConnexion = async (tel) => {
+    const flux = fluxRef.current;
+    if (!flux) return;
+    const pc = new RTCPeerConnection({ iceServers: GLACE });
+    flux.getTracks().forEach(t => pc.addTrack(t, flux));
+    pc.onicecandidate = (e) => { if (e.candidate) signaler({ type: "cand", vers: tel, c: e.candidate }); };
+    pcsRef.current[tel] = pc;
+    const offre = await pc.createOffer();
+    await pc.setLocalDescription(offre);
+    signaler({ type: "offre", vers: tel, sdp: offre });
+  };
+
   // Maintenir : le micro s'ouvre et la voix part EN DIRECT chez TOUTE l'équipe de la boutique
   const demarrer = async () => {
     if (enEmissionRef.current) return;
@@ -3498,13 +3570,29 @@ function TalkieClientArticle({ article, userActif, comptes }) {
       if (!enEmissionRef.current) { flux.getTracks().forEach(t => t.stop()); return; }
       fluxRef.current = flux;
       for (const tel of cibles) {
-        const pc = new RTCPeerConnection({ iceServers: GLACE });
-        flux.getTracks().forEach(t => pc.addTrack(t, flux));
-        pc.onicecandidate = (e) => { if (e.candidate) signaler({ type: "cand", vers: tel, c: e.candidate }); };
-        pcsRef.current[tel] = pc;
-        const offre = await pc.createOffer();
-        await pc.setLocalDescription(offre);
-        signaler({ type: "offre", vers: tel, sdp: offre });
+        // Connexion déjà chaude d'avant ? On envoie le son DEDANS tout de suite : ZÉRO attente.
+        const ancien = pcsRef.current[tel];
+        const piste = flux.getAudioTracks()[0] || flux.getTracks()[0];
+        if (ancien && ancien.getSenders().length > 0 && ["connected", "completed"].includes(ancien.iceConnectionState)) {
+          let ok = false;
+          try { await ancien.getSenders()[0].replaceTrack(piste); ok = true; } catch { ok = false; }
+          if (ok) {
+            pretsRef.current[tel] = false;
+            signaler({ type: "parle", vers: tel });
+            // Filet de sécurité : si l'autre ne confirme pas en 1,5 seconde, on refait une connexion complète
+            setTimeout(() => {
+              if (enEmissionRef.current && !pretsRef.current[tel]) {
+                try { ancien.close(); } catch {}
+                delete pcsRef.current[tel];
+                refaireConnexion(tel).catch(() => {});
+              }
+            }, 1500);
+            continue;
+          }
+          try { ancien.close(); } catch {}
+          delete pcsRef.current[tel];
+        }
+        refaireConnexion(tel).catch(() => {});
       }
       setEnEmission(true);
     } catch (e) {
@@ -3519,8 +3607,8 @@ function TalkieClientArticle({ article, userActif, comptes }) {
     if (!enEmissionRef.current) return;
     enEmissionRef.current = false;
     signaler({ type: "fin", vers: "groupe" });
-    Object.values(pcsRef.current).forEach(pc => { try { pc.close(); } catch {} });
-    pcsRef.current = {};
+    // On GARDE les connexions chaudes : le prochain appui partira instantanément, sans attendre
+    Object.values(pcsRef.current).forEach(pc => { try { pc.getSenders()[0]?.replaceTrack(null); } catch {} });
     try { fluxRef.current?.getTracks().forEach(t => t.stop()); } catch {}
     fluxRef.current = null;
     if (boucleAnimRef.current) { clearInterval(boucleAnimRef.current); boucleAnimRef.current = null; }
