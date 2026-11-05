@@ -571,7 +571,7 @@ function LigneVente({ v, onConfirmer, onSaisirPrix, saisiePrix }) {
           })}
         </div>
       </CardContent>
-      {onConfirmer && v.statut !== "payée" && (
+      {onConfirmer && v.statut !== "payée" && v.statut !== "crédit" && (
         <div className="px-3 pb-3">
           {saisiePrix && v.items.some(it => !prixLigne(it)) ? (
             <Button className="w-full" disabled>💰 Confirmer le paiement</Button>
@@ -847,12 +847,12 @@ function VueClient({ produits, marques, creerVente, photosCategories, photosMarq
 
 // ---------- Vue Vendeur ----------
 
-function VueVendeur({ produits, ventes, creerVente, categories = [], ajouterProduitVendeur = () => {}, supprimerProduitVendeur = () => {}, credits = [] }) {
+function VueVendeur({ produits, ventes, creerVente, categories = [], credits = [], cases = [] }) {
   const [onglet, setOnglet] = useState("vendre");
   const [photos, setPhotos] = useState([]); // [{ src, article, qte }]
   // Ajout des marchandises par le vendeur
-  const [npV, setNpV] = useState({ nom: "", cat: "", marque: "", prix: "", stock: "", photo: null });
-  const [msgArticle, setMsgArticle] = useState("");
+  const [rechercheMarche, setRechercheMarche] = useState(""); // recherche dans tout le marché
+  const [catMarche, setCatMarche] = useState("toutes"); // filtre par catégorie
   const [enAnalyse, setEnAnalyse] = useState(false);
   const [recherche, setRecherche] = useState("");
   const [identification, setIdentification] = useState(null); // index de la photo à identifier
@@ -1004,85 +1004,86 @@ function VueVendeur({ produits, ventes, creerVente, categories = [], ajouterProd
     <div>
       <div className="max-w-6xl mx-auto px-4 pt-4 flex gap-2 flex-wrap">
         <Button variant={onglet === "vendre" ? "default" : "outline"} className={onglet === "vendre" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("vendre")}>📷 Vendre</Button>
-        <Button variant={onglet === "articles" ? "default" : "outline"} className={onglet === "articles" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("articles")}>🧰 Mes articles ({produits.length})</Button>
+        <Button variant={onglet === "marche" ? "default" : "outline"} className={onglet === "marche" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("marche")}>🏪 Marché ({produits.length})</Button>
         <Button variant={onglet === "ventes" ? "default" : "outline"} className={onglet === "ventes" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("ventes")}>📋 Ventes ({ventes.length})</Button>
         <Button variant={onglet === "historique" ? "default" : "outline"} className={onglet === "historique" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("historique")}>📊 Historique Global</Button>
         <Button variant={onglet === "credits" ? "default" : "outline"} className={onglet === "credits" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("credits")}>💳 Crédits ({(credits || []).filter(c => c.statut !== "payé").length})</Button>
       </div>
+
+      {/* Gros bouton unique qui réunit toutes les options de crédit : un seul endroit pour tout le crédit */}
+      {onglet !== "credits" && (
+        <div className="max-w-6xl mx-auto px-4 pt-4">
+          <Button size="lg" className="w-full py-6 text-lg bg-amber-600 hover:bg-amber-700 text-white font-bold shadow-md"
+            onClick={() => setOnglet("credits")}>
+            💳 Espace Crédits ({(credits || []).filter(c => c.statut !== "payé").length} en cours)
+          </Button>
+        </div>
+      )}
 
       {/* Onglet Crédits : suivi des ventes à crédit (les versements sont encaissés par la secrétaire) */}
       {onglet === "credits" && (
         <GestionCredits credits={credits || []} modeVendeur />
       )}
 
-      {/* Onglet Mes articles : le vendeur ajoute et gère SES marchandises */}
-      {onglet === "articles" ? (
-        <div className="max-w-3xl mx-auto px-4 py-4 space-y-4">
-          <Card className="bg-white"><CardContent className="p-4 space-y-2">
-            <div className="font-semibold">➕ Ajouter un nouvel article (votre marchandise)</div>
-            <Input placeholder="Nom de l'article (ex : Bougie NG)" value={npV.nom}
-              onChange={e => { setNpV({ ...npV, nom: e.target.value }); setMsgArticle(""); }} />
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              <select className="h-10 rounded-md border border-zinc-300 px-3 bg-white text-sm"
-                value={npV.cat} onChange={e => setNpV({ ...npV, cat: e.target.value })}>
-                <option value="">Catégorie…</option>
-                {(categories || []).map(c => <option key={c.id} value={c.id}>{c.emoji} {c.label}</option>)}
-              </select>
-              <Input placeholder="Marque (ex : GN, CG125…)" value={npV.marque}
-                onChange={e => setNpV({ ...npV, marque: e.target.value })} />
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <Input type="number" placeholder="Prix (FCFA)" value={npV.prix}
-                onChange={e => setNpV({ ...npV, prix: e.target.value })} />
-              <Input type="number" placeholder="Stock" value={npV.stock}
-                onChange={e => setNpV({ ...npV, stock: e.target.value })} />
-            </div>
-            <div>
-              <label className="text-xs text-muted-foreground">Photo de l'article (optionnel) :</label>
-              <input type="file" accept="image/*" className="text-sm w-full mt-1"
-                onChange={e => {
-                  const f = e.target.files?.[0];
-                  if (!f) return;
-                  const fr = new FileReader();
-                  fr.onload = ev => setNpV(prev => ({ ...prev, photo: ev.target.result }));
-                  fr.readAsDataURL(f);
-                }} />
-              {npV.photo && <img src={npV.photo} alt="" className="mt-2 w-20 h-20 object-cover rounded-md border" />}
-            </div>
-            <Button className="w-full h-11 bg-blue-600 hover:bg-blue-700 text-white font-bold"
-              disabled={!npV.nom.trim() || !(Number(npV.prix) > 0)}
-              onClick={() => {
-                ajouterProduitVendeur({
-                  nom: npV.nom.trim(), cat: npV.cat || "autres", marque: npV.marque.trim() || "Autre",
-                  prix: Number(npV.prix) || 0, stock: Number(npV.stock) || 0, photo: npV.photo,
-                  desc: "", boutique: "MotoPièces Principal",
-                });
-                setNpV({ nom: "", cat: "", marque: "", prix: "", stock: "", photo: null });
-                setMsgArticle("✅ Article enregistré ! Il est maintenant disponible dans l'espace vente.");
-              }}>💾 Enregistrer l'article</Button>
-            {msgArticle && <p className="text-xs text-green-700 font-semibold">{msgArticle}</p>}
-            <p className="text-xs text-muted-foreground">L'article doit avoir un prix pour pouvoir être vendu.</p>
+      {/* Onglet Marché : tout le stock de la boutique, en lecture seule. Seul l'admin ajoute des articles. */}
+      {onglet === "marche" ? (
+        <div className="max-w-6xl mx-auto px-4 py-4 space-y-4">
+          <Card className="bg-white"><CardContent className="p-4 space-y-3">
+            <div className="font-semibold">🏪 Tout le marché — réserve de la boutique</div>
+            <p className="text-xs text-muted-foreground">Cherchez un article par son nom, sa marque ou sa catégorie pour savoir s'il est en réserve et où il se trouve. Seul l'administrateur peut ajouter ou retirer des articles.</p>
+            <Input placeholder="🔍 Rechercher un article (nom, marque…)" value={rechercheMarche}
+              onChange={e => setRechercheMarche(e.target.value)} />
+            <select className="h-10 w-full sm:w-auto rounded-md border border-zinc-300 px-3 bg-white text-sm"
+              value={catMarche} onChange={e => setCatMarche(e.target.value)}>
+              <option value="toutes">Toutes les catégories</option>
+              {(categories || []).map(c => <option key={c.id} value={c.id}>{c.emoji} {c.label}</option>)}
+            </select>
           </CardContent></Card>
 
-          <div className="font-semibold text-sm">📦 Vos articles ({produits.length})</div>
+          <div className="font-semibold text-sm">📦 Articles en réserve ({(() => {
+            const q = rechercheMarche.trim().toLowerCase();
+            return produits.filter(p =>
+              (catMarche === "toutes" || String(p.cat) === String(catMarche)) &&
+              (!q || (p.nom || "").toLowerCase().includes(q) || (p.marque || "").toLowerCase().includes(q))
+            ).length;
+          })()})</div>
           {produits.length === 0 ? (
-            <p className="text-muted-foreground text-sm">Aucun article pour le moment. Ajoutez votre première marchandise avec le formulaire ci-dessus.</p>
+            <p className="text-muted-foreground text-sm">Aucun article dans le marché pour le moment. C'est l'administrateur qui ajoute les articles.</p>
           ) : (
             <div className="space-y-2">
-              {produits.map(p => (
-                <Card key={p.id} className="bg-white"><CardContent className="p-2 flex items-center gap-3">
-                  {p.photo ? <img src={p.photo} alt="" className="w-12 h-12 object-cover rounded-md border" />
-                    : <div className="w-12 h-12 bg-zinc-200 rounded-md flex items-center justify-center text-lg">📦</div>}
-                  <div className="flex-1 min-w-0">
-                    <div className="font-semibold text-sm truncate">{p.nom}</div>
-                    <div className="text-xs text-muted-foreground">
-                      {(p.prix || 0).toLocaleString("fr-FR")} FCFA — Stock : {p.stock ?? 0}{p.marque ? ` — ${p.marque}` : ""}
-                    </div>
-                  </div>
-                  <Button size="sm" variant="outline" className="h-8 border-red-300 text-red-600 hover:bg-red-50"
-                    onClick={() => supprimerProduitVendeur(p.id)}>🗑️</Button>
-                </CardContent></Card>
-              ))}
+              {produits
+                .filter(p =>
+                  (catMarche === "toutes" || String(p.cat) === String(catMarche)) &&
+                  (() => {
+                    const q = rechercheMarche.trim().toLowerCase();
+                    return !q || (p.nom || "").toLowerCase().includes(q) || (p.marque || "").toLowerCase().includes(q);
+                  })())
+                .map(p => {
+                  const cat = (categories || []).find(c => String(c.id) === String(p.cat));
+                  const caseArticle = (cases || []).find(c => c.id === p.caseId);
+                  return (
+                    <Card key={p.id} className="bg-white"><CardContent className="p-2 flex items-center gap-3">
+                      {p.photo ? <img src={p.photo} alt="" className="w-12 h-12 object-cover rounded-md border" />
+                        : <div className="w-12 h-12 bg-zinc-200 rounded-md flex items-center justify-center text-lg">📦</div>}
+                      <div className="flex-1 min-w-0">
+                        <div className="font-semibold text-sm truncate">{p.nom}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {(p.prix || 0).toLocaleString("fr-FR")} FCFA — Stock : {p.stock ?? 0}{p.marque ? ` — ${p.marque}` : ""}
+                        </div>
+                        <div className="text-xs">
+                          {caseArticle
+                            ? <span className="text-blue-700 font-semibold">🗄️ Case n°{caseArticle.numero} — {caseArticle.nom}</span>
+                            : <span className="text-muted-foreground">🗄️ Case non indiquée</span>}
+                          {cat ? <span className="text-blue-700"> — {cat.emoji} {cat.label}</span> : null}
+                          {p.boutique ? <span className="text-muted-foreground"> — 📍 {p.boutique}</span> : null}
+                        </div>
+                      </div>
+                      {(p.stock ?? 0) > 0
+                        ? <Badge className="bg-green-600 shrink-0">Disponible</Badge>
+                        : <Badge variant="destructive" className="shrink-0">Rupture</Badge>}
+                    </CardContent></Card>
+                  );
+                })}
             </div>
           )}
         </div>
@@ -1600,10 +1601,10 @@ function VueSecretaire({ ventes, confirmerPaiement, majPrixLigne, modePrix, entr
   const [filtre, setFiltre] = useState("toutes");
   const [questionRecu, setQuestionRecu] = useState(null); // après paiement : propose l'impression du reçu
   const [recuA4, setRecuA4] = useState(null); // reçu affiché en feuille A4
-  const liste = filtre === "toutes" ? ventes : ventes.filter(v => v.statut === filtre);
+  const liste = ventes.filter(v => v.statut !== "crédit" && (filtre === "toutes" ? true : v.statut === filtre)); // les ventes à crédit sont gérées uniquement dans l'onglet Crédits
   const totalCalcule = (v) => v.items.reduce((s, it) => s + (it.prixLigne ?? (it.p ? it.p.prix : it.prix)) * (it.qte || 1), 0);
   const totalPaye = ventes.filter(v => v.statut === "payée").reduce((s, v) => s + totalCalcule(v), 0);
-  const totalAttente = ventes.filter(v => v.statut !== "payée").reduce((s, v) => s + totalCalcule(v), 0);
+  const totalAttente = ventes.filter(v => v.statut === "en attente").reduce((s, v) => s + totalCalcule(v), 0);
   const saisie = modePrix === "secretaire";
 
   const confirmerEtProposer = (id) => {
@@ -1619,6 +1620,14 @@ function VueSecretaire({ ventes, confirmerPaiement, majPrixLigne, modePrix, entr
         <Button variant={ongletSec === "paiements" ? "default" : "outline"} className={ongletSec === "paiements" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOngletSec("paiements")}>🧾 Paiements des ventes</Button>
         <Button variant={ongletSec === "credits" ? "default" : "outline"} className={ongletSec === "credits" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOngletSec("credits")}>💳 Crédits / Dettes ({(credits || []).filter(c => c.statut !== "payé").length})</Button>
       </div>
+
+      {/* Gros bouton unique qui réunit toutes les options de crédit : un seul endroit pour tout le crédit */}
+      {ongletSec !== "credits" && (
+        <Button size="lg" className="w-full mb-4 py-6 text-lg bg-amber-600 hover:bg-amber-700 text-white font-bold shadow-md"
+          onClick={() => setOngletSec("credits")}>
+          💳 Espace Crédits ({(credits || []).filter(c => c.statut !== "payé").length} en cours)
+        </Button>
+      )}
       {ongletSec === "credits" ? (
         <GestionCredits credits={credits || []} ajouterCredit={ajouterCredit} ajouterVersement={ajouterVersement} validerCredit={validerCredit} />
       ) : (
@@ -1634,10 +1643,16 @@ function VueSecretaire({ ventes, confirmerPaiement, majPrixLigne, modePrix, entr
         </CardContent></Card>
       </div>
       <div className="flex gap-2 mb-4">
-        <Button variant={filtre === "toutes" ? "default" : "outline"} className={filtre === "toutes" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setFiltre("toutes")}>Toutes ({ventes.length})</Button>
-        <Button variant={filtre === "attente" ? "default" : "outline"} className={filtre === "attente" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setFiltre("attente")}>En attente / Crédits ({ventes.filter(v => v.statut !== "payée").length})</Button>
+        <Button variant={filtre === "toutes" ? "default" : "outline"} className={filtre === "toutes" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setFiltre("toutes")}>Toutes ({ventes.filter(v => v.statut !== "crédit").length})</Button>
+        <Button variant={filtre === "attente" ? "default" : "outline"} className={filtre === "attente" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setFiltre("attente")}>En attente ({ventes.filter(v => v.statut === "en attente").length})</Button>
         <Button variant={filtre === "payée" ? "default" : "outline"} className={filtre === "payée" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setFiltre("payée")}>Payées ({ventes.filter(v => v.statut === "payée").length})</Button>
       </div>
+      {/* Les ventes à crédit ne passent PAS ici : elles sont encaissées uniquement dans l'onglet « 💳 Crédits / Dettes » */}
+      {ventes.some(v => v.statut === "crédit") && (
+        <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md p-2 mb-3">
+          💳 {ventes.filter(v => v.statut === "crédit").length} vente{ventes.filter(v => v.statut === "crédit").length > 1 ? "s" : ""} à crédit en cours : l'encaissement des versements se fait uniquement dans l'onglet « 💳 Crédits / Dettes ».
+        </p>
+      )}
       {liste.length === 0 ? <p className="text-muted-foreground">Aucune vente dans cette catégorie.</p> : liste.map(v => (
         <LigneVente key={v.id} v={v} onConfirmer={confirmerEtProposer}
           saisiePrix={saisie} onSaisirPrix={majPrixLigne} />
@@ -1793,7 +1808,7 @@ function ContenuMenuDev({ codeOk, setCodeOk, codeSaisi, setCodeSaisi, nouvelAdmi
   );
 }
 
-function VueVendeurSecretaire({ produits, marques, ventes, creerVente, confirmerPaiement, majPrixLigne, modePrix, entreprise, credits, ajouterCredit, ajouterVersement, validerCredit, categories, ajouterProduitVendeur, supprimerProduitVendeur }) {
+function VueVendeurSecretaire({ produits, marques, ventes, creerVente, confirmerPaiement, majPrixLigne, modePrix, entreprise, credits, ajouterCredit, ajouterVersement, validerCredit, categories, cases }) {
   const [vue, setVue] = useState("vendre");
   return (
     <div>
@@ -1801,11 +1816,27 @@ function VueVendeurSecretaire({ produits, marques, ventes, creerVente, confirmer
         <Button variant={vue === "vendre" ? "default" : "outline"} className={vue === "vendre" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setVue("vendre")}>📷 Espace vente</Button>
         <Button variant={vue === "secretaire" ? "default" : "outline"} className={vue === "secretaire" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setVue("secretaire")}>💰 Espace secrétariat</Button>
       </div>
+
+      {/* Gros bouton unique qui réunit toutes les options de crédit : un seul endroit pour tout le crédit */}
+      {vue !== "credits" && (
+        <div className="max-w-6xl mx-auto px-4 pt-4">
+          <Button size="lg" className="w-full py-6 text-lg bg-amber-600 hover:bg-amber-700 text-white font-bold shadow-md"
+            onClick={() => setVue("credits")}>
+            💳 Espace Crédits ({(credits || []).filter(c => c.statut !== "payé").length} en cours)
+          </Button>
+        </div>
+      )}
+
+      {vue === "credits" && (
+        <GestionCredits credits={credits || []} ajouterCredit={ajouterCredit} ajouterVersement={ajouterVersement} validerCredit={validerCredit} />
+      )}
       {vue === "vendre"
         ? <VueVendeur produits={produits} ventes={ventes} creerVente={creerVente}
-            categories={categories} ajouterProduitVendeur={ajouterProduitVendeur} supprimerProduitVendeur={supprimerProduitVendeur} credits={credits} />
-        : <VueSecretaire ventes={ventes} confirmerPaiement={confirmerPaiement} majPrixLigne={majPrixLigne} modePrix={modePrix} entreprise={entreprise}
-            credits={credits} ajouterCredit={ajouterCredit} ajouterVersement={ajouterVersement} validerCredit={validerCredit} />}
+            categories={categories} credits={credits} cases={cases} />
+        : vue === "secretaire"
+          ? <VueSecretaire ventes={ventes} confirmerPaiement={confirmerPaiement} majPrixLigne={majPrixLigne} modePrix={modePrix} entreprise={entreprise}
+              credits={credits} ajouterCredit={ajouterCredit} ajouterVersement={ajouterVersement} validerCredit={validerCredit} />
+          : null}
     </div>
   );
 }
@@ -1816,7 +1847,8 @@ function VueAdmin({
   modePrix, setModePrix, categories, setCategories, comptes, setComptes,
   entreprise, setEntreprise, boutiquesMasquees = [], basculerVisibiliteBoutique = () => {},
   transfertsStock = [], effectuerTransfertStock = () => {}, validerTransfertStock = () => {},
-  credits = [], ajouterCredit, ajouterVersement, validerCredit
+  credits = [], ajouterCredit, ajouterVersement, validerCredit,
+  cases = [], setCases = () => {}
 }) {
   const [onglet, setOnglet] = useState("stats");
   const [recherche, setRecherche] = useState("");
@@ -1826,12 +1858,14 @@ function VueAdmin({
   const [edite, setEdite] = useState(null);
   const [code, setCode] = useState("");
   const [photoEdite, setPhotoEdite] = useState(null);
+  const [caseEdite, setCaseEdite] = useState(""); // case de l'article en cours de modification
   const [mots, setMots] = useState("");
   const [prix, setPrix] = useState("");
   const [stock, setStock] = useState("");
   const [nouvelleMarque, setNouvelleMarque] = useState("");
   const [marqueAAjouter, setMarqueAAjouter] = useState(null);
   const [nouvelleCategorie, setNouvelleCategorie] = useState("");
+  const [nouvelleCase, setNouvelleCase] = useState({ numero: "", nom: "" }); // case de rangement : numéro + nom
   const [ajoutOuvert, setAjoutOuvert] = useState(false);
   const [np, setNp] = useState({ nom: "", cat: "", marque: "", prix: "", stock: "" });
   const [photoNouveau, setPhotoNouveau] = useState(null);
@@ -1908,6 +1942,7 @@ function VueAdmin({
       code: "ART-" + String(id).padStart(3, "0"),
       note: 4.0, desc: np.nom.trim(),
       photo: photoNouveau,
+      caseId: np.caseId, // case de rangement : le vendeur sait où trouver l'article
     }]);
     setNp({ nom: "", cat: "", marque: "", prix: "", stock: "" });
     setPhotoNouveau(null);
@@ -1943,6 +1978,7 @@ function VueAdmin({
       ...p, code: code.trim() || p.code, prix: Number(prix) || p.prix,
       stock: Number(stock) || 0, stockInit: p.stockInit ?? (Number(stock) || 0), photo: photoEdite || p.photo,
       mots: mots.split(",").map(s => s.trim().toLowerCase()).filter(Boolean),
+      caseId: caseEdite || p.caseId,
     } : p));
     setPhotoEdite(null);
     setMots("");
@@ -1963,6 +1999,7 @@ function VueAdmin({
         <Button variant={onglet === "produits" ? "default" : "outline"} className={onglet === "produits" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("produits")}>📦 Produits ({produits.length})</Button>
         <Button variant={onglet === "marques" ? "default" : "outline"} className={onglet === "marques" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("marques")}>🏍️ Marques ({marques.length})</Button>
         <Button variant={onglet === "categories" ? "default" : "outline"} className={onglet === "categories" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("categories")}>🖼️ Catégories</Button>
+        <Button variant={onglet === "cases" ? "default" : "outline"} className={onglet === "cases" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("cases")}>🗄️ Cases ({cases.length})</Button>
         <Button variant={onglet === "boutiques" ? "default" : "outline"} className={onglet === "boutiques" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("boutiques")}>🏪 Magasins ({toutesLesBoutiques.length})</Button>
         <Button variant={onglet === "transferts" ? "default" : "outline"} className={onglet === "transferts" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("transferts")}>🔄 Transferts ({transfertsStock.length})</Button>
         <Button variant={onglet === "credits" ? "default" : "outline"} className={onglet === "credits" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("credits")}>💳 Crédits / Dettes ({credits.filter(c => c.statut !== "payé").length})</Button>
@@ -1977,6 +2014,16 @@ function VueAdmin({
         </Select>
         <Button variant={onglet === "ventes" ? "default" : "outline"} className={onglet === "ventes" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("ventes")}>🧾 Ventes ({ventes.length})</Button>
       </div>
+
+      {/* Gros bouton unique qui réunit toutes les options de crédit : un seul endroit pour tout le crédit */}
+      {onglet !== "credits" && (
+        <div className="max-w-6xl mx-auto px-4 pt-4">
+          <Button size="lg" className="w-full py-6 text-lg bg-amber-600 hover:bg-amber-700 text-white font-bold shadow-md"
+            onClick={() => setOnglet("credits")}>
+            💳 Espace Crédits ({credits.filter(c => c.statut !== "payé").length} en cours)
+          </Button>
+        </div>
+      )}
 
       {onglet === "credits" && (
         <GestionCredits credits={credits} ajouterCredit={ajouterCredit} ajouterVersement={ajouterVersement} validerCredit={validerCredit} />
@@ -2047,7 +2094,7 @@ function VueAdmin({
           <main className="max-w-6xl mx-auto px-4 pb-16">
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               {liste.map(p => (
-                <Produit key={p.id} p={p} categories={categories} admin onEditer={(pp) => { setEdite(pp); setCode(pp.code || ""); setPhotoEdite(null); setMots((pp.mots || []).join(", ")); setPrix(String(pp.prix)); setStock(String(pp.stock)); }} />
+                <Produit key={p.id} p={p} categories={categories} admin onEditer={(pp) => { setEdite(pp); setCode(pp.code || ""); setPhotoEdite(null); setCaseEdite(pp.caseId || ""); setMots((pp.mots || []).join(", ")); setPrix(String(pp.prix)); setStock(String(pp.stock)); }} />
               ))}
             </div>
           </main>
@@ -2084,6 +2131,19 @@ function VueAdmin({
                 </p>
                 <Label className="pt-2">Stock</Label>
                 <Input type="number" value={stock} onChange={e => setStock(e.target.value)} />
+                <Label className="pt-2">🗄️ Case de rangement</Label>
+                {cases.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">Aucune case créée. Créez vos cases dans l'onglet « 🗄️ Cases ».</p>
+                ) : (
+                  <Select value={caseEdite || undefined} onValueChange={v => setCaseEdite(v)}>
+                    <SelectTrigger><SelectValue placeholder="Choisir la case…" /></SelectTrigger>
+                    <SelectContent className="bg-white text-zinc-900 border border-zinc-200 shadow-lg z-[200]">
+                      {[...cases].sort((a, b) => Number(a.numero) - Number(b.numero)).map(c => (
+                        <SelectItem key={c.id} value={c.id}>🗄️ Case n°{c.numero} — {c.nom}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
               </div>
               <DialogFooter>
                 <Button variant="outline" onClick={() => setEdite(null)}>Annuler</Button>
@@ -2139,10 +2199,23 @@ function VueAdmin({
                 <Input type="number" value={np.prix} onChange={e => setNp({ ...np, prix: e.target.value })} placeholder="0" />
                 <Label className="pt-2">Stock</Label>
                 <Input type="number" value={np.stock} onChange={e => setNp({ ...np, stock: e.target.value })} placeholder="10" />
+                <Label className="pt-2">🗄️ Case où se trouve l'article</Label>
+                {cases.length === 0 ? (
+                  <p className="text-xs text-red-600">⚠️ Aucune case n'existe encore. Créez d'abord vos cases dans l'onglet « 🗄️ Cases ».</p>
+                ) : (
+                  <Select value={np.caseId || undefined} onValueChange={v => setNp({ ...np, caseId: v })}>
+                    <SelectTrigger><SelectValue placeholder="Choisir la case…" /></SelectTrigger>
+                    <SelectContent className="bg-white text-zinc-900 border border-zinc-200 shadow-lg z-[200]">
+                      {[...cases].sort((a, b) => Number(a.numero) - Number(b.numero)).map(c => (
+                        <SelectItem key={c.id} value={c.id}>🗄️ Case n°{c.numero} — {c.nom}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
               </div>
               <DialogFooter>
                 <Button variant="outline" onClick={() => setAjoutOuvert(false)}>Annuler</Button>
-                <Button className="bg-blue-600 hover:bg-blue-700 text-white h-11 text-base" disabled={!np.nom.trim() || !np.cat} onClick={enregistrerNouveau}>Ajouter</Button>
+                <Button className="bg-blue-600 hover:bg-blue-700 text-white h-11 text-base" disabled={!np.nom.trim() || !np.cat || !np.caseId} onClick={enregistrerNouveau}>Ajouter</Button>
               </DialogFooter>
             </DialogContent>
           </Dialog>
@@ -2199,6 +2272,54 @@ function VueAdmin({
               </DialogFooter>
             </DialogContent>
           </Dialog>
+        </div>
+      )}
+
+      {/* Onglet Cases : l'admin numérote et nomme les cases de rangement AVANT d'enregistrer les articles */}
+      {onglet === "cases" && (
+        <div className="max-w-3xl mx-auto px-4 py-4 space-y-4">
+          <Card className="bg-white"><CardContent className="p-4 space-y-2">
+            <div className="font-semibold">🗄️ Créer une case de rangement</div>
+            <p className="text-xs text-muted-foreground">Numérotez vos cases et donnez-leur un nom (ex : Case 1 — Bougies). Ensuite, quand vous enregistrez un article, vous choisissez la case où il se trouve. Le vendeur verra « Case n°1 » et saura exactement où prendre l'article.</p>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <Input type="number" placeholder="Numéro de case (ex : 1)" value={nouvelleCase.numero}
+                onChange={e => setNouvelleCase({ ...nouvelleCase, numero: e.target.value.replace(/\D/g, "") })} />
+              <Input placeholder="Nom de la case (ex : Bougies)" value={nouvelleCase.nom}
+                onChange={e => setNouvelleCase({ ...nouvelleCase, nom: e.target.value })} />
+              <Button className="h-10 bg-blue-600 hover:bg-blue-700 text-white"
+                disabled={!(Number(nouvelleCase.numero) > 0) || !nouvelleCase.nom.trim()}
+                onClick={() => {
+                  const numero = Number(nouvelleCase.numero);
+                  if (cases.some(c => Number(c.numero) === numero)) return;
+                  setCases(prev => [...prev, { id: "case-" + numero, numero, nom: nouvelleCase.nom.trim() }]);
+                  setNouvelleCase({ numero: "", nom: "" });
+                }}>➕ Créer la case</Button>
+            </div>
+            {Number(nouvelleCase.numero) > 0 && cases.some(c => Number(c.numero) === Number(nouvelleCase.numero)) && (
+              <p className="text-xs text-red-600">⚠️ Ce numéro de case existe déjà.</p>
+            )}
+          </CardContent></Card>
+
+          <div className="font-semibold text-sm">🗄️ Vos cases ({cases.length})</div>
+          {cases.length === 0 ? (
+            <p className="text-muted-foreground text-sm">Aucune case pour le moment. Créez d'abord vos cases, puis enregistrez vos articles en choisissant leur case.</p>
+          ) : (
+            <div className="space-y-2">
+              {[...cases].sort((a, b) => Number(a.numero) - Number(b.numero)).map(c => (
+                <Card key={c.id} className="bg-white"><CardContent className="p-2 flex items-center gap-3">
+                  <div className="w-12 h-12 bg-blue-50 border-2 border-blue-300 rounded-md flex flex-col items-center justify-center shrink-0">
+                    <span className="text-[9px] text-blue-700 font-semibold leading-none">CASE</span>
+                    <span className="text-lg font-extrabold text-blue-700 leading-none">n°{c.numero}</span>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-semibold text-sm truncate">{c.nom}</div>
+                    <div className="text-xs text-muted-foreground">{produits.filter(p => p.caseId === c.id).length} article{produits.filter(p => p.caseId === c.id).length > 1 ? "s" : ""} rangé{produits.filter(p => p.caseId === c.id).length > 1 ? "s" : ""} dans cette case</div>
+                  </div>
+                  <BoutonSupprimer label="🗑️" onSupprimer={() => setCases(prev => prev.filter(x => x.id !== c.id))} />
+                </CardContent></Card>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -3079,14 +3200,10 @@ function SectionPublicites({ publicites, setPublicites, autoriserUpload = false 
               <div className="relative h-48 bg-zinc-900 overflow-hidden">
                 <img src={pub.image} alt={pub.titre} className="w-full h-full object-cover object-center transition-transform duration-300 hover:scale-105" />
                 {autoriserUpload && (
-                  <Button
-                    size="sm"
-                    variant="destructive"
-                    className="absolute top-2 right-2 h-7 px-2 text-xs shadow"
-                    onClick={() => supprimerPub(pub.id)}
-                  >
-                    🗑️ Supprimer
-                  </Button>
+                  <div className="absolute top-2 right-2">
+                    <BoutonSupprimer label="🗑️ Supprimer" boutonClass="h-7 px-2 text-xs shadow bg-red-600 hover:bg-red-700 text-white"
+                      onSupprimer={() => supprimerPub(pub.id)} />
+                  </div>
                 )}
               </div>
               <CardContent className="p-3">
@@ -3217,6 +3334,10 @@ export default function App() {
   });
   const [marques, setMarques] = useState([]);
   const [categories, setCategories] = useState(CATEGORIES_DEFAUT);
+  // Cases de rangement : l'admin numérote et nomme les cases où sont rangés les articles
+  const [cases, setCases] = useState(() => {
+    try { const s = localStorage.getItem("motopieces_cases"); return s ? JSON.parse(s) : []; } catch { return []; }
+  });
   const [photosCategories, setPhotosCategories] = useState({});
   const [photosMarques, setPhotosMarques] = useState({});
   const [ventes, setVentes] = useState(() => {
@@ -3348,6 +3469,11 @@ export default function App() {
   useEffect(() => {
     try { localStorage.setItem("motopieces_next_vente", String(nextVente)); } catch {}
   }, [nextVente]);
+
+  // Sauvegarde automatique des cases de rangement (numéro + nom)
+  useEffect(() => {
+    try { localStorage.setItem("motopieces_cases", JSON.stringify(cases)); } catch {}
+  }, [cases]);
 
   // Sauvegarde automatique des crédits / dettes
   useEffect(() => {
@@ -3675,7 +3801,7 @@ export default function App() {
             )}
 
             {/* Logo & Titre MotoPièces */}
-            <BoutonSupprimer label={<><IconeMoto /> <span className="text-lg sm:text-xl font-extrabold tracking-wide">{entreprise.nom || "MotoPièces"}</span><span className="block text-[10px] font-normal text-white/60 leading-tight">🛍️ {entreprise.materiel} — 📞 {entreprise.tel}</span></>} duree={7000}
+            <BoutonSupprimer label={<><IconeMoto /> <span className="text-lg sm:text-xl font-extrabold tracking-wide">{entreprise.nom || "MotoPièces"}</span><span className="block text-[10px] font-normal text-white/60 leading-tight">🛍️ {entreprise.materiel} — 📞 {entreprise.tel}</span></>} duree={10000}
               boutonClass="text-white hover:bg-white/10 text-left rounded p-1"
               onSupprimer={() => setMenuDev(true)} />
             {role && <Badge variant="secondary" className="hidden sm:inline-flex">{r.emoji} {r.titre}</Badge>}
@@ -3813,7 +3939,7 @@ export default function App() {
         </DialogContent>
       </Dialog>
 
-      {/* Menu développeur (accessible en maintenant le logo 7 secondes) */}
+      {/* Menu développeur (accessible en maintenant le logo 10 secondes) */}
       <Dialog open={menuDev} onOpenChange={o => { setMenuDev(o); if (!o) { setCodeOk(false); setCodeSaisi(""); } }}>
         <DialogContent className="bg-white text-zinc-900 rounded-lg p-4 border shadow-xl" style={{position:"fixed",left:"50%",top:"50%",transform:"translate(-50%,-50%)",maxWidth:"300px",width:"90%",zIndex:60}}>
           <ContenuMenuDev codeOk={codeOk} setCodeOk={setCodeOk} codeSaisi={codeSaisi} setCodeSaisi={setCodeSaisi}
@@ -3846,14 +3972,14 @@ export default function App() {
 
       {/* Vues Métier réservées au personnel de l'entreprise */}
       {role === "vendeur" && <VueVendeur produits={produits} ventes={ventes} creerVente={creerVente}
-        categories={categories} ajouterProduitVendeur={ajouterProduitVendeur} supprimerProduitVendeur={supprimerProduitVendeur} credits={credits} />}
+        categories={categories} credits={credits} cases={cases} />}
       {role === "secretaire" && <VueSecretaire ventes={ventes} confirmerPaiement={confirmerPaiement} majPrixLigne={majPrixLigne} modePrix={modePrix} entreprise={entreprise}
         credits={credits} ajouterCredit={ajouterCredit} ajouterVersement={ajouterVersement} validerCredit={validerCredit} />}
       {role === "vendeur-secretaire" && (
         <VueVendeurSecretaire produits={produits} marques={marques} ventes={ventes} creerVente={creerVente}
           confirmerPaiement={confirmerPaiement} majPrixLigne={majPrixLigne} modePrix={modePrix} entreprise={entreprise}
           credits={credits} ajouterCredit={ajouterCredit} ajouterVersement={ajouterVersement} validerCredit={validerCredit}
-          categories={categories} ajouterProduitVendeur={ajouterProduitVendeur} supprimerProduitVendeur={supprimerProduitVendeur} />
+          categories={categories} cases={cases} />
       )}
       {role === "admin" && (
         <VueAdmin produits={produits} setProduits={setProduits} marques={marques} setMarques={setMarques}
@@ -3871,7 +3997,8 @@ export default function App() {
           credits={credits}
           ajouterCredit={ajouterCredit}
           ajouterVersement={ajouterVersement}
-          validerCredit={validerCredit} />
+          validerCredit={validerCredit}
+          cases={cases} setCases={setCases} />
       )}
 
       {/* Bouton Flottant & Chat Routé par Rôle avec Option Vocale */}
