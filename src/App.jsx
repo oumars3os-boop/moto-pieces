@@ -13,6 +13,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/context/AuthContext";
 import { supabase, synchroniserCompteSupabase } from "@/lib/supabase";
 import { extraireTexteImage } from "@/lib/ocr";
+import { demanderAssistantMistral } from "@/lib/mistral";
 
 // ---------- Données ----------
 
@@ -2206,13 +2207,14 @@ function ChatFlottant({ userActif, entreprise, role, openChat, setOpenChat, arti
   // Envoyer un message texte
   const envoyerTexte = (e) => {
     if (e) e.preventDefault();
-    if (!texte.trim()) return;
+    const messageContenu = texte.trim();
+    if (!messageContenu) return;
 
     const nouveauMsg = {
       id: Date.now(),
       canal,
       auteur: userActif?.nom || "Client",
-      texte: texte.trim(),
+      texte: messageContenu,
       audioUrl: null,
       date: new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }),
     };
@@ -2220,18 +2222,27 @@ function ChatFlottant({ userActif, entreprise, role, openChat, setOpenChat, arti
     setMessages((prev) => [...prev, nouveauMsg]);
     setTexte("");
 
-    // Réponse automatique routée selon le canal
-    setTimeout(() => {
-      let reponseAuteur = "Assistance MotoPièces";
-      let reponseTexte = "Merci pour votre message ! Un conseiller vous répond dans quelques instants.";
+    // Appel à l'IA Mistral pour générer une réponse intelligente en temps réel
+    setTimeout(async () => {
+      let reponseAuteur = "🤖 IA MotoPièces (Mistral)";
+      let systemPrompt = "Tu es l'Assistant IA virtuel de la plateforme MotoPièces. Tu réponds poliment, clairement et brièvement en français aux clients sur les pièces détachées de moto (moteur, freins, bougies, kit chaîne, batteries) et les commandes.";
 
       if (canal === "negociation") {
-        reponseAuteur = `Vendeur (${articleNegociation?.boutique || "MotoPièces"})`;
-        reponseTexte = `Proposition bien reçue concernant ${articleNegociation?.nom || "votre négociation"}. Notre vendeur étudie votre prix.`;
+        reponseAuteur = `🤖 Vendeur (${articleNegociation?.boutique || "MotoPièces"})`;
+        systemPrompt = `Tu es le gérant commercial de la boutique ${articleNegociation?.boutique || "MotoPièces"}. Un client souhaite négocier le prix de l'article ${articleNegociation?.nom || "pièce moto"} (Prix affiché: ${articleNegociation?.prix || "à négocier"} FCFA). Réponds-lui poliment avec une contre-proposition commerciale avantageuse et courte.`;
       } else if (canal === "developpeur") {
         reponseAuteur = "👨‍💻 Support Développeur Platform";
-        reponseTexte = "Message d'assistance technique transmis au développeur. Nous traitons votre demande.";
+        systemPrompt = "Tu es l'Ingénieur Support Développeur de la plateforme MotoPièces. Tu réponds aux vendeurs et administrateurs sur les fonctionnalités techniques de l'application.";
       }
+
+      const reponseIA = await demanderAssistantMistral(
+        [{ role: "user", content: messageContenu }],
+        systemPrompt
+      );
+
+      const reponseTexte = reponseIA || (canal === "negociation"
+        ? `Offre reçue concernant ${articleNegociation?.nom || "votre demande"}. Notre vendeur étudie votre prix.`
+        : "Merci pour votre message ! Notre équipe étudie votre demande.");
 
       setMessages((prev) => [
         ...prev,
@@ -2244,7 +2255,7 @@ function ChatFlottant({ userActif, entreprise, role, openChat, setOpenChat, arti
           date: new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }),
         },
       ]);
-    }, 1200);
+    }, 800);
   };
 
   // Envoyer la note vocale enregistrée
