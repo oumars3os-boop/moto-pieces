@@ -12,6 +12,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/context/AuthContext";
 import { supabase, synchroniserCompteSupabase } from "@/lib/supabase";
+import { extraireTexteImage } from "@/lib/ocr";
 
 // ---------- Données ----------
 
@@ -2124,10 +2125,32 @@ function ChatFlottant({ userActif, entreprise, role, openChat, setOpenChat, arti
   const [texte, setTexte] = useState("");
   const [enEnregistrement, setEnEnregistrement] = useState(false);
   const [dureeVocal, setDureeVocal] = useState(0);
+  const [enAnalyseOcr, setEnAnalyseOcr] = useState(false);
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const timerVocalRef = useRef(null);
   const chatEndRef = useRef(null);
+
+  const scannerImageOcr = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setEnAnalyseOcr(true);
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      const resultData = await extraireTexteImage(event.target.result);
+      setEnAnalyseOcr(false);
+
+      if (resultData.success && resultData.text) {
+        const refs = resultData.references.length > 0 ? ` (Réf : ${resultData.references.join(", ")})` : "";
+        setTexte((prev) => (prev ? `${prev} ${resultData.text}` : `🔍 [OCR] ${resultData.text}${refs}`));
+      } else {
+        alert("Aucun texte ou référence n'a pu être extrait de cette photo.");
+      }
+    };
+    reader.readAsDataURL(file);
+    e.target.value = "";
+  };
 
   const estPersonnel = role === "vendeur" || role === "secretaire" || role === "vendeur-secretaire" || role === "admin";
 
@@ -2381,8 +2404,13 @@ function ChatFlottant({ userActif, entreprise, role, openChat, setOpenChat, arti
             <div ref={chatEndRef} />
           </ScrollArea>
 
-          {/* Barre de Saisie & Option Vocale */}
+          {/* Barre de Saisie, Scanner OCR & Option Vocale */}
           <div className="p-2 border-t bg-white flex flex-col gap-1.5">
+            {enAnalyseOcr && (
+              <div className="p-2 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800 font-medium animate-pulse flex items-center justify-between">
+                <span>🔍 Analyse OCR de la photo... Extraction des références...</span>
+              </div>
+            )}
             {enEnregistrement ? (
               <div className="flex items-center justify-between p-2 bg-red-50 border border-red-200 rounded-lg animate-pulse">
                 <span className="text-xs text-red-600 font-bold flex items-center gap-2">
@@ -2398,6 +2426,14 @@ function ChatFlottant({ userActif, entreprise, role, openChat, setOpenChat, arti
               </div>
             ) : (
               <form onSubmit={envoyerTexte} className="flex items-center gap-1.5">
+                <input
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  className="hidden"
+                  id="chat-ocr-file"
+                  onChange={scannerImageOcr}
+                />
                 <Input
                   value={texte}
                   onChange={(e) => setTexte(e.target.value)}
@@ -2410,6 +2446,16 @@ function ChatFlottant({ userActif, entreprise, role, openChat, setOpenChat, arti
                   }
                   className="flex-1 text-xs h-9"
                 />
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-9 px-2 text-xs border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100"
+                  onClick={() => document.getElementById("chat-ocr-file").click()}
+                  title="Scanner le texte ou la référence d'une photo (OCR)"
+                >
+                  🔍 OCR
+                </Button>
                 <Button
                   type="button"
                   size="sm"
