@@ -693,6 +693,9 @@ function VueClient({ produits, marques, creerVente, photosCategories, photosMarq
     }));
     const totalSnapshot = itemsSnapshot.reduce((sum, item) => sum + (item.prix * item.qte), 0);
 
+    // Correctif : refuser une commande contenant un article sans prix (0 FCFA)
+    if (!(totalSnapshot > 0)) return;
+
     const commandePayload = {
       items: itemsSnapshot,
       total: totalSnapshot,
@@ -889,15 +892,17 @@ function VueVendeur({ produits, ventes, creerVente }) {
       })));
       dists.sort((x, y) => x.d - y.d);
       const best = dists[0];
-      const articleRetenu = (best && best.p) ? best.p : produits[0];
 
-      if (articleRetenu) {
-        setPhotos(prev => prev.map((ph, j) => j === index ? { ...ph, article: articleRetenu, reconnu: true } : ph));
+      // Correctif : ne plus identifier à tort l'article comme le premier produit en cas d'échec.
+      // On garde l'article seulement si une vraie correspondance photo a été trouvée.
+      if (best && best.p && best.d < 0.4) {
+        setPhotos(prev => prev.map((ph, j) => j === index ? { ...ph, article: best.p, reconnu: true } : ph));
+      } else {
+        setPhotos(prev => prev.map((ph, j) => j === index ? { ...ph, reconnu: false } : ph));
       }
     } catch (err) {
-      if (produits[0]) {
-        setPhotos(prev => prev.map((ph, j) => j === index ? { ...ph, article: produits[0], reconnu: true } : ph));
-      }
+      // Échec de la reconnaissance : aucune attribution automatique (vente erronée évitée)
+      setPhotos(prev => prev.map((ph, j) => j === index ? { ...ph, reconnu: false } : ph));
     }
   };
 
@@ -948,6 +953,9 @@ function VueVendeur({ produits, ventes, creerVente }) {
   };
 
   const envoyer = () => {
+    // Correctif : impossible d'enregistrer une vente à 0 FCFA (article sans prix défini)
+    const sansPrix = identifies.filter(ph => !(ph.article.prix > 0));
+    if (sansPrix.length > 0) return;
     const liste = identifies.map(ph => ({ p: ph.article, qte: ph.qte, photo: ph.src }));
     creerVente({
       items: liste,
@@ -1093,10 +1101,13 @@ function VueVendeur({ produits, ventes, creerVente }) {
                         {photos.some(ph => !ph.article) && (
                           <p className="text-xs text-red-600">⚠️ Identifiez toutes les photos avant d'envoyer.</p>
                         )}
+                        {identifies.some(ph => !(ph.article.prix > 0)) && (
+                          <p className="text-xs text-red-600">⚠️ Un ou plusieurs articles n'ont pas de prix (0 FCFA). L'admin doit fixer le prix dans l'inventaire avant la vente.</p>
+                        )}
                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                           <Input placeholder="Nom du client" value={client.nom} onChange={e => setClient({ ...client, nom: e.target.value })} />
                           <Input placeholder="Téléphone" value={client.tel} onChange={e => setClient({ ...client, tel: e.target.value })} />
-                          <Button disabled={identifies.length === 0 || photos.some(ph => !ph.article)}
+                          <Button disabled={identifies.length === 0 || photos.some(ph => !ph.article) || identifies.some(ph => !(ph.article.prix > 0))}
                             onClick={envoyer}>➡️ Envoyer à la secrétaire</Button>
                         </div>
                       </div>
@@ -1145,7 +1156,7 @@ function VueVendeur({ produits, ventes, creerVente }) {
             <div className="text-xs text-muted-foreground">🧺 Cagnotte en cours</div>
             <div className="font-bold text-lg">{totalAuto.toLocaleString("fr-FR")} FCFA</div>
           </div>
-          <Button disabled={photos.some(ph => !ph.article)} onClick={envoyer}>➡️ Envoyer à la secrétaire</Button>
+          <Button disabled={photos.some(ph => !ph.article) || identifies.some(ph => !(ph.article.prix > 0))} onClick={envoyer}>➡️ Envoyer à la secrétaire</Button>
         </div>
       )}
     </div>
@@ -1253,7 +1264,195 @@ function TableauPieces({ produits, ventes }) {
   );
 }
 
-function VueSecretaire({ ventes, confirmerPaiement, majPrixLigne, modePrix, entreprise }) {
+// ---------- Gestion des crédits / dettes (vendeur & secrétaire) ----------
+function GestionCredits({ credits, ajouterCredit, ajouterVersement, validerCredit }) {
+  const [vue, setVue] = useState("recevoir"); // "recevoir" : ils nous doivent | "payer" : on leur doit
+  const [filtre, setFiltre] = useState("encours"); // "encours" | "payes"
+  const [ticket, setTicket] = useState(null); // crédit en cours d'impression
+  const [form, setForm] = useState({ nom: "", tel: "", montant: "" });
+  const [saisie, setSaisie] = useState({}); // montant du versement en cours, par crédit
+
+  const resteDe = (c) => Math.max(0, (c.montant || 0) - (c.versements || []).reduce((s, v) => s + (v.montant || 0), 0));
+  const enCours = credits.filter(c => (c.type || "recevoir") === vue && c.statut !== "payé");
+  const termines = credits.filter(c => (c.type || "recevoir") === vue && c.statut === "payé");
+  const liste = filtre === "payes" ? termines : enCours;
+  const totalRestant = enCours.reduce((s, c) => s + resteDe(c), 0);
+  const nbRecette = credits.filter(c => c.type === "recevoir" && c.statut !== "payé").length;
+  const nbDepense = credits.filter(c => c.type === "payer" && c.statut !== "payé").length;
+
+  const enregistrer = () => {
+    const nom = form.nom.trim();
+    const montant = Number(form.montant) || 0;
+    if (!nom || !(montant > 0)) return;
+    ajouterCredit({ type: vue, nom, tel: form.tel.trim(), montant });
+    setForm({ nom: "", tel: "", montant: "" });
+  };
+
+  const verser = (c) => {
+    const montant = Number(saisie[c.id]) || 0;
+    if (!(montant > 0)) return;
+    ajouterVersement(c.id, montant);
+    // Si le versement solde le crédit, il passe automatiquement en "Payé ✅"
+    const dejaPaye = (c.versements || []).reduce((s, v) => s + (v.montant || 0), 0);
+    if (dejaPaye + montant >= (c.montant || 0)) validerCredit(c.id);
+    setSaisie(s => ({ ...s, [c.id]: "" }));
+  };
+
+  const alerteDoublon = form.nom.trim() &&
+    credits.some(c => c.statut !== "payé" && (c.nom || "").toLowerCase() === form.nom.trim().toLowerCase());
+
+  return (
+    <div className="max-w-6xl mx-auto px-4 py-4">
+      {/* Onglets : argent qu'on nous doit / argent qu'on doit */}
+      <div className="flex flex-wrap gap-2 mb-4">
+        <Button variant={vue === "recevoir" ? "default" : "outline"} className={vue === "recevoir" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => { setVue("recevoir"); setFiltre("encours"); }}>💳 Ils nous doivent ({nbRecette})</Button>
+        <Button variant={vue === "payer" ? "default" : "outline"} className={vue === "payer" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => { setVue("payer"); setFiltre("encours"); }}>🏦 On leur doit ({nbDepense})</Button>
+      </div>
+
+      {/* Sous-onglets (dans la page du bouton cliqué) : crédits en cours / crédits validés */}
+      <div className="flex flex-wrap gap-2 mb-4 ml-1 pl-3 border-l-4 border-zinc-300">
+        <Button variant={filtre === "encours" ? "default" : "outline"} className={filtre === "encours" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setFiltre("encours")}>🔴 Crédits en cours ({enCours.length})</Button>
+        <Button variant={filtre === "payes" ? "default" : "outline"} className={filtre === "payes" ? "ring-2 ring-green-600 ring-offset-1" : ""} onClick={() => setFiltre("payes")}>✅ Crédits validés ({termines.length})</Button>
+      </div>
+
+      {/* Résumé */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+        <Card className="bg-white"><CardContent className="p-3">
+          <div className="text-xs text-muted-foreground">{vue === "recevoir" ? "Argent à récupérer" : "Argent à verser"}</div>
+          <div className="text-xl font-bold text-red-600">{totalRestant.toLocaleString("fr-FR")} FCFA</div>
+        </CardContent></Card>
+        <Card className="bg-white"><CardContent className="p-3">
+          <div className="text-xs text-muted-foreground">Crédits en cours</div>
+          <div className="text-xl font-bold text-amber-600">{enCours.length}</div>
+        </CardContent></Card>
+        <Card className="bg-white"><CardContent className="p-3">
+          <div className="text-xs text-muted-foreground">Personnes ayant fini de payer ✅</div>
+          <div className="text-xl font-bold text-green-600">{termines.length}</div>
+        </CardContent></Card>
+      </div>
+
+      {/* Formulaire d'enregistrement */}
+      <Card className="bg-white mb-4"><CardContent className="p-4 space-y-2">
+        <div className="font-semibold text-sm">
+          {vue === "recevoir"
+            ? "➕ Enregistrer quelqu'un qui nous doit de l'argent"
+            : "➕ Enregistrer une dette de l'entreprise (ex : l'administrateur doit à quelqu'un)"}
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
+          <Input placeholder="Nom de la personne" value={form.nom} onChange={e => setForm({ ...form, nom: e.target.value })} />
+          <Input placeholder="Téléphone (optionnel)" value={form.tel} onChange={e => setForm({ ...form, tel: e.target.value })} />
+          <Input type="number" placeholder="Montant total (FCFA)" value={form.montant} onChange={e => setForm({ ...form, montant: e.target.value })} />
+          <Button className="h-10" disabled={!form.nom.trim() || !(Number(form.montant) > 0)} onClick={enregistrer}>💾 Enregistrer le crédit</Button>
+        </div>
+        {alerteDoublon && (
+          <p className="text-xs text-amber-600">⚠️ Cette personne a déjà un crédit en cours. Vous pouvez quand même enregistrer, mais pensez à solder l'ancien.</p>
+        )}
+      </CardContent></Card>
+
+      {/* Liste des crédits */}
+      {liste.length === 0 && <p className="text-muted-foreground">{filtre === "payes" ? "Aucun crédit validé pour le moment. Dès que quelqu'un finit de payer, il arrive ici automatiquement ✅" : "Aucun crédit en cours dans cette catégorie."}</p>}
+      {liste.map(c => {
+        const paye = (c.montant || 0) - resteDe(c);
+        const reste = resteDe(c);
+        const pct = (c.montant || 0) > 0 ? Math.min(100, Math.round(paye * 100 / c.montant)) : 0;
+        return (
+          <Card key={c.id} className="bg-white mb-2">
+            <CardContent className="p-3 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-sm">
+                  <span className="font-medium">👤 {c.nom}</span>
+                  {c.tel ? <span className="text-muted-foreground"> — 📞 {c.tel}</span> : null}
+                  <div className="text-xs text-muted-foreground">Créé le {c.dateCreation || "—"}{c.enregistrePar ? ` par ${c.enregistrePar}` : ""}</div>
+                  {c.statut === "payé" && <div className="text-xs font-semibold text-green-700">✅ Validé le {c.dateValidation || "—"}</div>}
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button size="sm" variant="outline" className="h-8 border-blue-300 text-blue-700 hover:bg-blue-50" onClick={() => setTicket(c)}>🖨️ Ticket</Button>
+                  <span className="font-bold whitespace-nowrap">{(c.montant || 0).toLocaleString("fr-FR")} FCFA</span>
+                  {c.statut === "payé"
+                    ? <Badge className="bg-green-600">Payé ✅</Badge>
+                    : <Badge variant="destructive">En cours</Badge>}
+                </div>
+              </div>
+
+              {/* Progression du paiement */}
+              <div>
+                <div className="h-2 bg-zinc-200 rounded-full overflow-hidden">
+                  <div className="h-full bg-green-500 transition-all" style={{ width: pct + "%" }} />
+                </div>
+                <div className="flex justify-between text-xs mt-1">
+                  <span className="text-green-700 font-semibold">Payé : {paye.toLocaleString("fr-FR")} FCFA</span>
+                  <span className="text-red-600 font-semibold">Reste : {reste.toLocaleString("fr-FR")} FCFA</span>
+                </div>
+              </div>
+
+              {/* Historique des versements */}
+              {(c.versements || []).length > 0 && (
+                <div className="text-xs text-muted-foreground border-t pt-1">
+                  {c.versements.map((v, i) => (
+                    <div key={i} className="flex justify-between">
+                      <span>💵 {v.montant.toLocaleString("fr-FR")} FCFA — {v.date}{v.par ? ` (${v.par})` : ""}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Actions : versement (partiel ou total). Quand la totalité est atteinte, le crédit bascule AUTOMATIQUEMENT dans « ✅ Crédits validés » */ }
+              {c.statut !== "payé" && (
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <Input type="number" placeholder="Montant reçu / versé" value={saisie[c.id] || ""} className="flex-1 h-9"
+                    onChange={e => setSaisie(s => ({ ...s, [c.id]: e.target.value }))} />
+                  <Button className="h-9 bg-blue-600 hover:bg-blue-700 text-white" disabled={!(Number(saisie[c.id]) > 0)} onClick={() => verser(c)}>
+                    {vue === "recevoir" ? "💰 Encaisser" : "💸 Payer"} (une partie ou tout)
+                  </Button>
+                  <span className="text-[11px] text-muted-foreground self-center">Dès que la totalité est atteinte, le crédit part automatiquement dans « ✅ Crédits validés »</span>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        );
+      })}
+
+      {/* Ticket de crédit imprimable (petit ticket à donner au client pour prouver ce qu'il doit) */}
+      {ticket && (
+        <FeuilleTicket onFermer={() => setTicket(null)} autoPrint={true}>
+          <div className="text-center font-bold text-sm">MotoPièces</div>
+          <div className="text-center text-[10px] mb-1">{ticket.type === "payer" ? "REÇU DE DETTE DE L'ENTREPRISE" : "TICKET DE CRÉDIT"}</div>
+          <div className="border-t border-dashed border-zinc-400 my-1" />
+          <div className="text-[11px] leading-relaxed">
+            Date : {new Date().toLocaleDateString("fr-FR")} à {new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}<br />
+            Créé le : {ticket.dateCreation || "—"}<br />
+            {ticket.dateValidation ? <>Validé le : {ticket.dateValidation}<br /></> : null}
+            {ticket.type === "payer" ? "Bénéficiaire : " : "Client : "}<span className="font-bold">{ticket.nom}</span><br />
+            {ticket.tel ? <>Tél : {ticket.tel}<br /></> : null}
+          </div>
+          <div className="border-t border-dashed border-zinc-400 my-1" />
+          <div className="text-[11px]">
+            <div className="flex justify-between"><span>Montant total</span><span>{(ticket.montant || 0).toLocaleString("fr-FR")} FCFA</span></div>
+            <div className="flex justify-between"><span>Déjà payé</span><span>{((ticket.montant || 0) - resteDe(ticket)).toLocaleString("fr-FR")} FCFA</span></div>
+            <div className="flex justify-between font-bold"><span>Reste à payer</span><span>{resteDe(ticket).toLocaleString("fr-FR")} FCFA</span></div>
+          </div>
+          {(ticket.versements || []).length > 0 && (
+            <div className="text-[10px] mt-1">
+              <div className="border-t border-dashed border-zinc-400 my-1" />
+              {ticket.versements.map((v, i) => (
+                <div key={i} className="flex justify-between"><span>{v.date}</span><span>+{v.montant.toLocaleString("fr-FR")}</span></div>
+              ))}
+            </div>
+          )}
+          <div className="border-t border-dashed border-zinc-400 my-1" />
+          <div className="text-center text-[11px] font-bold">
+            {ticket.statut === "payé" ? "PAYÉ EN TOTALITÉ ✅ — Merci !" : "EN COURS DE PAIEMENT 🔴"}
+          </div>
+          <div className="text-center text-[9px] mt-1">{ticket.statut === "payé" ? "Ce crédit est entièrement soldé." : "Ce ticket atteste de la somme restant à payer."}</div>
+          <div className="text-center text-[10px] mt-2">* * *</div>
+        </FeuilleTicket>
+      )}
+    </div>
+  );
+}
+
+function VueSecretaire({ ventes, confirmerPaiement, majPrixLigne, modePrix, entreprise, credits, ajouterCredit, ajouterVersement, validerCredit }) {
+  const [ongletSec, setOngletSec] = useState("paiements"); // "paiements" | "credits"
   const [filtre, setFiltre] = useState("toutes");
   const [questionRecu, setQuestionRecu] = useState(null); // après paiement : propose l'impression du reçu
   const [recuA4, setRecuA4] = useState(null); // reçu affiché en feuille A4
@@ -1271,6 +1470,15 @@ function VueSecretaire({ ventes, confirmerPaiement, majPrixLigne, modePrix, entr
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-4">
+      {/* Espace secrétaire : paiements des ventes ou gestion des crédits */}
+      <div className="flex flex-wrap gap-2 mb-4">
+        <Button variant={ongletSec === "paiements" ? "default" : "outline"} className={ongletSec === "paiements" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOngletSec("paiements")}>🧾 Paiements des ventes</Button>
+        <Button variant={ongletSec === "credits" ? "default" : "outline"} className={ongletSec === "credits" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOngletSec("credits")}>💳 Crédits / Dettes ({(credits || []).filter(c => c.statut !== "payé").length})</Button>
+      </div>
+      {ongletSec === "credits" ? (
+        <GestionCredits credits={credits || []} ajouterCredit={ajouterCredit} ajouterVersement={ajouterVersement} validerCredit={validerCredit} />
+      ) : (
+      <>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
         <Card className="bg-white"><CardContent className="p-4">
           <div className="text-sm text-muted-foreground">Argent encaissé</div>
@@ -1337,6 +1545,8 @@ function VueSecretaire({ ventes, confirmerPaiement, majPrixLigne, modePrix, entr
           <div className="text-center text-[10px] mt-3">* * *</div>
           <div className="text-center text-[9px]">{entreprise ? entreprise.nom : ""} — {entreprise ? entreprise.tel : ""}</div>
         </FeuilleTicket>
+      )}
+      </>
       )}
     </div>
   );
@@ -1429,7 +1639,7 @@ function ContenuMenuDev({ codeOk, setCodeOk, codeSaisi, setCodeSaisi, nouvelAdmi
   );
 }
 
-function VueVendeurSecretaire({ produits, marques, ventes, creerVente, confirmerPaiement, majPrixLigne, modePrix, entreprise }) {
+function VueVendeurSecretaire({ produits, marques, ventes, creerVente, confirmerPaiement, majPrixLigne, modePrix, entreprise, credits, ajouterCredit, ajouterVersement, validerCredit }) {
   const [vue, setVue] = useState("vendre");
   return (
     <div>
@@ -1439,7 +1649,8 @@ function VueVendeurSecretaire({ produits, marques, ventes, creerVente, confirmer
       </div>
       {vue === "vendre"
         ? <VueVendeur produits={produits} marques={marques} ventes={ventes} creerVente={creerVente} />
-        : <VueSecretaire ventes={ventes} confirmerPaiement={confirmerPaiement} majPrixLigne={majPrixLigne} modePrix={modePrix} entreprise={entreprise} />}
+        : <VueSecretaire ventes={ventes} confirmerPaiement={confirmerPaiement} majPrixLigne={majPrixLigne} modePrix={modePrix} entreprise={entreprise}
+            credits={credits} ajouterCredit={ajouterCredit} ajouterVersement={ajouterVersement} validerCredit={validerCredit} />}
     </div>
   );
 }
@@ -1449,7 +1660,8 @@ function VueAdmin({
   photosCategories, setPhotosCategories, photosMarques, setPhotosMarques,
   modePrix, setModePrix, categories, setCategories, comptes, setComptes,
   entreprise, setEntreprise, boutiquesMasquees = [], basculerVisibiliteBoutique = () => {},
-  transfertsStock = [], effectuerTransfertStock = () => {}, validerTransfertStock = () => {}
+  transfertsStock = [], effectuerTransfertStock = () => {}, validerTransfertStock = () => {},
+  credits = [], ajouterCredit, ajouterVersement, validerCredit
 }) {
   const [onglet, setOnglet] = useState("stats");
   const [recherche, setRecherche] = useState("");
@@ -1574,7 +1786,7 @@ function VueAdmin({
   const enregistrer = () => {
     setProduits(prev => prev.map(p => p.id === edite.id ? {
       ...p, code: code.trim() || p.code, prix: Number(prix) || p.prix,
-      stock: Number(stock) || 0, stockInit: Number(stock) || 0, photo: photoEdite || p.photo,
+      stock: Number(stock) || 0, stockInit: p.stockInit ?? (Number(stock) || 0), photo: photoEdite || p.photo,
       mots: mots.split(",").map(s => s.trim().toLowerCase()).filter(Boolean),
     } : p));
     setPhotoEdite(null);
@@ -1598,6 +1810,7 @@ function VueAdmin({
         <Button variant={onglet === "categories" ? "default" : "outline"} className={onglet === "categories" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("categories")}>🖼️ Catégories</Button>
         <Button variant={onglet === "boutiques" ? "default" : "outline"} className={onglet === "boutiques" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("boutiques")}>🏪 Magasins ({toutesLesBoutiques.length})</Button>
         <Button variant={onglet === "transferts" ? "default" : "outline"} className={onglet === "transferts" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("transferts")}>🔄 Transferts ({transfertsStock.length})</Button>
+        <Button variant={onglet === "credits" ? "default" : "outline"} className={onglet === "credits" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("credits")}>💳 Crédits / Dettes ({credits.filter(c => c.statut !== "payé").length})</Button>
         <Button variant={onglet === "utilisateurs" ? "default" : "outline"} className={onglet === "utilisateurs" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("utilisateurs")}>👥 Utilisateurs</Button>
         <div className="flex-1" />
         <Select value={modePrix} onValueChange={setModePrix}>
@@ -1609,6 +1822,10 @@ function VueAdmin({
         </Select>
         <Button variant={onglet === "ventes" ? "default" : "outline"} className={onglet === "ventes" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("ventes")}>🧾 Ventes ({ventes.length})</Button>
       </div>
+
+      {onglet === "credits" && (
+        <GestionCredits credits={credits} ajouterCredit={ajouterCredit} ajouterVersement={ajouterVersement} validerCredit={validerCredit} />
+      )}
 
       {onglet === "stats" && (
         <div className="max-w-6xl mx-auto px-4 py-4">
@@ -2273,7 +2490,9 @@ function ChatFlottant({ userActif, entreprise, role, openChat, setOpenChat, arti
 
   useEffect(() => {
     try {
-      localStorage.setItem("motopieces_chat_messages", JSON.stringify(messages));
+      // Correctif : les URLs audio (blob:) sont invalides après rechargement, on ne les sauvegarde pas
+      const aSauvegarder = messages.map(m => (m.audioUrl ? { ...m, audioUrl: null, texte: m.texte || "🎤 Message vocal" } : m));
+      localStorage.setItem("motopieces_chat_messages", JSON.stringify(aSauvegarder));
     } catch {}
     if (chatEndRef.current) {
       chatEndRef.current.scrollIntoView({ behavior: "smooth" });
@@ -2858,6 +3077,10 @@ export default function App() {
   const [nextVente, setNextVente] = useState(() => {
     try { const s = localStorage.getItem("motopieces_next_vente"); return s ? Number(s) : 1; } catch { return 1; }
   });
+  // Crédits / dettes : qui nous doit de l'argent, et à qui l'entreprise doit de l'argent
+  const [credits, setCredits] = useState(() => {
+    try { const s = localStorage.getItem("motopieces_credits"); return s ? JSON.parse(s) : []; } catch { return []; }
+  });
   const [nextId, setNextId] = useState(113);
   const [menuDev, setMenuDev] = useState(false);
   const [codeOk, setCodeOk] = useState(false);
@@ -2886,8 +3109,15 @@ export default function App() {
     async function chargerVentesEnLigne() {
       try {
         const ventesEnLigne = await chargerVentesSupabase();
-        if (ventesEnLigne && ventesEnLigne.length > 0) {
-          setVentes(ventesEnLigne);
+        // Correctif : fusion avec les ventes locales au lieu de les écraser.
+        // On ignore les lignes serveur vides (total 0 sans article) qui affichaient « 0 FCFA ».
+        const lignesValides = (ventesEnLigne || []).filter(s => (Number(s.total) > 0) || (s.items || []).length > 0);
+        if (lignesValides.length > 0) {
+          setVentes(prev => {
+            const idsConnus = new Set(prev.map(v => String(v.id)));
+            const nouvelles = lignesValides.filter(s => !idsConnus.has(String(s.id)));
+            return nouvelles.length ? [...nouvelles, ...prev] : prev;
+          });
         }
       } catch (e) {
         console.warn("Notice chargement ventes Supabase:", e);
@@ -2948,6 +3178,11 @@ export default function App() {
     try { localStorage.setItem("motopieces_next_vente", String(nextVente)); } catch {}
   }, [nextVente]);
 
+  // Sauvegarde automatique des crédits / dettes
+  useEffect(() => {
+    try { localStorage.setItem("motopieces_credits", JSON.stringify(credits)); } catch {}
+  }, [credits]);
+
   useEffect(() => {
     try { localStorage.setItem("motopieces_publicites", JSON.stringify(publicites)); } catch {}
   }, [publicites]);
@@ -3001,6 +3236,13 @@ export default function App() {
         return {
           ...p,
           stock: Math.max(0, p.stock - t.quantite),
+        };
+      }
+      // Correctif : le stock transféré arrive bien dans le magasin cible si l'article y existe
+      if (p.nom === t.produitNom && p.boutique === t.boutiqueCible) {
+        return {
+          ...p,
+          stock: (p.stock || 0) + t.quantite,
         };
       }
       return p;
@@ -3086,6 +3328,40 @@ export default function App() {
     if (venteValidee) {
       await enregistrerVenteSupabase(venteValidee);
     }
+  };
+
+  // ---------- Crédits / Dettes (vendeur & secrétaire) ----------
+  const ajouterCredit = (c) => {
+    const maintenant = new Date();
+    setCredits(prev => [{
+      ...c,
+      id: Date.now(),
+      versements: [],
+      statut: "en cours",
+      dateCreation: maintenant.toLocaleDateString("fr-FR") + " à " + maintenant.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }),
+      enregistrePar: userActif?.nom || "—",
+    }, ...prev]);
+  };
+
+  const ajouterVersement = (idCredit, montant) => {
+    const maintenant = new Date();
+    setCredits(prev => prev.map(c => c.id === idCredit ? {
+      ...c,
+      versements: [...(c.versements || []), {
+        montant: Number(montant) || 0,
+        date: maintenant.toLocaleDateString("fr-FR") + " à " + maintenant.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }),
+        par: userActif?.nom || "—",
+      }],
+    } : c));
+  };
+
+  const validerCredit = (idCredit) => {
+    const mtn = new Date();
+    setCredits(prev => prev.map(c => c.id === idCredit ? {
+      ...c,
+      statut: "payé",
+      dateValidation: mtn.toLocaleDateString("fr-FR") + " à " + mtn.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }),
+    } : c));
   };
 
   // La secrétaire peut fixer le prix de chaque ligne avant de confirmer
@@ -3326,10 +3602,12 @@ export default function App() {
 
       {/* Vues Métier réservées au personnel de l'entreprise */}
       {role === "vendeur" && <VueVendeur produits={produits} marques={marques} ventes={ventes} creerVente={creerVente} />}
-      {role === "secretaire" && <VueSecretaire ventes={ventes} confirmerPaiement={confirmerPaiement} majPrixLigne={majPrixLigne} modePrix={modePrix} entreprise={entreprise} />}
+      {role === "secretaire" && <VueSecretaire ventes={ventes} confirmerPaiement={confirmerPaiement} majPrixLigne={majPrixLigne} modePrix={modePrix} entreprise={entreprise}
+        credits={credits} ajouterCredit={ajouterCredit} ajouterVersement={ajouterVersement} validerCredit={validerCredit} />}
       {role === "vendeur-secretaire" && (
         <VueVendeurSecretaire produits={produits} marques={marques} ventes={ventes} creerVente={creerVente}
-          confirmerPaiement={confirmerPaiement} majPrixLigne={majPrixLigne} modePrix={modePrix} entreprise={entreprise} />
+          confirmerPaiement={confirmerPaiement} majPrixLigne={majPrixLigne} modePrix={modePrix} entreprise={entreprise}
+          credits={credits} ajouterCredit={ajouterCredit} ajouterVersement={ajouterVersement} validerCredit={validerCredit} />
       )}
       {role === "admin" && (
         <VueAdmin produits={produits} setProduits={setProduits} marques={marques} setMarques={setMarques}
@@ -3343,7 +3621,11 @@ export default function App() {
           basculerVisibiliteBoutique={basculerVisibiliteBoutique}
           transfertsStock={transfertsStock}
           effectuerTransfertStock={effectuerTransfertStock}
-          validerTransfertStock={validerTransfertStock} />
+          validerTransfertStock={validerTransfertStock}
+          credits={credits}
+          ajouterCredit={ajouterCredit}
+          ajouterVersement={ajouterVersement}
+          validerCredit={validerCredit} />
       )}
 
       {/* Bouton Flottant & Chat Routé par Rôle avec Option Vocale */}

@@ -1,0 +1,8 @@
+{
+  "appId": "com.oumar.motopieces",
+  "appName": "MotoPièces",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https"
+  }
+}
