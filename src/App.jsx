@@ -676,6 +676,36 @@ function VueClient({ produits, marques, creerVente, photosCategories, photosMarq
   const chercherParImage = async (src) => {
     setPhotoRecherche(src);
     setResultatsImage([]);
+
+    // 1. Recherche instantanée par Mots-clés OCR écrits sur la pièce (ex: "Papa", "NGK", "428H")
+    try {
+      const ocrResult = await extraireTexteImage(src);
+      if (ocrResult && ocrResult.text) {
+        const texteMin = ocrResult.text.toLowerCase();
+        const motsExtraits = texteMin.split(/[\s,;:._\-\/]+/).filter(w => w.length >= 2);
+
+        const articlesTrouvesOcr = produits.filter(p => {
+          const mList = (p.mots || []).map(m => m.toLowerCase().trim());
+          const codeMin = (p.code || "").toLowerCase().trim();
+          const nomMin = (p.nom || "").toLowerCase().trim();
+
+          const matchMotCle = mList.some(k => k && (texteMin.includes(k) || motsExtraits.includes(k)));
+          const matchCode = codeMin && (texteMin.includes(codeMin) || motsExtraits.includes(codeMin));
+          const matchNom = nomMin && (texteMin.includes(nomMin));
+
+          return matchMotCle || matchCode || matchNom;
+        });
+
+        if (articlesTrouvesOcr.length > 0) {
+          setResultatsImage(articlesTrouvesOcr.slice(0, 5));
+          return;
+        }
+      }
+    } catch (e) {
+      console.warn("Notice recherche OCR client:", e);
+    }
+
+    // 2. Recherche par signature visuelle d'image
     const avecPhoto = produits.filter(p => p.photo);
     if (!avecPhoto.length) return;
     const sig = await sigImage(src);
@@ -910,8 +940,37 @@ function VueVendeur({ produits, ventes, creerVente, categories = [], credits = [
     e.target.value = "";
   };
 
-  // Reconnaissance automatique instantanée dès la capture photo : l'article est directement identifié et ajouté au panier/vente
+  // Reconnaissance automatique instantanée par mots-clés OCR et signature visuelle
   const reconnaitre = async (src, index) => {
+    // 1. Recherche instantanée par Mots-clés OCR écrits sur la pièce (ex: "Papa", "NGK", "428H")
+    try {
+      const ocrResult = await extraireTexteImage(src);
+      if (ocrResult && ocrResult.text) {
+        const texteMin = ocrResult.text.toLowerCase();
+        const motsExtraits = texteMin.split(/[\s,;:._\-\/]+/).filter(w => w.length >= 2);
+
+        const articleTrouveOcr = produits.find(p => {
+          const mList = (p.mots || []).map(m => m.toLowerCase().trim());
+          const codeMin = (p.code || "").toLowerCase().trim();
+          const nomMin = (p.nom || "").toLowerCase().trim();
+
+          const matchMotCle = mList.some(k => k && (texteMin.includes(k) || motsExtraits.includes(k)));
+          const matchCode = codeMin && (texteMin.includes(codeMin) || motsExtraits.includes(codeMin));
+          const matchNom = nomMin && (texteMin.includes(nomMin));
+
+          return matchMotCle || matchCode || matchNom;
+        });
+
+        if (articleTrouveOcr) {
+          setPhotos(prev => prev.map((ph, j) => j === index ? { ...ph, article: articleTrouveOcr, reconnu: true } : ph));
+          return;
+        }
+      }
+    } catch (e) {
+      console.warn("Notice reconnaissance OCR vendeur:", e);
+    }
+
+    // 2. Recherche par signature visuelle d'image
     const avecPhoto = produits.filter(p => p.photo);
     const candidats = avecPhoto.length ? avecPhoto : produits;
     if (!candidats.length) return;
@@ -925,15 +984,12 @@ function VueVendeur({ produits, ventes, creerVente, categories = [], credits = [
       dists.sort((x, y) => x.d - y.d);
       const best = dists[0];
 
-      // Correctif : ne plus identifier à tort l'article comme le premier produit en cas d'échec.
-      // On garde l'article seulement si une vraie correspondance photo a été trouvée.
       if (best && best.p && best.d < 0.4) {
         setPhotos(prev => prev.map((ph, j) => j === index ? { ...ph, article: best.p, reconnu: true } : ph));
       } else {
         setPhotos(prev => prev.map((ph, j) => j === index ? { ...ph, reconnu: false } : ph));
       }
     } catch (err) {
-      // Échec de la reconnaissance : aucune attribution automatique (vente erronée évitée)
       setPhotos(prev => prev.map((ph, j) => j === index ? { ...ph, reconnu: false } : ph));
     }
   };
