@@ -4904,10 +4904,6 @@ export default function App() {
     } catch {}
   }, [userActif]);
 
-  useEffect(() => {
-    try { localStorage.setItem("motopieces_comptes", JSON.stringify(comptes)); } catch {}
-  }, [comptes]);
-
   // Anti-capture d'écran : l'écran se floute aussitôt qu'on quitte l'application
   // ou qu'elle perd le focus. On ne peut pas lire l'écran depuis une autre application.
   useEffect(() => {
@@ -4926,14 +4922,6 @@ export default function App() {
       document.removeEventListener("contextmenu", bloquerMenu);
     };
   }, []);
-
-  useEffect(() => {
-    try { localStorage.setItem("motopieces_ventes", JSON.stringify(ventes)); } catch {}
-  }, [ventes]);
-
-  useEffect(() => {
-    try { localStorage.setItem("motopieces_produits", JSON.stringify(produits)); } catch {}
-  }, [produits]);
 
   useEffect(() => {
     try { localStorage.setItem("motopieces_entreprise", JSON.stringify(entreprise)); } catch {}
