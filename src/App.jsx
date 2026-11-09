@@ -2141,7 +2141,7 @@ function VueAdmin({
       note: 4.0, desc: np.nom.trim(),
       photo: photoNouveau,
       mots: motsSaisisOuGeneres,
-      caseId: np.caseId,
+      caseId: np.caseId || cases[0]?.id || "1",
       boutique: "MotoPièces Principal",
       equipe: (chefEquipe || "").trim(),
     };
@@ -2476,7 +2476,7 @@ function VueAdmin({
               </div>
               <DialogFooter>
                 <Button variant="outline" onClick={() => setAjoutOuvert(false)}>Annuler</Button>
-                <Button className="bg-blue-600 hover:bg-blue-700 text-white h-11 text-base" disabled={!np.nom.trim() || !np.cat || !np.caseId} onClick={enregistrerNouveau}>Ajouter</Button>
+                <Button className="bg-blue-600 hover:bg-blue-700 text-white h-11 text-base font-bold shadow" disabled={!np.nom.trim() || !np.cat} onClick={enregistrerNouveau}>➕ Enregistrer l'article</Button>
               </DialogFooter>
             </DialogContent>
           </Dialog>
