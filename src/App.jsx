@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/context/AuthContext";
-import { supabase, synchroniserCompteSupabase, enregistrerVenteSupabase, majVenteSupabase, chargerVentesSupabase } from "@/lib/supabase";
+import { supabase, synchroniserCompteSupabase, enregistrerVenteSupabase, majVenteSupabase, chargerVentesSupabase, enregistrerProduitSupabase, chargerProduitsSupabase } from "@/lib/supabase";
 import { extraireTexteImage } from "@/lib/ocr";
 import { demanderAssistantMistral } from "@/lib/mistral";
 import { verifierQualiteImage } from "@/lib/imageProcessor";
@@ -2098,11 +2098,39 @@ function VueAdmin({
 
   const maxId = produits.reduce((m, p) => Math.max(m, p.id), 0);
 
-  const enregistrerNouveau = () => {
+  const [cameraNouveauOuverte, setCameraNouveauOuverte] = useState(false);
+
+  const traiterPhotoPriseNouveau = async (fichier) => {
+    if (!fichier) return;
+    const r = new FileReader();
+    r.onload = async () => {
+      const src = r.result;
+      setPhotoNouveau(src);
+      setCameraNouveauOuverte(false);
+
+      try {
+        const ocr = await extraireTexteImage(src);
+        if (ocr && ocr.text) {
+          const motsProposes = ocr.text.toLowerCase().split(/[\s,;:._\-\/]+/).filter(w => w.length >= 2).join(", ");
+          if (motsProposes) {
+            setNp(prev => ({
+              ...prev,
+              mots: prev.mots ? `${prev.mots}, ${motsProposes}` : motsProposes
+            }));
+          }
+        }
+      } catch (e) {}
+    };
+    r.readAsDataURL(fichier);
+  };
+
+  const enregistrerNouveau = async () => {
     if (!np.nom.trim() || !np.cat) return;
     const stock = Number(np.stock) || 0;
     const id = maxId + 1;
-    setProduits(prev => [...prev, {
+    const motsSaisisOuGeneres = (np.mots || `${np.nom} ${np.cat} ${np.marque}`).toLowerCase().split(/[\s,]+/).filter(Boolean);
+
+    const nouveauProduit = {
       id,
       nom: np.nom.trim(),
       cat: np.cat,
@@ -2112,11 +2140,18 @@ function VueAdmin({
       code: "ART-" + String(id).padStart(3, "0"),
       note: 4.0, desc: np.nom.trim(),
       photo: photoNouveau,
-      caseId: np.caseId, // case de rangement : le vendeur sait où trouver l'article
-      equipe: (chefEquipe || "").trim(), // propriétaire : le téléphone de l'administrateur qui a créé l'article
-    }]);
-    setNp({ nom: "", cat: "", marque: "", prix: "", stock: "" });
+      mots: motsSaisisOuGeneres,
+      caseId: np.caseId,
+      boutique: "MotoPièces Principal",
+      equipe: (chefEquipe || "").trim(),
+    };
+
+    setProduits(prev => [...prev, nouveauProduit]);
+    await enregistrerProduitSupabase(nouveauProduit);
+
+    setNp({ nom: "", cat: "", marque: "", prix: "", stock: "", mots: "" });
     setPhotoNouveau(null);
+    setCameraNouveauOuverte(false);
     setAjoutOuvert(false);
   };
 
@@ -2144,13 +2179,22 @@ function VueAdmin({
   const totalCA = ventes.filter(v => v.statut === "payée").reduce((s, v) => s + v.total, 0);
   const enStock = produits.reduce((s, p) => s + p.stock, 0);
 
-  const enregistrer = () => {
-    setProduits(prev => prev.map(p => p.id === edite.id ? {
-      ...p, code: code.trim() || p.code, prix: Number(prix) || p.prix,
-      stock: Number(stock) || 0, stockInit: p.stockInit ?? (Number(stock) || 0), photo: photoEdite || p.photo,
-      mots: mots.split(",").map(s => s.trim().toLowerCase()).filter(Boolean),
-      caseId: caseEdite || p.caseId,
-    } : p));
+  const enregistrer = async () => {
+    const motsInclus = mots.split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
+    const pModifie = {
+      ...edite,
+      code: code.trim() || edite.code,
+      prix: Number(prix) || edite.prix,
+      stock: Number(stock) || 0,
+      stockInit: edite.stockInit ?? (Number(stock) || 0),
+      photo: photoEdite || edite.photo,
+      mots: motsInclus.length ? motsInclus : (edite.mots || []),
+      caseId: caseEdite || edite.caseId,
+    };
+
+    setProduits(prev => prev.map(p => p.id === edite.id ? pModifie : p));
+    await enregistrerProduitSupabase(pModifie);
+
     setPhotoEdite(null);
     setMots("");
     setEdite(null);
@@ -2326,31 +2370,68 @@ function VueAdmin({
             </DialogContent>
           </Dialog>
 
-          <Dialog open={ajoutOuvert} onOpenChange={setAjoutOuvert}>
-            <DialogContent className="bg-white text-zinc-900 rounded-lg p-3 border shadow-xl" style={{position:"fixed",left:"50%",top:"50%",transform:"translate(-50%,-50%)",maxWidth:"280px",width:"90%",maxHeight:"85vh",overflowY:"auto",zIndex:60}}>
+          <Dialog open={ajoutOuvert} onOpenChange={o => { setAjoutOuvert(o); if (!o) setCameraNouveauOuverte(false); }}>
+            <DialogContent className="bg-white text-zinc-900 rounded-lg p-3 border shadow-xl" style={{position:"fixed",left:"50%",top:"50%",transform:"translate(-50%,-50%)",maxWidth:"340px",width:"92%",maxHeight:"88vh",overflowY:"auto",zIndex:60}}>
               <DialogHeader><DialogTitle>➕ Ajouter une pièce</DialogTitle></DialogHeader>
               <div className="grid gap-1.5">
-                <Label>Photo de reconnaissance</Label>
-                <div className="flex items-center gap-2">
-                  {photoNouveau
-                    ? <img src={photoNouveau} alt="" className="w-12 h-12 rounded-md object-contain border bg-zinc-100" />
-                    : <div className="w-12 h-12 rounded-md border bg-zinc-100 flex items-center justify-center text-xl">🖼️</div>}
-                  <input type="file" accept="image/*" capture="environment" className="hidden" id="photo-piece-nouveau" onChange={e => {
-                    const f = e.target.files && e.target.files[0];
-                    if (!f) return;
-                    const r = new FileReader();
-                    r.onload = () => setPhotoNouveau(r.result);
-                    r.readAsDataURL(f);
-                  }} />
-                  <Button size="sm" variant="outline" onClick={() => document.getElementById("photo-piece-nouveau").click()}>
-                    📷 {photoNouveau ? "Changer" : "Photographier"}
-                  </Button>
-                </div>
+                <Label>Photo de reconnaissance & Caméra directe</Label>
+
+                {cameraNouveauOuverte ? (
+                  <ModeRech
+                    onCaptureAuto={traiterPhotoPriseNouveau}
+                    onFermer={() => setCameraNouveauOuverte(false)}
+                  />
+                ) : (
+                  <div className="flex flex-col gap-2 p-2 border rounded-lg bg-zinc-50">
+                    <div className="flex items-center gap-2">
+                      {photoNouveau
+                        ? <img src={photoNouveau} alt="" className="w-12 h-12 rounded-md object-cover border bg-zinc-100 shrink-0" />
+                        : <div className="w-12 h-12 rounded-md border bg-zinc-100 flex items-center justify-center text-xl shrink-0">📷</div>}
+                      <div className="flex flex-col gap-1 w-full">
+                        <Button
+                          type="button"
+                          size="sm"
+                          className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold h-8"
+                          onClick={() => setCameraNouveauOuverte(true)}
+                        >
+                          📷 Caméra directe (Prendre photo)
+                        </Button>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          capture="environment"
+                          className="hidden"
+                          id="photo-piece-nouveau"
+                          onChange={e => {
+                            const f = e.target.files && e.target.files[0];
+                            if (f) traiterPhotoPriseNouveau(f);
+                            e.target.value = "";
+                          }}
+                        />
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          className="text-xs h-8"
+                          onClick={() => document.getElementById("photo-piece-nouveau").click()}
+                        >
+                          📁 Importer fichier photo
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 <p className="text-[11px] text-muted-foreground">
-                  Cette photo sert de référence à la reconnaissance automatique : photographiez la pièce de face, avec son numéro ou son écriture visible si elle en porte.
+                  Cette photo sert de référence à la reconnaissance automatique : photographiez la pièce de face avec son numéro ou son écriture visible.
                 </p>
                 <Label className="pt-2">Nom de la pièce</Label>
                 <Input value={np.nom} onChange={e => setNp({ ...np, nom: e.target.value })} placeholder="Ex : Bougie NGK" />
+                <Label className="pt-2">🔑 Mots-clés écrits sur la pièce (ex : Papa, NGK)</Label>
+                <Input value={np.mots || ""} onChange={e => setNp({ ...np, mots: e.target.value })} placeholder="Papa, NGK, 428H, 125..." />
+                <p className="text-[10px] text-muted-foreground">
+                  Ces mots-clés permettent à l'OCR de reconnaître instantanément la pièce au moment du scan.
+                </p>
                 <Label className="pt-2">Catégorie</Label>
                 <Select value={np.cat || undefined} onValueChange={v => setNp({ ...np, cat: v })}>
                   <SelectTrigger><SelectValue placeholder="Choisir…" /></SelectTrigger>
