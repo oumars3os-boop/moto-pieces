@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/context/AuthContext";
-import { supabase, synchroniserCompteSupabase, enregistrerVenteSupabase, majVenteSupabase, chargerVentesSupabase, enregistrerProduitSupabase, chargerProduitsSupabase } from "@/lib/supabase";
+import { supabase, synchroniserCompteSupabase, enregistrerVenteSupabase, majVenteSupabase, chargerVentesSupabase, enregistrerProduitSupabase, chargerProduitsSupabase, enregistrerPubliciteSupabase, chargerPublicitesSupabase, supprimerPubliciteSupabase } from "@/lib/supabase";
 import { extraireTexteImage } from "@/lib/ocr";
 import { demanderAssistantMistral } from "@/lib/mistral";
 import { verifierQualiteImage } from "@/lib/imageProcessor";
@@ -4416,7 +4416,7 @@ function SectionPublicites({ publicites, setPublicites, autoriserUpload = false 
       setAnalyse({ enCours: false, valide: true, message: resultatAnalyse.message });
 
       // Déclenchement automatique de la confirmation et redirection après analyse positive
-      setTimeout(() => {
+      setTimeout(async () => {
         const nouvellePub = {
           id: Date.now(),
           titre: titre.trim() || "Offre Spéciale MotoPièces",
@@ -4424,6 +4424,7 @@ function SectionPublicites({ publicites, setPublicites, autoriserUpload = false 
           date: new Date().toLocaleDateString("fr-FR"),
         };
         setPublicites((prev) => [nouvellePub, ...prev]);
+        await enregistrerPubliciteSupabase(nouvellePub);
         setTitre("");
         setImage(null);
         setAnalyse(null);
@@ -4434,7 +4435,7 @@ function SectionPublicites({ publicites, setPublicites, autoriserUpload = false 
     }
   };
 
-  const ajouterPublicite = () => {
+  const ajouterPublicite = async () => {
     if (!image) return;
     const nouvellePub = {
       id: Date.now(),
@@ -4443,14 +4444,16 @@ function SectionPublicites({ publicites, setPublicites, autoriserUpload = false 
       date: new Date().toLocaleDateString("fr-FR"),
     };
     setPublicites((prev) => [nouvellePub, ...prev]);
+    await enregistrerPubliciteSupabase(nouvellePub);
     setTitre("");
     setImage(null);
     setAnalyse(null);
     setOpenModal(false);
   };
 
-  const supprimerPub = (id) => {
+  const supprimerPub = async (id) => {
     setPublicites((prev) => prev.filter((p) => p.id !== id));
+    await supprimerPubliciteSupabase(id);
   };
 
   return (
@@ -4801,9 +4804,21 @@ export default function App() {
       }
     }
 
+    async function chargerBannieresEnLigne() {
+      try {
+        const pubsEnLigne = await chargerPublicitesSupabase();
+        if (pubsEnLigne && pubsEnLigne.length > 0) {
+          setPublicites(pubsEnLigne);
+        }
+      } catch (e) {
+        console.warn("Notice chargement bannières Supabase:", e);
+      }
+    }
+
     chargerComptesSupabase();
     chargerVentesEnLigne();
     chargerProduitsEnLigne();
+    chargerBannieresEnLigne();
 
     // Auto-rafraîchissement automatique universel (WebSockets Realtime + Polling 4s)
     // Garantit l'actualisation automatique en direct dans n'importe quel navigateur (Chrome, Safari, Firefox, Mobile)

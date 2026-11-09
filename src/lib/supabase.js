@@ -92,6 +92,7 @@ export async function chargerProduitsSupabase() {
     const { data, error } = await supabase
       .from("parts")
       .select("*")
+      .neq("boutique", "PROMO_BANNER")
       .order("id", { ascending: true });
 
     if (error) {
@@ -119,6 +120,72 @@ export async function chargerProduitsSupabase() {
   } catch (err) {
     console.warn("Erreur réseau chargement produits Supabase:", err);
     return [];
+  }
+}
+
+/**
+ * Enregistre une bannière publicitaire / image promotionnelle dans Supabase
+ */
+export async function enregistrerPubliciteSupabase(pub) {
+  try {
+    const { data, error } = await supabase
+      .from("parts")
+      .upsert({
+        code: `PROMO-${pub.id || Date.now()}`,
+        nom: pub.titre || "Offre Spéciale MotoPièces",
+        cat: "accessoires",
+        marque: "Promo",
+        prix: 0,
+        stock: 1,
+        photo: pub.image,
+        description: pub.date || new Date().toLocaleDateString("fr-FR"),
+        boutique: "PROMO_BANNER",
+      }, { onConflict: "code" })
+      .select();
+
+    if (error) {
+      console.warn("Avis enregistrement pub Supabase:", error.message);
+    }
+    return { data, error };
+  } catch (err) {
+    console.warn("Erreur réseau pub Supabase:", err);
+    return { error: err };
+  }
+}
+
+/**
+ * Récupère toutes les bannières publicitaires enregistrées sur Supabase
+ */
+export async function chargerPublicitesSupabase() {
+  try {
+    const { data, error } = await supabase
+      .from("parts")
+      .select("*")
+      .eq("boutique", "PROMO_BANNER")
+      .order("created_at", { ascending: false });
+
+    if (error || !data) return [];
+
+    return data.map((p) => ({
+      id: p.id,
+      titre: p.nom,
+      image: p.photo,
+      date: p.description || new Date(p.created_at).toLocaleDateString("fr-FR"),
+    }));
+  } catch (err) {
+    console.warn("Erreur réseau chargement bannières Supabase:", err);
+    return [];
+  }
+}
+
+/**
+ * Supprime une bannière publicitaire de Supabase
+ */
+export async function supprimerPubliciteSupabase(id) {
+  try {
+    await supabase.from("parts").delete().eq("id", id);
+  } catch (err) {
+    console.warn("Erreur suppression pub Supabase:", err);
   }
 }
 
