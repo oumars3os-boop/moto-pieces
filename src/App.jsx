@@ -4805,28 +4805,57 @@ export default function App() {
     chargerVentesEnLigne();
     chargerProduitsEnLigne();
 
-    // Écoute Realtime sur la table 'parts' pour que les articles ajoutés apparaissent immédiatement sur tous les téléphones
-    let canalParts = null;
+    // Auto-rafraîchissement automatique universel (WebSockets Realtime + Polling 4s)
+    // Garantit l'actualisation automatique en direct dans n'importe quel navigateur (Chrome, Safari, Firefox, Mobile)
+    let canalGlobal = null;
     try {
-      canalParts = supabase
-        .channel("parts-changes")
-        .on(
-          "postgres_changes",
-          { event: "*", schema: "public", table: "parts" },
-          async () => {
-            const produitsAjour = await chargerProduitsSupabase();
-            if (produitsAjour && produitsAjour.length > 0) {
-              setProduits(produitsAjour);
-            }
+      canalGlobal = supabase
+        .channel("global-app-changes")
+        .on("postgres_changes", { event: "*", schema: "public", table: "parts" }, async () => {
+          const freshParts = await chargerProduitsSupabase();
+          if (freshParts && freshParts.length > 0) setProduits(freshParts);
+        })
+        .on("postgres_changes", { event: "*", schema: "public", table: "sales" }, async () => {
+          const freshSales = await chargerVentesSupabase();
+          if (freshSales && freshSales.length > 0) {
+            const lignesValides = freshSales.filter(s =>
+              (s.items || []).length > 0 && (s.statut === "payée" ? Number(s.total) > 0 : true));
+            if (lignesValides.length > 0) setVentes(lignesValides);
           }
-        )
+        })
+        .on("postgres_changes", { event: "*", schema: "public", table: "users" }, async () => {
+          const { data } = await supabase.from("users").select("*");
+          if (data && data.length > 0) setComptes(data);
+        })
         .subscribe();
     } catch (e) {
-      console.warn("Avis souscription realtime parts:", e);
+      console.warn("Notice souscription Realtime globale:", e);
     }
 
+    // Minuteur de sécurité (Polling 4 secondes) : s'assure qu'aucun navigateur ne rate la moindre mise à jour
+    const intervalleAutoRefresh = setInterval(async () => {
+      try {
+        const [freshParts, freshSales, { data: freshUsers }] = await Promise.all([
+          chargerProduitsSupabase(),
+          chargerVentesSupabase(),
+          supabase.from("users").select("*"),
+        ]);
+
+        if (freshParts && freshParts.length > 0) setProduits(freshParts);
+        if (freshSales && freshSales.length > 0) {
+          const lignesValides = freshSales.filter(s =>
+            (s.items || []).length > 0 && (s.statut === "payée" ? Number(s.total) > 0 : true));
+          if (lignesValides.length > 0) setVentes(lignesValides);
+        }
+        if (freshUsers && freshUsers.length > 0) setComptes(freshUsers);
+      } catch (err) {
+        // Ignorer silencieusement les micro-coupures réseau temporaires
+      }
+    }, 4000);
+
     return () => {
-      if (canalParts) supabase.removeChannel(canalParts);
+      if (canalGlobal) supabase.removeChannel(canalGlobal);
+      clearInterval(intervalleAutoRefresh);
     };
   }, []);
 
