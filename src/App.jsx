@@ -2427,10 +2427,19 @@ function VueAdmin({
                 </p>
                 <Label className="pt-2">Nom de la pièce</Label>
                 <Input value={np.nom} onChange={e => setNp({ ...np, nom: e.target.value })} placeholder="Ex : Bougie NGK" />
-                <Label className="pt-2">🔑 Mots-clés écrits sur la pièce (ex : Papa, NGK)</Label>
-                <Input value={np.mots || ""} onChange={e => setNp({ ...np, mots: e.target.value })} placeholder="Papa, NGK, 428H, 125..." />
-                <p className="text-[10px] text-muted-foreground">
-                  Ces mots-clés permettent à l'OCR de reconnaître instantanément la pièce au moment du scan.
+
+                <Label className="pt-2 font-bold text-blue-800 flex items-center justify-between">
+                  <span>🔑 Mots-clés de la pièce (Obligatoire pour l'OCR)</span>
+                  <Badge className="bg-amber-500 text-white text-[9px] px-1.5">Scan OCR</Badge>
+                </Label>
+                <Input
+                  value={np.mots || ""}
+                  onChange={e => setNp({ ...np, mots: e.target.value })}
+                  placeholder="Ex : Papa, NGK, 428H, 125, CG125..."
+                  className="border-amber-300 bg-amber-50/50 font-medium text-xs"
+                />
+                <p className="text-[10px] text-zinc-600 font-medium">
+                  💡 Inscription, code ou numéro sur la pièce. Le moteur OCR scannera ces mots-clés pour retrouver l'article au scan photo !
                 </p>
                 <Label className="pt-2">Catégorie</Label>
                 <Select value={np.cat || undefined} onValueChange={v => setNp({ ...np, cat: v })}>
