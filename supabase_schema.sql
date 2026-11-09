@@ -1,60 +1,77 @@
 -- ====================================================================
--- MOTOPÈCES — SCRIPT SQL COMPLET (VERSION 2 — REMISE À ZÉRO TOTALE)
+-- MOTOPÈCES — SCRIPT SQL DDL & DML INTEGRAL (VERSION 3 - REMISE À ZÉRO TOTALE)
 -- Date : 05/11/2026
 --
--- CE SCRIPT EFFACE ET RECONSTRUIT TOUTE LA BASE DE DONNÉES :
---   ventes, articles, comptes, catégories, entreprise — tout repart à zéro.
+-- CE SCRIPT EFFACE ET RECONSTRUIT L'INTÉGRALITÉ DE LA BASE DE DONNÉES SUPABASE :
+--   - Entreprise, Utilisateurs & Équipe, Catégories, Cases de Rangement
+--   - Pièces Détachées (Catalogue), Bannières Promos, Commandes & Lignes de Vente
+--   - Crédits / Dettes, Transferts de Stock, Messagerie & Notes Vocales
 --
--- COMMENT L'UTILISER :
---   1. Ouvrez votre projet sur supabase.com
---   2. Menu gauche : SQL Editor (Éditeur SQL)
---   3. Collez TOUT ce script, puis cliquez sur RUN (Exécuter)
---   4. Attendez le message « Success. No rows returned » : la base est
---      reconstruite proprement, avec les tables, la sécurité et les
---      données de départ (produits, catégories, compte administrateur).
+-- COMMENT L'UTILISER DANS SUPABASE :
+--   1. Ouvrez votre projet sur https://supabase.com
+--   2. Allez dans le menu latéral gauche -> SQL Editor (Éditeur SQL)
+--   3. Collez l'intégralité de ce script et cliquez sur RUN (Exécuter)
+--   4. Le message « Success. No rows returned » confirme que la base est reconstruite.
 --
--- COMPTE ADMINISTRATEUR PAR DÉFAUT (à changer ensuite dans l'application) :
+-- COMPTE ADMINISTRATEUR PRINCIPAL PAR DÉFAUT :
 --   Téléphone : +225 07 00 00 00 00 — Code PIN : 1234
 -- ====================================================================
 
--- 1. Nettoyage préventif des triggers et fonctions si ils existent
+-- ====================================================================
+-- 1. NETTOYAGE PRÉVENTIF DES TRIGGERS, FONCTIONS, POLITIQUES ET TABLES
+-- ====================================================================
+
 DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
 DROP FUNCTION IF EXISTS public.handle_new_user();
 
--- Suppression préventive des politiques RLS pour éviter l'erreur 42710 (policy already exists)
+-- Suppression des politiques RLS préventive pour éviter l'erreur 42710 (policy already exists)
 DROP POLICY IF EXISTS "Lecture publique entreprise" ON public.entreprise;
-DROP POLICY IF EXISTS "Modif entreprise admin" ON public.entreprise;
+DROP POLICY IF EXISTS "Gestion entreprise" ON public.entreprise;
 DROP POLICY IF EXISTS "Lecture publique users" ON public.users;
 DROP POLICY IF EXISTS "Gestion users" ON public.users;
 DROP POLICY IF EXISTS "Lecture publique categories" ON public.categories;
 DROP POLICY IF EXISTS "Gestion categories" ON public.categories;
+DROP POLICY IF EXISTS "Lecture publique cases" ON public.cases;
+DROP POLICY IF EXISTS "Gestion cases" ON public.cases;
 DROP POLICY IF EXISTS "Lecture publique parts" ON public.parts;
 DROP POLICY IF EXISTS "Gestion parts" ON public.parts;
 DROP POLICY IF EXISTS "Lecture publique sales" ON public.sales;
 DROP POLICY IF EXISTS "Gestion sales" ON public.sales;
 DROP POLICY IF EXISTS "Lecture publique sale_items" ON public.sale_items;
 DROP POLICY IF EXISTS "Gestion sale_items" ON public.sale_items;
+DROP POLICY IF EXISTS "Lecture publique credits" ON public.credits;
+DROP POLICY IF EXISTS "Gestion credits" ON public.credits;
+DROP POLICY IF EXISTS "Lecture publique transferts" ON public.transferts;
+DROP POLICY IF EXISTS "Gestion transferts" ON public.transferts;
+DROP POLICY IF EXISTS "Lecture publique messages" ON public.messages;
+DROP POLICY IF EXISTS "Gestion messages" ON public.messages;
 
+-- Suppression en cascade des tables
+DROP TABLE IF EXISTS public.messages CASCADE;
+DROP TABLE IF EXISTS public.transferts CASCADE;
+DROP TABLE IF EXISTS public.credits CASCADE;
 DROP TABLE IF EXISTS public.sale_items CASCADE;
 DROP TABLE IF EXISTS public.sales CASCADE;
 DROP TABLE IF EXISTS public.parts CASCADE;
+DROP TABLE IF EXISTS public.cases CASCADE;
 DROP TABLE IF EXISTS public.categories CASCADE;
 DROP TABLE IF EXISTS public.users CASCADE;
 DROP TABLE IF EXISTS public.entreprise CASCADE;
 
 -- ====================================================================
--- 2. CRÉATION DES TABLES
+-- 2. CRÉATION DES TABLES SUPABASE
 -- ====================================================================
 
--- A. Table Entreprise
+-- A. Table Entreprise / Magasin
 CREATE TABLE public.entreprise (
     id INT PRIMARY KEY DEFAULT 1,
     nom TEXT NOT NULL DEFAULT 'MotoPièces',
-    tel TEXT NOT NULL DEFAULT '+225 07 00 00 00 00',
-    materiel TEXT NOT NULL DEFAULT 'Pièces de moto'
+    tel TEXT NOT NULL DEFAULT '+225 05 55 44 89 45',
+    materiel TEXT NOT NULL DEFAULT 'Pièces de moto',
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- B. Table Utilisateurs (Profils applicatifs & rôle)
+-- B. Table Utilisateurs (Comptes, Équipe, PIN & Rôles)
 CREATE TABLE public.users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     nom TEXT NOT NULL,
@@ -63,8 +80,8 @@ CREATE TABLE public.users (
     role TEXT NOT NULL DEFAULT 'vendeur', -- 'admin', 'vendeur', 'secretaire', 'vendeur-secretaire', 'client'
     cle TEXT,
     bloque BOOLEAN DEFAULT FALSE,
-    photo TEXT,
-    equipe TEXT,
+    photo TEXT, -- photo de profil
+    equipe TEXT, -- téléphone du chef d'équipe / admin créateur
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
@@ -72,10 +89,20 @@ CREATE TABLE public.users (
 CREATE TABLE public.categories (
     id TEXT PRIMARY KEY,
     label TEXT NOT NULL,
-    emoji TEXT
+    emoji TEXT,
+    photo TEXT
 );
 
--- D. Table Pièces Détachées (Produits)
+-- D. Table Cases de Rangement
+CREATE TABLE public.cases (
+    id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    numero TEXT NOT NULL,
+    nom TEXT NOT NULL,
+    equipe TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- E. Table Pièces Détachées (Catalogue Produits & Bannières Promo)
 CREATE TABLE public.parts (
     id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
     code TEXT UNIQUE,
@@ -87,13 +114,15 @@ CREATE TABLE public.parts (
     stock_init INT NOT NULL DEFAULT 0,
     note NUMERIC(3, 2) DEFAULT 4.0,
     description TEXT,
-    photo TEXT,
-    mots TEXT[],
-    boutique TEXT DEFAULT 'MotoPièces Principal',
+    photo TEXT, -- photo de référence / haute définition de la pièce
+    mots TEXT[], -- mots-clés pour l'analyse et la recherche OCR
+    case_id TEXT, -- case de rangement
+    boutique TEXT DEFAULT 'MotoPièces Principal', -- 'PROMO_BANNER' pour bannières publicitaires
+    equipe TEXT, -- téléphone de l'administrateur propriétaire
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- E. Table Ventes (Commandes)
+-- F. Table Ventes (Commandes)
 CREATE TABLE public.sales (
     id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
     vendeur_nom TEXT,
@@ -101,12 +130,12 @@ CREATE TABLE public.sales (
     client_nom TEXT,
     client_tel TEXT,
     total NUMERIC(12, 2) NOT NULL,
-    statut TEXT DEFAULT 'en attente', -- 'en attente', 'payé', 'annulé'
+    statut TEXT DEFAULT 'en attente', -- 'en attente', 'payée', 'annulé'
     date_vente TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- F. Table Lignes de Vente
+-- G. Table Lignes de Vente (Détails des articles vendus)
 CREATE TABLE public.sale_items (
     id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
     sale_id BIGINT REFERENCES public.sales(id) ON DELETE CASCADE,
@@ -114,52 +143,79 @@ CREATE TABLE public.sale_items (
     nom TEXT NOT NULL,
     quantite INT NOT NULL DEFAULT 1,
     prix_unitaire NUMERIC(12, 2) NOT NULL,
-    photo TEXT -- photo de l'article (affichée sur le reçu et dans l'historique)
+    photo TEXT, -- photo affichée sur la facture/reçu
+    equipe TEXT
+);
+
+-- H. Table Crédits & Dettes
+CREATE TABLE public.credits (
+    id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    type TEXT NOT NULL DEFAULT 'client', -- 'client' (dette du client) ou 'fournisseur' (dette du magasin)
+    nom TEXT NOT NULL,
+    tel TEXT,
+    montant NUMERIC(12, 2) NOT NULL DEFAULT 0,
+    acompte NUMERIC(12, 2) DEFAULT 0,
+    reste NUMERIC(12, 2) NOT NULL DEFAULT 0,
+    date TEXT,
+    statut TEXT DEFAULT 'en_attente', -- 'en_attente', 'solde'
+    equipe TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- I. Table Transferts Sécurisés de Stock
+CREATE TABLE public.transferts (
+    id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    produit_id BIGINT REFERENCES public.parts(id) ON DELETE SET NULL,
+    produit_nom TEXT NOT NULL,
+    boutique_source TEXT NOT NULL,
+    boutique_cible TEXT NOT NULL,
+    quantite INT NOT NULL DEFAULT 1,
+    statut TEXT DEFAULT 'en_attente', -- 'en_attente', 'valide'
+    emetteur TEXT,
+    date_transfert TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- J. Table Messagerie & Chat Flottant
+CREATE TABLE public.messages (
+    id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    canal TEXT NOT NULL DEFAULT 'assistance', -- 'assistance', 'negociation', 'developpeur', 'admin'
+    auteur TEXT NOT NULL,
+    auteur_tel TEXT,
+    texte TEXT,
+    audio_url TEXT, -- note vocale enregistrée
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
 -- ====================================================================
--- 3. ACTIVATION DE LA SÉCURITÉ ROW LEVEL SECURITY (RLS)
+-- 3. SÉCURITÉ ROW LEVEL SECURITY (RLS) & DROITS COMPLETS
 -- ====================================================================
 
 ALTER TABLE public.entreprise ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.categories ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.cases ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.parts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.sales ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.sale_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.credits ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.transferts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.messages ENABLE ROW LEVEL SECURITY;
 
--- Politiques de lecture publique et écriture autorisée avec DROP IF EXISTS
-DROP POLICY IF EXISTS "Lecture publique entreprise" ON public.entreprise;
-DROP POLICY IF EXISTS "Modif entreprise admin" ON public.entreprise;
-CREATE POLICY "Lecture publique entreprise" ON public.entreprise FOR SELECT USING (true);
-CREATE POLICY "Modif entreprise admin" ON public.entreprise FOR ALL USING (true);
-
-DROP POLICY IF EXISTS "Lecture publique users" ON public.users;
-DROP POLICY IF EXISTS "Gestion users" ON public.users;
-CREATE POLICY "Lecture publique users" ON public.users FOR SELECT USING (true);
+-- Autoriser la lecture et l'écriture complète pour l'API Supabase
+CREATE POLICY "Gestion entreprise" ON public.entreprise FOR ALL USING (true);
 CREATE POLICY "Gestion users" ON public.users FOR ALL USING (true);
-
-DROP POLICY IF EXISTS "Lecture publique categories" ON public.categories;
-DROP POLICY IF EXISTS "Gestion categories" ON public.categories;
-CREATE POLICY "Lecture publique categories" ON public.categories FOR SELECT USING (true);
 CREATE POLICY "Gestion categories" ON public.categories FOR ALL USING (true);
-
-DROP POLICY IF EXISTS "Lecture publique parts" ON public.parts;
-DROP POLICY IF EXISTS "Gestion parts" ON public.parts;
-CREATE POLICY "Lecture publique parts" ON public.parts FOR SELECT USING (true);
+CREATE POLICY "Gestion cases" ON public.cases FOR ALL USING (true);
 CREATE POLICY "Gestion parts" ON public.parts FOR ALL USING (true);
-
-DROP POLICY IF EXISTS "Lecture publique sales" ON public.sales;
-DROP POLICY IF EXISTS "Gestion sales" ON public.sales;
-CREATE POLICY "Lecture publique sales" ON public.sales FOR SELECT USING (true);
 CREATE POLICY "Gestion sales" ON public.sales FOR ALL USING (true);
-
-DROP POLICY IF EXISTS "Lecture publique sale_items" ON public.sale_items;
-DROP POLICY IF EXISTS "Gestion sale_items" ON public.sale_items FOR SELECT USING (true);
 CREATE POLICY "Gestion sale_items" ON public.sale_items FOR ALL USING (true);
+CREATE POLICY "Gestion credits" ON public.credits FOR ALL USING (true);
+CREATE POLICY "Gestion transferts" ON public.transferts FOR ALL USING (true);
+CREATE POLICY "Gestion messages" ON public.messages FOR ALL USING (true);
 
 -- ====================================================================
--- 4. TRIGGER D'INSCRIPTION AUTOMATIQUE SUPABASE AUTH -> PUBLIC.USERS
+-- 4. TRIGGER AUTOMATIQUE DE CRÉATION D'UTILISATEUR SUPABASE AUTH
 -- ====================================================================
 
 CREATE OR REPLACE FUNCTION public.handle_new_user()
@@ -182,15 +238,15 @@ CREATE TRIGGER on_auth_user_created
   FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
 
 -- ====================================================================
--- 5. INSERTION DES DONNÉES PAR DÉFAUT
+-- 5. INSERTION DES DONNÉES D'INITIALISATION
 -- ====================================================================
 
 -- Données Entreprise
 INSERT INTO public.entreprise (id, nom, tel, materiel)
-VALUES (1, 'MotoPièces', '+225 07 00 00 00 00', 'Pièces de moto')
+VALUES (1, 'MotoPièces', '+225 05 55 44 89 45', 'Pièces de moto')
 ON CONFLICT (id) DO NOTHING;
 
--- Catégories
+-- Catégories de départ
 INSERT INTO public.categories (id, label, emoji) VALUES
   ('moteur', 'Moteur', '⚙️'),
   ('freinage', 'Freinage', '🛑'),
@@ -201,78 +257,57 @@ INSERT INTO public.categories (id, label, emoji) VALUES
   ('consommables', 'Consommables', '🛢️'),
   ('echappement', 'Échappement', '💨'),
   ('accessoires', 'Accessoires', '🎒'),
-  ('pneumatiques', 'Pneumatiques', '🛞');
+  ('pneumatiques', 'Pneumatiques', '🛞')
+ON CONFLICT (id) DO NOTHING;
 
--- Compte Administrateur Initial
-INSERT INTO public.users (nom, tel, pin, role) VALUES
-  ('Administrateur Principal', '+225 07 00 00 00 00', '1234', 'admin'),
-  ('Vendeur Exemple', '+225 05 00 00 00 00', '0000', 'vendeur');
+-- Comptes Utilisateurs par Défaut
+INSERT INTO public.users (nom, tel, pin, role, equipe) VALUES
+  ('Administrateur Principal', '+225 07 00 00 00 00', '1234', 'admin', '+225 07 00 00 00 00'),
+  ('Vendeur Exemple', '+225 05 00 00 00 00', '0000', 'vendeur', '+225 07 00 00 00 00')
+ON CONFLICT (tel) DO NOTHING;
 
--- Insertion des Pièces Métier (Produits)
-INSERT INTO public.parts (id, code, nom, cat, marque, prix, stock, stock_init, note, description) VALUES
-  (1, 'ART-001', 'Kit chaîne 428H', 'transmission', 'Honda', 32000, 12, 12, 4.5, 'Chaîne + pignons renforcés, résistance supérieure.'),
-  (2, 'ART-002', 'Plaquettes de frein avant', 'freinage', 'Yamaha', 8500, 30, 30, 4.2, 'Jeu de 2 plaquettes, freinage puissant et silencieux.'),
-  (3, 'ART-003', 'Bougie d''allumage iridium', 'moteur', 'Suzuki', 4500, 45, 45, 4.8, 'Allumage optimal, consommation réduite.'),
-  (4, 'ART-004', 'Batterie 12V 7Ah', 'electricite', 'TVS', 18000, 8, 8, 4.0, 'Batterie sans entretien, démarrage fiable.'),
-  (5, 'ART-005', 'Rétroviseur gauche', 'carrosserie', 'Kawasaki', 6500, 15, 15, 3.9, 'Rétroviseur d''origine, fixation universelle.'),
-  (6, 'ART-006', 'Huile moteur 4T 10W-40 (1L)', 'consommables', 'Autre', 5500, 60, 60, 4.7, 'Huile semi-synthétique pour moteurs 4 temps.'),
-  (7, 'ART-007', 'Amortisseur arrière', 'suspension', 'Honda', 42000, 5, 5, 4.3, 'Amortisseur à ressort réglable, confort routier.'),
-  (8, 'ART-008', 'Filtre à air', 'moteur', 'Sanya', 3500, 25, 25, 4.1, 'Filtre lavable, filtration haute efficacité.'),
-  (9, 'ART-009', 'Disque de frein avant 296mm', 'freinage', 'Yamaha', 27000, 6, 6, 4.6, 'Disque inox, usure réduite et stabilité au freinage.'),
-  (10, 'ART-010', 'Kit câbles (accélérateur, embrayage)', 'consommables', 'TVS', 9500, 18, 18, 3.8, 'Câbles pré-graissés, remplacement facile.'),
-  (11, 'ART-011', 'Courroie de transmission', 'transmission', 'Suzuki', 15000, 10, 10, 4.0, 'Courroie aramid, durée de vie prolongée.'),
-  (12, 'ART-012', 'Feu arrière LED', 'electricite', 'Autre', 7500, 22, 22, 4.4, 'Feu LED universel 12V, visibilité maximale.'),
-  (13, 'ART-013', 'Plongeur GN', 'moteur', 'Autre', 0, 10, 10, 4.0, 'Plongeur GN.'),
-  (14, 'ART-014', 'Fourche X-1', 'suspension', 'Autre', 0, 10, 10, 4.0, 'Fourche X-1.'),
-  (15, 'ART-015', 'Verre de phare HJ110-3', 'electricite', 'Autre', 0, 10, 10, 4.0, 'Verre de phare HJ110-3.'),
-  (16, 'ART-016', 'Deumare 110', 'moteur', 'Autre', 0, 10, 10, 4.0, 'Deumare 110.'),
-  (17, 'ART-017', 'Deumare CG125', 'moteur', 'Autre', 0, 10, 10, 4.0, 'Deumare CG125.'),
-  (18, 'ART-018', 'Pose à pied central X-1', 'accessoires', 'Autre', 0, 10, 10, 4.0, 'Pose à pied central X-1.'),
-  (19, 'ART-019', 'Pose à pied central CG', 'accessoires', 'Autre', 0, 10, 10, 4.0, 'Pose à pied central CG.'),
-  (20, 'ART-020', 'Filtre gros GN', 'moteur', 'Autre', 0, 10, 10, 4.0, 'Filtre gros GN.'),
-  (21, 'ART-021', 'Culasse 110', 'moteur', 'Autre', 0, 10, 10, 4.0, 'Culasse 110.'),
-  (22, 'ART-022', 'Hydraulique complet GN', 'freinage', 'Autre', 0, 10, 10, 4.0, 'Hydraulique complet GN.'),
-  (23, 'ART-023', 'Hydraulique complet X-1', 'freinage', 'Autre', 0, 10, 10, 4.0, 'Hydraulique complet X-1.'),
-  (24, 'ART-024', 'Pose à pied arrière X-1 complet', 'accessoires', 'Autre', 0, 10, 10, 4.0, 'Pose à pied arrière X-1 complète.'),
-  (25, 'ART-025', 'Frein à pied X-1', 'freinage', 'Autre', 0, 10, 10, 4.0, 'Frein à pied X-1.'),
-  (26, 'ART-026', 'Frein à pied GN', 'freinage', 'Autre', 0, 10, 10, 4.0, 'Frein à pied GN.'),
-  (27, 'ART-027', 'Frein à pied Aloba', 'freinage', 'Autre', 0, 10, 10, 4.0, 'Frein à pied Aloba.'),
-  (28, 'ART-028', 'Pion compteur Aloba', 'electricite', 'Autre', 0, 10, 10, 4.0, 'Pion compteur Aloba.'),
-  (29, 'ART-029', 'Pion compteur GN', 'electricite', 'Autre', 0, 10, 10, 4.0, 'Pion compteur GN.'),
-  (30, 'ART-030', 'Pion compteur X-1', 'electricite', 'Autre', 0, 10, 10, 4.0, 'Pion compteur X-1.'),
-  (31, 'ART-031', 'Chargeur CG', 'electricite', 'Autre', 0, 10, 10, 4.0, 'Chargeur CG.'),
-  (32, 'ART-032', 'Pion complet X-1', 'electricite', 'Autre', 0, 10, 10, 4.0, 'Pion complet X-1.'),
-  (33, 'ART-033', 'Pion complet CG125', 'electricite', 'Autre', 0, 10, 10, 4.0, 'Pion complet CG125.'),
-  (34, 'ART-034', 'Pion complet CG150', 'electricite', 'Autre', 0, 10, 10, 4.0, 'Pion complet CG150.'),
-  (35, 'ART-035', 'Guidon complet X-1', 'carrosserie', 'Autre', 0, 10, 10, 4.0, 'Guidon complet X-1.'),
-  (36, 'ART-036', 'Verre de phare X-1 New', 'electricite', 'Autre', 0, 10, 10, 4.0, 'Verre de phare X-1 New.'),
-  (37, 'ART-037', 'Feu rouge X-1 New', 'electricite', 'Autre', 0, 10, 10, 4.0, 'Feu rouge X-1 New.'),
-  (38, 'ART-038', 'Carénage compteur X-1', 'carrosserie', 'Autre', 0, 10, 10, 4.0, 'Carénage compteur X-1.'),
-  (39, 'ART-039', 'Verre de compteur HJ110-3', 'electricite', 'Autre', 0, 10, 10, 4.0, 'Verre de compteur HJ110-3.'),
-  (40, 'ART-040', 'Ressort de petit pied', 'accessoires', 'Autre', 0, 10, 10, 4.0, 'Ressort de petit pied.'),
-  (41, 'ART-041', 'Ressort de frein CG125', 'freinage', 'Autre', 0, 10, 10, 4.0, 'Ressort de frein CG125.'),
-  (42, 'ART-042', 'Garde-boue HJ110-3', 'carrosserie', 'Autre', 0, 10, 10, 4.0, 'Garde-boue HJ110-3.'),
-  (43, 'ART-043', 'Casque compteur HJ110-3', 'electricite', 'Autre', 0, 10, 10, 4.0, 'Casque compteur HJ110-3.'),
-  (44, 'ART-044', 'Coffre compteur X-1 New', 'electricite', 'Autre', 0, 10, 10, 4.0, 'Coffre compteur X-1 New.'),
-  (45, 'ART-045', 'Capot clignotant X-1 nouveau', 'electricite', 'Autre', 0, 10, 10, 4.0, 'Capot clignotant X-1.'),
-  (46, 'ART-046', 'Clignotant avant HJ110-3', 'electricite', 'Autre', 0, 10, 10, 4.0, 'Clignotant avant HJ110-3.'),
-  (47, 'ART-047', 'Robinet HJ110-3', 'moteur', 'Autre', 0, 10, 10, 4.0, 'Robinet HJ110-3.'),
-  (48, 'ART-048', 'Clignotant avant X-1 New', 'electricite', 'Autre', 0, 10, 10, 4.0, 'Clignotant avant X-1 New.'),
-  (49, 'ART-049', 'Point tournant GN', 'electricite', 'Autre', 0, 10, 10, 4.0, 'Point tournant GN.'),
-  (50, 'ART-050', 'Cover chaîne Haojue 110', 'transmission', 'Autre', 0, 10, 10, 4.0, 'Cover chaîne Haojue 110.'),
-  (51, 'ART-051', 'Robinet CG125', 'moteur', 'Autre', 0, 10, 10, 4.0, 'Robinet CG125.'),
-  (52, 'ART-052', 'Robinet GN petit', 'moteur', 'Autre', 0, 10, 10, 4.0, 'Robinet GN petit.'),
-  (53, 'ART-053', 'Levier CG150', 'freinage', 'Autre', 0, 10, 10, 4.0, 'Levier CG150.'),
-  (54, 'ART-054', 'Porte-bagage Aloba feu noir', 'accessoires', 'Autre', 0, 10, 10, 4.0, 'Porte-bagage Aloba noir.'),
-  (55, 'ART-055', 'Porte-bagage Aloba feu blanc', 'accessoires', 'Autre', 0, 10, 10, 4.0, 'Porte-bagage Aloba blanc.'),
-  (56, 'ART-056', 'Ampoule bleue CG125 B', 'electricite', 'Autre', 0, 10, 10, 4.0, 'Ampoule bleue CG125 B.'),
-  (57, 'ART-057', 'Ampoule bleue 110 B', 'electricite', 'Autre', 0, 10, 10, 4.0, 'Ampoule bleue 110 B.'),
-  (58, 'ART-058', 'Garde-boue avant GN', 'carrosserie', 'Autre', 0, 10, 10, 4.0, 'Garde-boue avant GN.'),
-  (59, 'ART-059', 'Garde-boue arrière GN', 'carrosserie', 'Autre', 0, 10, 10, 4.0, 'Garde-boue arrière GN.'),
-  (60, 'ART-060', 'Clé de disque original', 'accessoires', 'Autre', 0, 10, 10, 4.0, 'Clé de disque originale.')
+-- Cases de Rangement de Départ
+INSERT INTO public.cases (numero, nom, equipe) VALUES
+  ('1', 'Case 1 — Bougies & Électricité', '+225 07 00 00 00 00'),
+  ('2', 'Case 2 — Freinage & Plaquettes', '+225 07 00 00 00 00'),
+  ('3', 'Case 3 — Transmission & Kits Chaîne', '+225 07 00 00 00 00');
+
+-- Insertion du Catalogue de Pièces Détachées Initial
+INSERT INTO public.parts (id, code, nom, cat, marque, prix, stock, stock_init, note, description, mots, equipe) VALUES
+  (1, 'ART-001', 'Kit chaîne 428H', 'transmission', 'Honda', 32000, 12, 12, 4.5, 'Chaîne + pignons renforcés, résistance supérieure.', ARRAY['kit', 'chaine', '428h', 'pignon', 'honda'], '+225 07 00 00 00 00'),
+  (2, 'ART-002', 'Plaquettes de frein avant', 'freinage', 'Yamaha', 8500, 30, 30, 4.2, 'Jeu de 2 plaquettes, freinage puissant et silencieux.', ARRAY['plaquettes', 'frein', 'avant', 'yamaha'], '+225 07 00 00 00 00'),
+  (3, 'ART-003', 'Bougie d''allumage iridium', 'moteur', 'Suzuki', 4500, 45, 45, 4.8, 'Allumage optimal, consommation réduite.', ARRAY['bougie', 'iridium', 'allumage', 'suzuki', 'ngk'], '+225 07 00 00 00 00'),
+  (4, 'ART-004', 'Batterie 12V 7Ah', 'electricite', 'TVS', 18000, 8, 8, 4.0, 'Batterie sans entretien, démarrage fiable.', ARRAY['batterie', '12v', '7ah', 'tvs'], '+225 07 00 00 00 00'),
+  (5, 'ART-005', 'Rétroviseur gauche', 'carrosserie', 'Kawasaki', 6500, 15, 15, 3.9, 'Rétroviseur d''origine, fixation universelle.', ARRAY['retroviseur', 'gauche', 'kawasaki'], '+225 07 00 00 00 00'),
+  (6, 'ART-006', 'Huile moteur 4T 10W-40 (1L)', 'consommables', 'Autre', 5500, 60, 60, 4.7, 'Huile semi-synthétique pour moteurs 4 temps.', ARRAY['huile', 'moteur', '4t', '10w40'], '+225 07 00 00 00 00'),
+  (7, 'ART-007', 'Amortisseur arrière', 'suspension', 'Honda', 42000, 5, 5, 4.3, 'Amortisseur à ressort réglable, confort routier.', ARRAY['amortisseur', 'arriere', 'honda'], '+225 07 00 00 00 00'),
+  (8, 'ART-008', 'Filtre à air', 'moteur', 'Sanya', 3500, 25, 25, 4.1, 'Filtre lavable, filtration haute efficacité.', ARRAY['filtre', 'air', 'sanya'], '+225 07 00 00 00 00'),
+  (9, 'ART-009', 'Disque de frein avant 296mm', 'freinage', 'Yamaha', 27000, 6, 6, 4.6, 'Disque inox, usure réduite et stabilité au freinage.', ARRAY['disque', 'frein', 'avant', 'yamaha'], '+225 07 00 00 00 00'),
+  (10, 'ART-010', 'Kit câbles (accélérateur, embrayage)', 'consommables', 'TVS', 9500, 18, 18, 3.8, 'Câbles pré-graissés, remplacement facile.', ARRAY['cables', 'accelerateur', 'embrayage', 'tvs'], '+225 07 00 00 00 00'),
+  (11, 'ART-011', 'Courroie de transmission', 'transmission', 'Suzuki', 15000, 10, 10, 4.0, 'Courroie aramid, durée de vie prolongée.', ARRAY['courroie', 'transmission', 'suzuki'], '+225 07 00 00 00 00'),
+  (12, 'ART-012', 'Feu arrière LED', 'electricite', 'Autre', 7500, 22, 22, 4.4, 'Feu LED universel 12V, visibilité maximale.', ARRAY['feu', 'arriere', 'led'], '+225 07 00 00 00 00'),
+  (13, 'ART-013', 'Plongeur GN', 'moteur', 'Autre', 0, 10, 10, 4.0, 'Plongeur GN.', ARRAY['plongeur', 'gn'], '+225 07 00 00 00 00'),
+  (14, 'ART-014', 'Fourche X-1', 'suspension', 'Autre', 0, 10, 10, 4.0, 'Fourche X-1.', ARRAY['fourche', 'x1'], '+225 07 00 00 00 00'),
+  (15, 'ART-015', 'Verre de phare HJ110-3', 'electricite', 'Autre', 0, 10, 10, 4.0, 'Verre de phare HJ110-3.', ARRAY['verre', 'phare', 'hj110'], '+225 07 00 00 00 00'),
+  (16, 'ART-016', 'Deumare 110', 'moteur', 'Autre', 0, 10, 10, 4.0, 'Deumare 110.', ARRAY['deumare', '110'], '+225 07 00 00 00 00'),
+  (17, 'ART-017', 'Deumare CG125', 'moteur', 'Autre', 0, 10, 10, 4.0, 'Deumare CG125.', ARRAY['deumare', 'cg125'], '+225 07 00 00 00 00'),
+  (18, 'ART-018', 'Pose à pied central X-1', 'accessoires', 'Autre', 0, 10, 10, 4.0, 'Pose à pied central X-1.', ARRAY['pose', 'pied', 'central', 'x1'], '+225 07 00 00 00 00'),
+  (19, 'ART-019', 'Pose à pied central CG', 'accessoires', 'Autre', 0, 10, 10, 4.0, 'Pose à pied central CG.', ARRAY['pose', 'pied', 'central', 'cg'], '+225 07 00 00 00 00'),
+  (20, 'ART-020', 'Filtre gros GN', 'moteur', 'Autre', 0, 10, 10, 4.0, 'Filtre gros GN.', ARRAY['filtre', 'gros', 'gn'], '+225 07 00 00 00 00')
 ON CONFLICT (id) DO NOTHING;
 
 -- Réajuster la séquence ID après insertion
 SELECT setval('public.parts_id_seq', (SELECT MAX(id) FROM public.parts));
 
--- Fin du Script
+-- Bannières Publicitaires de Départ
+INSERT INTO public.parts (code, nom, cat, marque, prix, stock, photo, description, boutique) VALUES
+  ('PROMO-101', 'Offre Spéciale -15% sur les kits chaîne & freinage', 'accessoires', 'Promo', 0, 1, null, '05/11/2026', 'PROMO_BANNER')
+ON CONFLICT (code) DO NOTHING;
+
+-- Message de démarrage d'assistance
+INSERT INTO public.messages (canal, auteur, texte) VALUES
+  ('assistance', 'Assistance MotoPièces', 'Bonjour ! Comment pouvons-nous vous aider aujourd'hui ?');
+
+-- ====================================================================
+-- FIN DU SCRIPT SQL DE RECONSTRUCTION
+-- ====================================================================
