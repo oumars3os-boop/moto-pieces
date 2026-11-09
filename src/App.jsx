@@ -4571,8 +4571,9 @@ function SectionPublicites({ publicites, setPublicites, autoriserUpload = false 
 }
 
 const COMPTES_PAR_DEFAUT = [
-  { id: 1, nom: "Administrateur Principal", tel: "+225 05 55 44 89 45", pin: "5544", role: "admin" },
-  { id: 2, nom: "Vendeur Exemple", tel: "+225 05 00 00 00 00", pin: "0000", role: "vendeur" }
+  { id: 1, nom: "Administrateur Principal", tel: "+225 05 55 44 89 45", pin: "5544", role: "admin", equipe: "+225 05 55 44 89 45" },
+  { id: 2, nom: "Administrateur Secondaire", tel: "+225 07 00 00 00 00", pin: "1234", role: "admin", equipe: "+225 07 00 00 00 00" },
+  { id: 3, nom: "Vendeur Exemple", tel: "+225 05 00 00 00 00", pin: "0000", role: "vendeur", equipe: "+225 05 55 44 89 45" }
 ];
 
 // ---------- App ----------
@@ -5009,12 +5010,31 @@ export default function App() {
     setTransfertsStock(prev => prev.map(item => item.id === idTransfert ? { ...item, statut: "valide" } : item));
   };
 
-  // Connexion sécurisée : téléphone + code PIN
+  // Normalisation intelligente des numéros de téléphone (ex: 0555448945, 05 55 44 89 45, +225 05 55 44 89 45)
+  const normaliserTel = (t) => {
+    if (!t) return "";
+    let s = String(t).replace(/\s+/g, "").replace(/[^0-9+]/g, "");
+    if (s.startsWith("00225")) s = "+225" + s.slice(5);
+    else if (s.startsWith("225") && !s.startsWith("+")) s = "+" + s;
+    else if (s.startsWith("0")) s = "+225" + s.slice(1);
+    else if (!s.startsWith("+")) s = "+225" + s;
+    return s;
+  };
+
+  // Connexion sécurisée : téléphone + code PIN avec normalisation multi-formats
   const connexion = (tel, pin) => {
-    const c = comptes.find(x => (x.tel || "").trim() === (tel || "").trim());
-    if (!c) { setErreurLogin("Aucun compte n'est associé à ce téléphone."); return; }
-    if ((c.pin || "") !== (pin || "").trim()) { setErreurLogin("Code PIN incorrect."); return; }
+    const telNormalise = normaliserTel(tel);
+    const pinSaisi = String(pin || "").trim();
+
+    const c = (comptes || []).find(x => {
+      const tCompte = normaliserTel(x.tel);
+      return tCompte === telNormalise || (x.tel || "").trim() === (tel || "").trim();
+    });
+
+    if (!c) { setErreurLogin("Aucun compte n'est associé à ce numéro de téléphone."); return; }
+    if (String(c.pin || "").trim() !== pinSaisi) { setErreurLogin("Code PIN incorrect."); return; }
     if (c.bloque) { setErreurLogin("Ce compte est bloqué. Contactez l'administrateur."); return; }
+
     setErreurLogin("");
     setUserActif(c);
     setRole(c.role);
