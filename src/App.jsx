@@ -4790,8 +4790,44 @@ export default function App() {
       }
     }
 
+    async function chargerProduitsEnLigne() {
+      try {
+        const produitsEnLigne = await chargerProduitsSupabase();
+        if (produitsEnLigne && produitsEnLigne.length > 0) {
+          setProduits(produitsEnLigne);
+        }
+      } catch (e) {
+        console.warn("Notice chargement produits Supabase:", e);
+      }
+    }
+
     chargerComptesSupabase();
     chargerVentesEnLigne();
+    chargerProduitsEnLigne();
+
+    // Écoute Realtime sur la table 'parts' pour que les articles ajoutés apparaissent immédiatement sur tous les téléphones
+    let canalParts = null;
+    try {
+      canalParts = supabase
+        .channel("parts-changes")
+        .on(
+          "postgres_changes",
+          { event: "*", schema: "public", table: "parts" },
+          async () => {
+            const produitsAjour = await chargerProduitsSupabase();
+            if (produitsAjour && produitsAjour.length > 0) {
+              setProduits(produitsAjour);
+            }
+          }
+        )
+        .subscribe();
+    } catch (e) {
+      console.warn("Avis souscription realtime parts:", e);
+    }
+
+    return () => {
+      if (canalParts) supabase.removeChannel(canalParts);
+    };
   }, []);
 
   // Synchronisation directe avec l'état d'authentification Supabase en ligne

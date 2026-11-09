@@ -41,6 +41,7 @@ export async function synchroniserCompteSupabase(compte) {
 
 /**
  * Enregistre ou met à jour un article/produit dans la table public.parts de Supabase
+ * Inclut impérativement le champ 'equipe' pour la synchronisation multi-téléphones
  */
 export async function enregistrerProduitSupabase(p) {
   try {
@@ -48,20 +49,27 @@ export async function enregistrerProduitSupabase(p) {
       ? p.mots
       : (p.mots || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
 
+    const payload = {
+      nom: p.nom,
+      code: p.code || `ART-${String(p.id || Date.now()).slice(-4)}`,
+      cat: p.cat || "moteur",
+      marque: p.marque || "Générique",
+      prix: Number(p.prix) || 0,
+      stock: Number(p.stock) || 0,
+      photo: p.photo || null,
+      note: p.note || 4.5,
+      mots: motsArray,
+      boutique: p.boutique || "MotoPièces Principal",
+      equipe: p.equipe || null, // numéro de téléphone du compte administrateur créateur
+    };
+
+    if (typeof p.id === "number" && p.id > 0) {
+      payload.id = p.id;
+    }
+
     const { data, error } = await supabase
       .from("parts")
-      .upsert({
-        nom: p.nom,
-        code: p.code || `ART-${String(p.id || Date.now()).slice(-4)}`,
-        cat: p.cat || "moteur",
-        marque: p.marque || "Générique",
-        prix: Number(p.prix) || 0,
-        stock: Number(p.stock) || 0,
-        photo: p.photo || null,
-        note: p.note || 4.5,
-        mots: motsArray,
-        boutique: p.boutique || "MotoPièces Principal",
-      }, { onConflict: "code" })
+      .upsert(payload, { onConflict: "code" })
       .select();
 
     if (error) {
@@ -77,6 +85,7 @@ export async function enregistrerProduitSupabase(p) {
 
 /**
  * Récupère tous les articles/produits enregistrés depuis la base de données Supabase
+ * Restitue la propriété 'equipe' pour que les articles s'affichent sur tous les téléphones connectés au même compte
  */
 export async function chargerProduitsSupabase() {
   try {
@@ -100,11 +109,12 @@ export async function chargerProduitsSupabase() {
       marque: p.marque,
       prix: Number(p.prix) || 0,
       stock: Number(p.stock) || 0,
-      stockInit: Number(p.stock) || 0,
+      stockInit: Number(p.stock_init || p.stock) || 0,
       photo: p.photo || null,
       note: Number(p.note) || 4.5,
       mots: Array.isArray(p.mots) ? p.mots : [],
       boutique: p.boutique || "MotoPièces Principal",
+      equipe: p.equipe || null, // propriété equipe indispensable pour la synchronisation multi-téléphones
     }));
   } catch (err) {
     console.warn("Erreur réseau chargement produits Supabase:", err);
