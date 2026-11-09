@@ -23,9 +23,7 @@ export async function synchroniserCompteSupabase(compte) {
           role: compte.role || "vendeur",
           cle: compte.cle || null,
           bloque: Boolean(compte.bloque),
-          // Photo de profil (enregistrée en direct)
           photo: compte.photo || null,
-          // Équipe : le téléphone de l'administrateur qui a créé ce compte
           equipe: compte.equipe || null,
         },
         { onConflict: "tel" }
@@ -42,6 +40,79 @@ export async function synchroniserCompteSupabase(compte) {
 }
 
 /**
+ * Enregistre ou met à jour un article/produit dans la table public.parts de Supabase
+ */
+export async function enregistrerProduitSupabase(p) {
+  try {
+    const motsArray = Array.isArray(p.mots)
+      ? p.mots
+      : (p.mots || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+
+    const { data, error } = await supabase
+      .from("parts")
+      .upsert({
+        nom: p.nom,
+        code: p.code || `ART-${String(p.id || Date.now()).slice(-4)}`,
+        cat: p.cat || "moteur",
+        marque: p.marque || "Générique",
+        prix: Number(p.prix) || 0,
+        stock: Number(p.stock) || 0,
+        photo: p.photo || null,
+        note: p.note || 4.5,
+        mots: motsArray,
+        boutique: p.boutique || "MotoPièces Principal",
+      }, { onConflict: "code" })
+      .select();
+
+    if (error) {
+      console.warn("Avis enregistrement produit Supabase:", error.message);
+      return { success: false, error };
+    }
+    return { success: true, data };
+  } catch (err) {
+    console.warn("Erreur réseau enregistrement produit Supabase:", err);
+    return { success: false, error: err };
+  }
+}
+
+/**
+ * Récupère tous les articles/produits enregistrés depuis la base de données Supabase
+ */
+export async function chargerProduitsSupabase() {
+  try {
+    const { data, error } = await supabase
+      .from("parts")
+      .select("*")
+      .order("id", { ascending: true });
+
+    if (error) {
+      console.warn("Avis chargement produits Supabase:", error.message);
+      return [];
+    }
+
+    if (!data || data.length === 0) return [];
+
+    return data.map((p) => ({
+      id: p.id,
+      code: p.code,
+      nom: p.nom,
+      cat: p.cat,
+      marque: p.marque,
+      prix: Number(p.prix) || 0,
+      stock: Number(p.stock) || 0,
+      stockInit: Number(p.stock) || 0,
+      photo: p.photo || null,
+      note: Number(p.note) || 4.5,
+      mots: Array.isArray(p.mots) ? p.mots : [],
+      boutique: p.boutique || "MotoPièces Principal",
+    }));
+  } catch (err) {
+    console.warn("Erreur réseau chargement produits Supabase:", err);
+    return [];
+  }
+}
+
+/**
  * Exécute une requête d'écriture serveur directe dans la table d'historique des ventes public.sales de Supabase
  */
 export async function enregistrerVenteSupabase(vente) {
@@ -51,7 +122,6 @@ export async function enregistrerVenteSupabase(vente) {
       return s + (p * (it.qte || 1));
     }, 0) || 0;
 
-    // Écriture serveur directe vers la table sales
     const { data: saleData, error: saleError } = await supabase
       .from("sales")
       .insert([
@@ -72,10 +142,6 @@ export async function enregistrerVenteSupabase(vente) {
       return { success: false, error: saleError };
     }
 
-    // Écriture serveur directe des lignes d'articles vers la table sale_items
-    // Correctif : part_id mis à null — les articles de la boutique ne sont pas dans la table
-    // en ligne "parts" (vide), et une référence inexistante fait échouer SILENCIEUSEMENT
-    // l'enregistrement des lignes, ce qui vidait les ventes après actualisation.
     if (saleData && vente.items && vente.items.length > 0) {
       const itemsPayload = vente.items.map((it) => ({
         sale_id: saleData.id,
@@ -103,8 +169,7 @@ export async function enregistrerVenteSupabase(vente) {
 }
 
 /**
- * Met à jour une vente déjà enregistrée dans Supabase (prix et statut réels après validation),
- * au lieu d'insérer une seconde ligne. Crée la vente si elle n'existe pas encore en ligne.
+ * Met à jour une vente déjà enregistrée dans Supabase (prix et statut réels après validation)
  */
 export async function majVenteSupabase(vente) {
   try {
@@ -114,9 +179,8 @@ export async function majVenteSupabase(vente) {
       return s + (p * (it.qte || 1));
     }, 0) || 0;
 
-    if (!idSup) return enregistrerVenteSupabase(vente); // pas encore en ligne : première insertion
+    if (!idSup) return enregistrerVenteSupabase(vente);
 
-    // 1) Mettre à jour la ligne principale (total réel + statut payée)
     const { error: majError } = await supabase
       .from("sales")
       .update({
@@ -131,11 +195,10 @@ export async function majVenteSupabase(vente) {
       return { success: false, error: majError };
     }
 
-    // 2) Réécrire les lignes d'articles avec les prix réels (prix fixés par le vendeur/secrétaire)
     await supabase.from("sale_items").delete().eq("sale_id", idSup);
     const itemsPayload = (vente.items || []).map((it) => ({
       sale_id: idSup,
-      part_id: null, // même correctif : jamais de référence à la table "parts" vide
+      part_id: null,
       nom: it.p?.nom || it.nom || "Article",
       quantite: it.qte || 1,
       prix_unitaire: it.prixLigne ?? (it.p ? it.p.prix : it.prix) ?? 0,
