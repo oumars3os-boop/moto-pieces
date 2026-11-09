@@ -325,7 +325,7 @@ ON CONFLICT (code) DO NOTHING;
 
 -- Message de démarrage d'assistance
 INSERT INTO public.messages (canal, auteur, texte) VALUES
-  ('assistance', 'Assistance MotoPièces', 'Bonjour ! Comment pouvons-nous vous aider aujourd'hui ?');
+  ('assistance', 'Assistance MotoPièces', 'Bonjour ! Comment pouvons-nous vous aider aujourd''hui ?');
 
 -- ====================================================================
 -- FIN DU SCRIPT SQL DE RECONSTRUCTION
