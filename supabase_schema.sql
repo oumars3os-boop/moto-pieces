@@ -262,3 +262,15 @@ DROP POLICY IF EXISTS "Lecture publique produits_data" ON public.produits_data;
 DROP POLICY IF EXISTS "Gestion produits_data" ON public.produits_data;
 CREATE POLICY "Lecture publique produits_data" ON public.produits_data FOR SELECT USING (true);
 CREATE POLICY "Gestion produits_data" ON public.produits_data FOR ALL USING (true);
+
+-- ============================================================
+-- v64 — TEMPS RÉEL : les articles changent en direct partout
+-- À exécuter une fois dans le SQL Editor de Supabase.
+-- ============================================================
+
+-- 1) Activer les notifications en direct pour la table des articles
+ALTER PUBLICATION supabase_realtime ADD TABLE public.produits_data;
+
+-- 2) S'assurer que tout le monde peut lire les articles sans compte
+DROP POLICY IF EXISTS "Lecture publique produits_data" ON public.produits_data;
+CREATE POLICY "Lecture publique produits_data" ON public.produits_data FOR SELECT USING (true);
