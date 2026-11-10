@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/context/AuthContext";
-import { supabase, synchroniserCompteSupabase, enregistrerVenteSupabase, majVenteSupabase, chargerVentesSupabase, enregistrerProduitSupabase, chargerProduitsSupabase, enregistrerPubliciteSupabase, chargerPublicitesSupabase, supprimerPubliciteSupabase } from "@/lib/supabase";
+import { supabase, synchroniserCompteSupabase, enregistrerVenteSupabase, majVenteSupabase, chargerVentesSupabase, sauvegarderProduitsSupabase, chargerProduitsSupabase } from "@/lib/supabase";
 import { extraireTexteImage } from "@/lib/ocr";
 import { demanderAssistantMistral } from "@/lib/mistral";
 import { verifierQualiteImage } from "@/lib/imageProcessor";
@@ -31,6 +31,7 @@ const CATEGORIES_DEFAUT = [
   { id: "echappement", label: "Échappement", emoji: "💨" },
   { id: "accessoires", label: "Accessoires", emoji: "🎒" },
   { id: "pneumatiques", label: "Pneumatiques", emoji: "🛞" },
+  { id: "boissons", label: "Boissons", emoji: "🥤" },
 ];
 
 const PRODUITS = [
@@ -676,36 +677,6 @@ function VueClient({ produits, marques, creerVente, photosCategories, photosMarq
   const chercherParImage = async (src) => {
     setPhotoRecherche(src);
     setResultatsImage([]);
-
-    // 1. Recherche instantanée par Mots-clés OCR écrits sur la pièce (ex: "Papa", "NGK", "428H")
-    try {
-      const ocrResult = await extraireTexteImage(src);
-      if (ocrResult && ocrResult.text) {
-        const texteMin = ocrResult.text.toLowerCase();
-        const motsExtraits = texteMin.split(/[\s,;:._\-\/]+/).filter(w => w.length >= 2);
-
-        const articlesTrouvesOcr = produits.filter(p => {
-          const mList = (p.mots || []).map(m => m.toLowerCase().trim());
-          const codeMin = (p.code || "").toLowerCase().trim();
-          const nomMin = (p.nom || "").toLowerCase().trim();
-
-          const matchMotCle = mList.some(k => k && (texteMin.includes(k) || motsExtraits.includes(k)));
-          const matchCode = codeMin && (texteMin.includes(codeMin) || motsExtraits.includes(codeMin));
-          const matchNom = nomMin && (texteMin.includes(nomMin));
-
-          return matchMotCle || matchCode || matchNom;
-        });
-
-        if (articlesTrouvesOcr.length > 0) {
-          setResultatsImage(articlesTrouvesOcr.slice(0, 5));
-          return;
-        }
-      }
-    } catch (e) {
-      console.warn("Notice recherche OCR client:", e);
-    }
-
-    // 2. Recherche par signature visuelle d'image
     const avecPhoto = produits.filter(p => p.photo);
     if (!avecPhoto.length) return;
     const sig = await sigImage(src);
@@ -940,37 +911,8 @@ function VueVendeur({ produits, ventes, creerVente, categories = [], credits = [
     e.target.value = "";
   };
 
-  // Reconnaissance automatique instantanée par mots-clés OCR et signature visuelle
+  // Reconnaissance automatique instantanée dès la capture photo : l'article est directement identifié et ajouté au panier/vente
   const reconnaitre = async (src, index) => {
-    // 1. Recherche instantanée par Mots-clés OCR écrits sur la pièce (ex: "Papa", "NGK", "428H")
-    try {
-      const ocrResult = await extraireTexteImage(src);
-      if (ocrResult && ocrResult.text) {
-        const texteMin = ocrResult.text.toLowerCase();
-        const motsExtraits = texteMin.split(/[\s,;:._\-\/]+/).filter(w => w.length >= 2);
-
-        const articleTrouveOcr = produits.find(p => {
-          const mList = (p.mots || []).map(m => m.toLowerCase().trim());
-          const codeMin = (p.code || "").toLowerCase().trim();
-          const nomMin = (p.nom || "").toLowerCase().trim();
-
-          const matchMotCle = mList.some(k => k && (texteMin.includes(k) || motsExtraits.includes(k)));
-          const matchCode = codeMin && (texteMin.includes(codeMin) || motsExtraits.includes(codeMin));
-          const matchNom = nomMin && (texteMin.includes(nomMin));
-
-          return matchMotCle || matchCode || matchNom;
-        });
-
-        if (articleTrouveOcr) {
-          setPhotos(prev => prev.map((ph, j) => j === index ? { ...ph, article: articleTrouveOcr, reconnu: true } : ph));
-          return;
-        }
-      }
-    } catch (e) {
-      console.warn("Notice reconnaissance OCR vendeur:", e);
-    }
-
-    // 2. Recherche par signature visuelle d'image
     const avecPhoto = produits.filter(p => p.photo);
     const candidats = avecPhoto.length ? avecPhoto : produits;
     if (!candidats.length) return;
@@ -984,12 +926,15 @@ function VueVendeur({ produits, ventes, creerVente, categories = [], credits = [
       dists.sort((x, y) => x.d - y.d);
       const best = dists[0];
 
+      // Correctif : ne plus identifier à tort l'article comme le premier produit en cas d'échec.
+      // On garde l'article seulement si une vraie correspondance photo a été trouvée.
       if (best && best.p && best.d < 0.4) {
         setPhotos(prev => prev.map((ph, j) => j === index ? { ...ph, article: best.p, reconnu: true } : ph));
       } else {
         setPhotos(prev => prev.map((ph, j) => j === index ? { ...ph, reconnu: false } : ph));
       }
     } catch (err) {
+      // Échec de la reconnaissance : aucune attribution automatique (vente erronée évitée)
       setPhotos(prev => prev.map((ph, j) => j === index ? { ...ph, reconnu: false } : ph));
     }
   };
@@ -2004,6 +1949,7 @@ function VueAdmin({
   transfertsStock = [], effectuerTransfertStock = () => {}, validerTransfertStock = () => {},
   credits = [], ajouterCredit, ajouterVersement, validerCredit,
   cases = [], setCases = () => {},
+  publicites = [], setPublicites = () => {},
   chefEquipe = ""
 }) {
   const [onglet, setOnglet] = useState("stats");
@@ -2098,39 +2044,11 @@ function VueAdmin({
 
   const maxId = produits.reduce((m, p) => Math.max(m, p.id), 0);
 
-  const [cameraNouveauOuverte, setCameraNouveauOuverte] = useState(false);
-
-  const traiterPhotoPriseNouveau = async (fichier) => {
-    if (!fichier) return;
-    const r = new FileReader();
-    r.onload = async () => {
-      const src = r.result;
-      setPhotoNouveau(src);
-      setCameraNouveauOuverte(false);
-
-      try {
-        const ocr = await extraireTexteImage(src);
-        if (ocr && ocr.text) {
-          const motsProposes = ocr.text.toLowerCase().split(/[\s,;:._\-\/]+/).filter(w => w.length >= 2).join(", ");
-          if (motsProposes) {
-            setNp(prev => ({
-              ...prev,
-              mots: prev.mots ? `${prev.mots}, ${motsProposes}` : motsProposes
-            }));
-          }
-        }
-      } catch (e) {}
-    };
-    r.readAsDataURL(fichier);
-  };
-
-  const enregistrerNouveau = async () => {
+  const enregistrerNouveau = () => {
     if (!np.nom.trim() || !np.cat) return;
     const stock = Number(np.stock) || 0;
     const id = maxId + 1;
-    const motsSaisisOuGeneres = (np.mots || `${np.nom} ${np.cat} ${np.marque}`).toLowerCase().split(/[\s,]+/).filter(Boolean);
-
-    const nouveauProduit = {
+    setProduits(prev => [...prev, {
       id,
       nom: np.nom.trim(),
       cat: np.cat,
@@ -2140,18 +2058,11 @@ function VueAdmin({
       code: "ART-" + String(id).padStart(3, "0"),
       note: 4.0, desc: np.nom.trim(),
       photo: photoNouveau,
-      mots: motsSaisisOuGeneres,
-      caseId: np.caseId || cases[0]?.id || "1",
-      boutique: "MotoPièces Principal",
-      equipe: (chefEquipe || "").trim(),
-    };
-
-    setProduits(prev => [...prev, nouveauProduit]);
-    await enregistrerProduitSupabase(nouveauProduit);
-
-    setNp({ nom: "", cat: "", marque: "", prix: "", stock: "", mots: "" });
+      caseId: np.caseId, // case de rangement : le vendeur sait où trouver l'article
+      equipe: (chefEquipe || "").trim(), // propriétaire : le téléphone de l'administrateur qui a créé l'article
+    }]);
+    setNp({ nom: "", cat: "", marque: "", prix: "", stock: "" });
     setPhotoNouveau(null);
-    setCameraNouveauOuverte(false);
     setAjoutOuvert(false);
   };
 
@@ -2179,22 +2090,13 @@ function VueAdmin({
   const totalCA = ventes.filter(v => v.statut === "payée").reduce((s, v) => s + v.total, 0);
   const enStock = produits.reduce((s, p) => s + p.stock, 0);
 
-  const enregistrer = async () => {
-    const motsInclus = mots.split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
-    const pModifie = {
-      ...edite,
-      code: code.trim() || edite.code,
-      prix: Number(prix) || edite.prix,
-      stock: Number(stock) || 0,
-      stockInit: edite.stockInit ?? (Number(stock) || 0),
-      photo: photoEdite || edite.photo,
-      mots: motsInclus.length ? motsInclus : (edite.mots || []),
-      caseId: caseEdite || edite.caseId,
-    };
-
-    setProduits(prev => prev.map(p => p.id === edite.id ? pModifie : p));
-    await enregistrerProduitSupabase(pModifie);
-
+  const enregistrer = () => {
+    setProduits(prev => prev.map(p => p.id === edite.id ? {
+      ...p, code: code.trim() || p.code, prix: Number(prix) || p.prix,
+      stock: Number(stock) || 0, stockInit: p.stockInit ?? (Number(stock) || 0), photo: photoEdite || p.photo,
+      mots: mots.split(",").map(s => s.trim().toLowerCase()).filter(Boolean),
+      caseId: caseEdite || p.caseId,
+    } : p));
     setPhotoEdite(null);
     setMots("");
     setEdite(null);
@@ -2228,6 +2130,7 @@ function VueAdmin({
           </SelectContent>
         </Select>
         <Button variant={onglet === "ventes" ? "default" : "outline"} className={onglet === "ventes" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("ventes")}>🧾 Ventes ({ventes.length})</Button>
+        <Button variant={onglet === "publicites" ? "default" : "outline"} className={onglet === "publicites" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("publicites")}>📢 Publicités</Button>
       </div>
 
       {/* Gros bouton unique qui réunit toutes les options de crédit : visible uniquement dans l'option Crédits */}
@@ -2370,77 +2273,31 @@ function VueAdmin({
             </DialogContent>
           </Dialog>
 
-          <Dialog open={ajoutOuvert} onOpenChange={o => { setAjoutOuvert(o); if (!o) setCameraNouveauOuverte(false); }}>
-            <DialogContent className="bg-white text-zinc-900 rounded-lg p-3 border shadow-xl" style={{position:"fixed",left:"50%",top:"50%",transform:"translate(-50%,-50%)",maxWidth:"340px",width:"92%",maxHeight:"88vh",overflowY:"auto",zIndex:60}}>
+          <Dialog open={ajoutOuvert} onOpenChange={setAjoutOuvert}>
+            <DialogContent className="bg-white text-zinc-900 rounded-lg p-3 border shadow-xl" style={{position:"fixed",left:"50%",top:"50%",transform:"translate(-50%,-50%)",maxWidth:"280px",width:"90%",maxHeight:"85vh",overflowY:"auto",zIndex:60}}>
               <DialogHeader><DialogTitle>➕ Ajouter une pièce</DialogTitle></DialogHeader>
               <div className="grid gap-1.5">
-                <Label>Photo de reconnaissance & Caméra directe</Label>
-
-                {cameraNouveauOuverte ? (
-                  <ModeRech
-                    onCaptureAuto={traiterPhotoPriseNouveau}
-                    onFermer={() => setCameraNouveauOuverte(false)}
-                  />
-                ) : (
-                  <div className="flex flex-col gap-2 p-2 border rounded-lg bg-zinc-50">
-                    <div className="flex items-center gap-2">
-                      {photoNouveau
-                        ? <img src={photoNouveau} alt="" className="w-12 h-12 rounded-md object-cover border bg-zinc-100 shrink-0" />
-                        : <div className="w-12 h-12 rounded-md border bg-zinc-100 flex items-center justify-center text-xl shrink-0">📷</div>}
-                      <div className="flex flex-col gap-1 w-full">
-                        <Button
-                          type="button"
-                          size="sm"
-                          className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold h-8"
-                          onClick={() => setCameraNouveauOuverte(true)}
-                        >
-                          📷 Caméra directe (Prendre photo)
-                        </Button>
-                        <input
-                          type="file"
-                          accept="image/*"
-                          capture="environment"
-                          className="hidden"
-                          id="photo-piece-nouveau"
-                          onChange={e => {
-                            const f = e.target.files && e.target.files[0];
-                            if (f) traiterPhotoPriseNouveau(f);
-                            e.target.value = "";
-                          }}
-                        />
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          className="text-xs h-8"
-                          onClick={() => document.getElementById("photo-piece-nouveau").click()}
-                        >
-                          📁 Importer fichier photo
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
+                <Label>Photo de reconnaissance</Label>
+                <div className="flex items-center gap-2">
+                  {photoNouveau
+                    ? <img src={photoNouveau} alt="" className="w-12 h-12 rounded-md object-contain border bg-zinc-100" />
+                    : <div className="w-12 h-12 rounded-md border bg-zinc-100 flex items-center justify-center text-xl">🖼️</div>}
+                  <input type="file" accept="image/*" capture="environment" className="hidden" id="photo-piece-nouveau" onChange={e => {
+                    const f = e.target.files && e.target.files[0];
+                    if (!f) return;
+                    const r = new FileReader();
+                    r.onload = () => setPhotoNouveau(r.result);
+                    r.readAsDataURL(f);
+                  }} />
+                  <Button size="sm" variant="outline" onClick={() => document.getElementById("photo-piece-nouveau").click()}>
+                    📷 {photoNouveau ? "Changer" : "Photographier"}
+                  </Button>
+                </div>
                 <p className="text-[11px] text-muted-foreground">
-                  Cette photo sert de référence à la reconnaissance automatique : photographiez la pièce de face avec son numéro ou son écriture visible.
+                  Cette photo sert de référence à la reconnaissance automatique : photographiez la pièce de face, avec son numéro ou son écriture visible si elle en porte.
                 </p>
                 <Label className="pt-2">Nom de la pièce</Label>
                 <Input value={np.nom} onChange={e => setNp({ ...np, nom: e.target.value })} placeholder="Ex : Bougie NGK" />
-
-                <Label className="pt-2 font-bold text-blue-800 flex items-center justify-between">
-                  <span>🔑 Mots-clés de la pièce (Obligatoire pour l'OCR)</span>
-                  <Badge className="bg-amber-500 text-white text-[9px] px-1.5">Scan OCR</Badge>
-                </Label>
-                <Input
-                  value={np.mots || ""}
-                  onChange={e => setNp({ ...np, mots: e.target.value })}
-                  placeholder="Ex : Papa, NGK, 428H, 125, CG125..."
-                  className="border-amber-300 bg-amber-50/50 font-medium text-xs"
-                />
-                <p className="text-[10px] text-zinc-600 font-medium">
-                  💡 Inscription, code ou numéro sur la pièce. Le moteur OCR scannera ces mots-clés pour retrouver l'article au scan photo !
-                </p>
                 <Label className="pt-2">Catégorie</Label>
                 <Select value={np.cat || undefined} onValueChange={v => setNp({ ...np, cat: v })}>
                   <SelectTrigger><SelectValue placeholder="Choisir…" /></SelectTrigger>
@@ -2476,7 +2333,7 @@ function VueAdmin({
               </div>
               <DialogFooter>
                 <Button variant="outline" onClick={() => setAjoutOuvert(false)}>Annuler</Button>
-                <Button className="bg-blue-600 hover:bg-blue-700 text-white h-11 text-base font-bold shadow" disabled={!np.nom.trim() || !np.cat} onClick={enregistrerNouveau}>➕ Enregistrer l'article</Button>
+                <Button className="bg-blue-600 hover:bg-blue-700 text-white h-11 text-base" disabled={!np.nom.trim() || !np.cat || !np.caseId} onClick={enregistrerNouveau}>Ajouter</Button>
               </DialogFooter>
             </DialogContent>
           </Dialog>
@@ -2625,6 +2482,10 @@ function VueAdmin({
             Vous pouvez renommer directement dans le champ, ajouter une photo d'exemple, ou supprimer les catégories pour mettre les vôtres.
           </p>
         </div>
+      )}
+
+      {onglet === "publicites" && (
+        <SectionPublicites publicites={publicites} setPublicites={setPublicites} autoriserUpload={true} />
       )}
 
       {onglet === "utilisateurs" && (
@@ -4416,7 +4277,7 @@ function SectionPublicites({ publicites, setPublicites, autoriserUpload = false 
       setAnalyse({ enCours: false, valide: true, message: resultatAnalyse.message });
 
       // Déclenchement automatique de la confirmation et redirection après analyse positive
-      setTimeout(async () => {
+      setTimeout(() => {
         const nouvellePub = {
           id: Date.now(),
           titre: titre.trim() || "Offre Spéciale MotoPièces",
@@ -4424,7 +4285,6 @@ function SectionPublicites({ publicites, setPublicites, autoriserUpload = false 
           date: new Date().toLocaleDateString("fr-FR"),
         };
         setPublicites((prev) => [nouvellePub, ...prev]);
-        await enregistrerPubliciteSupabase(nouvellePub);
         setTitre("");
         setImage(null);
         setAnalyse(null);
@@ -4435,7 +4295,7 @@ function SectionPublicites({ publicites, setPublicites, autoriserUpload = false 
     }
   };
 
-  const ajouterPublicite = async () => {
+  const ajouterPublicite = () => {
     if (!image) return;
     const nouvellePub = {
       id: Date.now(),
@@ -4444,16 +4304,14 @@ function SectionPublicites({ publicites, setPublicites, autoriserUpload = false 
       date: new Date().toLocaleDateString("fr-FR"),
     };
     setPublicites((prev) => [nouvellePub, ...prev]);
-    await enregistrerPubliciteSupabase(nouvellePub);
     setTitre("");
     setImage(null);
     setAnalyse(null);
     setOpenModal(false);
   };
 
-  const supprimerPub = async (id) => {
+  const supprimerPub = (id) => {
     setPublicites((prev) => prev.filter((p) => p.id !== id));
-    await supprimerPubliciteSupabase(id);
   };
 
   return (
@@ -4571,9 +4429,8 @@ function SectionPublicites({ publicites, setPublicites, autoriserUpload = false 
 }
 
 const COMPTES_PAR_DEFAUT = [
-  { id: 1, nom: "Administrateur Principal", tel: "+225 05 55 44 89 45", pin: "5544", role: "admin", equipe: "+225 05 55 44 89 45" },
-  { id: 2, nom: "Administrateur Secondaire", tel: "+225 07 00 00 00 00", pin: "1234", role: "admin", equipe: "+225 07 00 00 00 00" },
-  { id: 3, nom: "Vendeur Exemple", tel: "+225 05 00 00 00 00", pin: "0000", role: "vendeur", equipe: "+225 05 55 44 89 45" }
+  { id: 1, nom: "Administrateur Principal", tel: "+225 05 55 44 89 45", pin: "5544", role: "admin" },
+  { id: 2, nom: "Vendeur Exemple", tel: "+225 05 00 00 00 00", pin: "0000", role: "vendeur" }
 ];
 
 // ---------- App ----------
@@ -4794,85 +4651,8 @@ export default function App() {
       }
     }
 
-    async function chargerProduitsEnLigne() {
-      try {
-        const produitsEnLigne = await chargerProduitsSupabase();
-        if (produitsEnLigne && produitsEnLigne.length > 0) {
-          setProduits(produitsEnLigne);
-        }
-      } catch (e) {
-        console.warn("Notice chargement produits Supabase:", e);
-      }
-    }
-
-    async function chargerBannieresEnLigne() {
-      try {
-        const pubsEnLigne = await chargerPublicitesSupabase();
-        if (pubsEnLigne && pubsEnLigne.length > 0) {
-          setPublicites(pubsEnLigne);
-        }
-      } catch (e) {
-        console.warn("Notice chargement bannières Supabase:", e);
-      }
-    }
-
     chargerComptesSupabase();
     chargerVentesEnLigne();
-    chargerProduitsEnLigne();
-    chargerBannieresEnLigne();
-
-    // Auto-rafraîchissement automatique universel (WebSockets Realtime + Polling 4s)
-    // Garantit l'actualisation automatique en direct dans n'importe quel navigateur (Chrome, Safari, Firefox, Mobile)
-    let canalGlobal = null;
-    try {
-      canalGlobal = supabase
-        .channel("global-app-changes")
-        .on("postgres_changes", { event: "*", schema: "public", table: "parts" }, async () => {
-          const freshParts = await chargerProduitsSupabase();
-          if (freshParts && freshParts.length > 0) setProduits(freshParts);
-        })
-        .on("postgres_changes", { event: "*", schema: "public", table: "sales" }, async () => {
-          const freshSales = await chargerVentesSupabase();
-          if (freshSales && freshSales.length > 0) {
-            const lignesValides = freshSales.filter(s =>
-              (s.items || []).length > 0 && (s.statut === "payée" ? Number(s.total) > 0 : true));
-            if (lignesValides.length > 0) setVentes(lignesValides);
-          }
-        })
-        .on("postgres_changes", { event: "*", schema: "public", table: "users" }, async () => {
-          const { data } = await supabase.from("users").select("*");
-          if (data && data.length > 0) setComptes(data);
-        })
-        .subscribe();
-    } catch (e) {
-      console.warn("Notice souscription Realtime globale:", e);
-    }
-
-    // Minuteur de sécurité (Polling 4 secondes) : s'assure qu'aucun navigateur ne rate la moindre mise à jour
-    const intervalleAutoRefresh = setInterval(async () => {
-      try {
-        const [freshParts, freshSales, { data: freshUsers }] = await Promise.all([
-          chargerProduitsSupabase(),
-          chargerVentesSupabase(),
-          supabase.from("users").select("*"),
-        ]);
-
-        if (freshParts && freshParts.length > 0) setProduits(freshParts);
-        if (freshSales && freshSales.length > 0) {
-          const lignesValides = freshSales.filter(s =>
-            (s.items || []).length > 0 && (s.statut === "payée" ? Number(s.total) > 0 : true));
-          if (lignesValides.length > 0) setVentes(lignesValides);
-        }
-        if (freshUsers && freshUsers.length > 0) setComptes(freshUsers);
-      } catch (err) {
-        // Ignorer silencieusement les micro-coupures réseau temporaires
-      }
-    }, 4000);
-
-    return () => {
-      if (canalGlobal) supabase.removeChannel(canalGlobal);
-      clearInterval(intervalleAutoRefresh);
-    };
   }, []);
 
   // Synchronisation directe avec l'état d'authentification Supabase en ligne
@@ -4905,6 +4685,10 @@ export default function App() {
     } catch {}
   }, [userActif]);
 
+  useEffect(() => {
+    try { localStorage.setItem("motopieces_comptes", JSON.stringify(comptes)); } catch {}
+  }, [comptes]);
+
   // Anti-capture d'écran : l'écran se floute aussitôt qu'on quitte l'application
   // ou qu'elle perd le focus. On ne peut pas lire l'écran depuis une autre application.
   useEffect(() => {
@@ -4923,6 +4707,76 @@ export default function App() {
       document.removeEventListener("contextmenu", bloquerMenu);
     };
   }, []);
+
+  useEffect(() => {
+    try { localStorage.setItem("motopieces_ventes", JSON.stringify(ventes)); } catch {}
+  }, [ventes]);
+
+  useEffect(() => {
+    try { localStorage.setItem("motopieces_produits", JSON.stringify(produits)); } catch {}
+  }, [produits]);
+
+  // ---------- v61 : les articles sont TOUJOURS sauvegardés dans la base de données ----------
+  // Clé de sauvegarde : l'admin utilise son numéro de téléphone, le staff utilise son équipe
+  // (le numéro de téléphone de l'administrateur qui a créé son compte).
+  const cleProduits = (role === "admin")
+    ? ((userActif?.tel || "").trim())
+    : ((userActif?.equipe || "").trim());
+  const estArticleDeMaCle = (p) =>
+    ((p.equipe || "").trim() === cleProduits) ||
+    (!(p.equipe || "").trim() && role === "admin");
+
+  // Chargement automatique des articles depuis la base de données dès la connexion :
+  // si le téléphone change ou est perdu, les articles reviennent tout seuls.
+  useEffect(() => {
+    if (!userActif) return;
+    let annule = false;
+    (async () => {
+      try {
+        if (role === "client") {
+          // Le client voit les articles de toutes les boutiques : on charge chaque équipe d'admin.
+          const telsAdmins = (comptes || [])
+            .filter(c => c.role === "admin")
+            .map(c => (c.tel || "").trim())
+            .filter(Boolean);
+          const listes = await Promise.all(telsAdmins.map(t => chargerProduitsSupabase(t)));
+          if (annule) return;
+          setProduits(prev => {
+            const equipesServeur = new Set();
+            const duServeur = [];
+            listes.forEach((liste, i) => (liste || []).forEach(p => {
+              equipesServeur.add(telsAdmins[i]);
+              duServeur.push({ ...p, equipe: (p.equipe || telsAdmins[i]) });
+            }));
+            const locaux = prev.filter(p => !equipesServeur.has((p.equipe || "").trim()));
+            return [...locaux, ...duServeur];
+          });
+        } else if (cleProduits) {
+          const liste = await chargerProduitsSupabase(cleProduits);
+          if (annule || !Array.isArray(liste) || liste.length === 0) return;
+          setProduits(prev => {
+            const idsServeur = new Set(liste.map(p => p.id));
+            const locauxGardes = prev.filter(p => !estArticleDeMaCle(p) || !idsServeur.has(p.id));
+            return [...locauxGardes, ...liste.map(p => ({ ...p, equipe: (p.equipe || cleProduits) }))];
+          });
+        }
+      } catch (e) { console.warn("Chargement articles base de données:", e); }
+    })();
+    return () => { annule = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userActif?.tel, userActif?.equipe, role, comptes]);
+
+  // Sauvegarde automatique dans la base de données (petite pause pour regrouper les changements) :
+  // chaque article enregistré est copié sur le serveur, impossible de le perdre.
+  useEffect(() => {
+    if (!userActif || role === "client" || !cleProduits) return;
+    const minuteur = setTimeout(() => {
+      const miens = produits.filter(p => estArticleDeMaCle(p));
+      sauvegarderProduitsSupabase(cleProduits, miens);
+    }, 1200);
+    return () => clearTimeout(minuteur);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [produits, cleProduits, role, userActif]);
 
   useEffect(() => {
     try { localStorage.setItem("motopieces_entreprise", JSON.stringify(entreprise)); } catch {}
@@ -5010,31 +4864,12 @@ export default function App() {
     setTransfertsStock(prev => prev.map(item => item.id === idTransfert ? { ...item, statut: "valide" } : item));
   };
 
-  // Normalisation intelligente des numéros de téléphone (ex: 0555448945, 05 55 44 89 45, +225 05 55 44 89 45)
-  const normaliserTel = (t) => {
-    if (!t) return "";
-    let s = String(t).replace(/\s+/g, "").replace(/[^0-9+]/g, "");
-    if (s.startsWith("00225")) s = "+225" + s.slice(5);
-    else if (s.startsWith("225") && !s.startsWith("+")) s = "+" + s;
-    else if (s.startsWith("0")) s = "+225" + s.slice(1);
-    else if (!s.startsWith("+")) s = "+225" + s;
-    return s;
-  };
-
-  // Connexion sécurisée : téléphone + code PIN avec normalisation multi-formats
+  // Connexion sécurisée : téléphone + code PIN
   const connexion = (tel, pin) => {
-    const telNormalise = normaliserTel(tel);
-    const pinSaisi = String(pin || "").trim();
-
-    const c = (comptes || []).find(x => {
-      const tCompte = normaliserTel(x.tel);
-      return tCompte === telNormalise || (x.tel || "").trim() === (tel || "").trim();
-    });
-
-    if (!c) { setErreurLogin("Aucun compte n'est associé à ce numéro de téléphone."); return; }
-    if (String(c.pin || "").trim() !== pinSaisi) { setErreurLogin("Code PIN incorrect."); return; }
+    const c = comptes.find(x => (x.tel || "").trim() === (tel || "").trim());
+    if (!c) { setErreurLogin("Aucun compte n'est associé à ce téléphone."); return; }
+    if ((c.pin || "") !== (pin || "").trim()) { setErreurLogin("Code PIN incorrect."); return; }
     if (c.bloque) { setErreurLogin("Ce compte est bloqué. Contactez l'administrateur."); return; }
-
     setErreurLogin("");
     setUserActif(c);
     setRole(c.role);
@@ -5528,6 +5363,7 @@ export default function App() {
           comptes={comptes} setComptes={setComptes}
           entreprise={entreprise} setEntreprise={setEntreprise}
           boutiquesMasquees={boutiquesMasquees}
+          publicites={publicites} setPublicites={setPublicites}
           basculerVisibiliteBoutique={basculerVisibiliteBoutique}
           transfertsStock={transfertsStock}
           effectuerTransfertStock={effectuerTransfertStock}
