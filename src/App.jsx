@@ -16,6 +16,11 @@ import { extraireTexteImage } from "@/lib/ocr";
 import { demanderAssistantMistral } from "@/lib/mistral";
 import { verifierQualiteImage } from "@/lib/imageProcessor";
 import ModeRech from "@/components/ModeRech";
+
+// Le scanner mémorise la photo et le mot-clé du dernier scan (au cas où) : l'image est gardée sur le téléphone
+function memoriserScan(src, motCle) {
+  try { localStorage.setItem("motopieces_dernier_scan", JSON.stringify({ photo: src, motCle: motCle || "", date: new Date().toISOString() })); } catch (e) {}
+}
 import HistoriqueGlobal from "@/components/HistoriqueGlobal";
 
 // ---------- Données ----------
@@ -879,6 +884,7 @@ function VueVendeur({ produits, ventes, creerVente, categories = [], credits = [
     const r = new FileReader();
     r.onload = () => {
       const src = r.result;
+      memoriserScan(src);
       setPhotos(prev => {
         const index = prev.length;
         reconnaitre(src, index);
@@ -1969,8 +1975,10 @@ function VueAdmin({
   const [nouvelleCategorie, setNouvelleCategorie] = useState("");
   const [nouvelleCase, setNouvelleCase] = useState({ numero: "", nom: "" }); // case de rangement : numéro + nom
   const [ajoutOuvert, setAjoutOuvert] = useState(false);
-  const [np, setNp] = useState({ nom: "", cat: "", marque: "", prix: "", stock: "" });
+  const [np, setNp] = useState({ nom: "", cat: "", marque: "", prix: "", stock: "", motcle: "" });
   const [photoNouveau, setPhotoNouveau] = useState(null);
+  const [scanPieceOuvert, setScanPieceOuvert] = useState(false); // scanner direct pour les pièces
+  const [scanCible, setScanCible] = useState("ajout"); // "ajout" | "modif"
   const [facture, setFacture] = useState(null);
   const [imprimerTableau, setImprimerTableau] = useState(false);
   const [nouveauCompte, setNouveauCompte] = useState({ nom: "", tel: "", role: "vendeur", pin: "" });
@@ -2044,6 +2052,35 @@ function VueAdmin({
 
   const maxId = produits.reduce((m, p) => Math.max(m, p.id), 0);
 
+  // Scanner direct des pièces : la photo est gardée et le mot-clé mémorisé
+  const captureScanPiece = (fichier) => {
+    if (!fichier) return;
+    const r = new FileReader();
+    r.onload = () => {
+      const src = r.result;
+      let place = false;
+      const placer = (motCle) => {
+        if (place) return;
+        place = true;
+        memoriserScan(src, motCle);
+        if (scanCible === "modif") {
+          setPhotoEdite(src);
+          setMots(m => (m && m.trim()) ? m : (motCle || ""));
+        } else {
+          setPhotoNouveau(src);
+          setNp(prev => ({ ...prev, motcle: (prev.motcle && prev.motcle.trim()) ? prev.motcle : (motCle || "") }));
+        }
+      };
+      try {
+        extraireTexteImage(src).then(res => {
+          const motCle = (res && res.success && res.references && res.references[0]) ? res.references[0] : "";
+          placer(motCle);
+        }).catch(() => placer(""));
+      } catch (e2) { placer(""); }
+    };
+    r.readAsDataURL(fichier);
+  };
+
   const enregistrerNouveau = () => {
     if (!np.nom.trim() || !np.cat) return;
     const stock = Number(np.stock) || 0;
@@ -2060,8 +2097,9 @@ function VueAdmin({
       photo: photoNouveau,
       caseId: np.caseId, // case de rangement : le vendeur sait où trouver l'article
       equipe: (chefEquipe || "").trim(), // propriétaire : le téléphone de l'administrateur qui a créé l'article
+      mots: (np.motcle || "").trim() ? [np.motcle.trim().toLowerCase()] : [],
     }]);
-    setNp({ nom: "", cat: "", marque: "", prix: "", stock: "" });
+    setNp({ nom: "", cat: "", marque: "", prix: "", stock: "", motcle: "" });
     setPhotoNouveau(null);
     setAjoutOuvert(false);
   };
@@ -2237,6 +2275,9 @@ function VueAdmin({
                   <Button size="sm" variant="outline" onClick={() => document.getElementById("photo-article-edit").click()}>
                     📷 {photoEdite || edite?.photo ? "Changer la photo" : "Ajouter une photo"}
                   </Button>
+                  <Button size="sm" className="bg-blue-600 hover:bg-blue-700 text-white" onClick={() => { setScanCible("modif"); setScanPieceOuvert(true); }}>
+                    🔍 Scanner en direct
+                  </Button>
                 </div>
                 <Label className="pt-2">Code article</Label>
                 <Input value={code} onChange={e => setCode(e.target.value)} placeholder="Ex : ART-013" />
@@ -2292,9 +2333,17 @@ function VueAdmin({
                   <Button size="sm" variant="outline" onClick={() => document.getElementById("photo-piece-nouveau").click()}>
                     📷 {photoNouveau ? "Changer" : "Photographier"}
                   </Button>
+                  <Button size="sm" className="bg-blue-600 hover:bg-blue-700 text-white" onClick={() => { setScanCible("ajout"); setScanPieceOuvert(true); }}>
+                    🔍 Scanner en direct
+                  </Button>
                 </div>
                 <p className="text-[11px] text-muted-foreground">
                   Cette photo sert de référence à la reconnaissance automatique : photographiez la pièce de face, avec son numéro ou son écriture visible si elle en porte.
+                </p>
+                <Label className="pt-2">🔖 Mot-clé (le scanner le mémorise)</Label>
+                <Input value={np.motcle || ""} onChange={e => setNp({ ...np, motcle: e.target.value })} placeholder="Ex : Papa, NGK…" />
+                <p className="text-[11px] text-muted-foreground">
+                  Le scanner garde ce mot-clé avec la photo sur le téléphone : même si la reconnaissance échoue, vous le retrouvez ici.
                 </p>
                 <Label className="pt-2">Nom de la pièce</Label>
                 <Input value={np.nom} onChange={e => setNp({ ...np, nom: e.target.value })} placeholder="Ex : Bougie NGK" />
@@ -2335,6 +2384,13 @@ function VueAdmin({
                 <Button variant="outline" onClick={() => setAjoutOuvert(false)}>Annuler</Button>
                 <Button className="bg-blue-600 hover:bg-blue-700 text-white h-11 text-base" disabled={!np.nom.trim() || !np.cat || !np.caseId} onClick={enregistrerNouveau}>Ajouter</Button>
               </DialogFooter>
+            </DialogContent>
+          </Dialog>
+
+          <Dialog open={scanPieceOuvert} onOpenChange={setScanPieceOuvert}>
+            <DialogContent className="bg-zinc-900 text-white rounded-lg p-2 border shadow-xl" style={{position:"fixed",left:"50%",top:"50%",transform:"translate(-50%,-50%)",maxWidth:"340px",width:"94%",zIndex:70}}>
+              <DialogHeader><DialogTitle className="text-white">🔍 Scanner la pièce en direct</DialogTitle></DialogHeader>
+              <ModeRech onCaptureAuto={captureScanPiece} onFermer={() => setScanPieceOuvert(false)} />
             </DialogContent>
           </Dialog>
         </div>
