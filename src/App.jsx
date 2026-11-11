@@ -4724,10 +4724,12 @@ export default function App() {
   const [produits, setProduits] = useState(() => {
     try {
       const s = localStorage.getItem("motopieces_produits");
-      if (s) return JSON.parse(s);
+      if (s) {
+        const parsed = JSON.parse(s);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
     } catch {}
-    // Plus de catalogue par défaut : chaque vendeur ajoute ses propres marchandises.
-    return [];
+    return PRODUITS.map(p => ({ ...p, code: p.code || ("ART-" + String(p.id).padStart(3, "0")), stockInit: p.stock }));
   });
   const [marques, setMarques] = useState([]);
   const [categories, setCategories] = useState(CATEGORIES_DEFAUT);
