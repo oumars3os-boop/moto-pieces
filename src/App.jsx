@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/context/AuthContext";
-import { supabase, synchroniserCompteSupabase, enregistrerProduitSupabase, chargerProduitsSupabase, enregistrerPubliciteSupabase, chargerPublicitesSupabase, supprimerPubliciteSupabase, enregistrerVenteSupabase, majVenteSupabase, chargerVentesSupabase } from "@/lib/supabase";
+import { supabase, synchroniserCompteSupabase, enregistrerVenteSupabase, majVenteSupabase, chargerVentesSupabase, sauvegarderProduitsSupabase, chargerProduitsSupabase, chargerTousProduitsSupabase, abonnerProduitsTempsReel, chargerPublicitesSupabase, ajouterPubliciteSupabase, supprimerPubliciteSupabase, abonnerPublicitesTempsReel, chargerDureePubliciteSupabase, sauvegarderDureePubliciteSupabase } from "@/lib/supabase";
 import { extraireTexteImage } from "@/lib/ocr";
 import { demanderAssistantMistral } from "@/lib/mistral";
 import { verifierQualiteImage } from "@/lib/imageProcessor";
@@ -599,7 +599,7 @@ function LigneVente({ v, onConfirmer, onSaisirPrix, saisiePrix }) {
 
 // ---------- Vue Client ----------
 
-function VueClient({ produits, marques, creerVente, photosCategories, photosMarques, categories, onNegocierPrix, userActif, comptes, entreprise }) {
+function VueClient({ produits, marques, creerVente, photosCategories, photosMarques, categories, onNegocierPrix, userActif, comptes }) {
   const [recherche, setRecherche] = useState("");
   const [cat, setCat] = useState("toutes");
   const [marque, setMarque] = useState("toutes");
@@ -751,32 +751,6 @@ function VueClient({ produits, marques, creerVente, photosCategories, photosMarq
               </div>
             </DialogContent>
           </Dialog>
-        </div>
-      )}
-      {/* 🏪 Profil du magasin (v69) : l'administrateur, le nom du magasin et le numéro de téléphone */}
-      {(comptes || []).filter(c => c.role === "admin" && (c.tel || "").trim()).length > 0 && (
-        <div className="max-w-[1400px] mx-auto px-3 sm:px-6 lg:px-8 pt-3">
-          <Card className="bg-white border shadow-sm">
-            <CardContent className="p-4">
-              <div className="font-bold text-base mb-2">🏪 Profil du magasin</div>
-              <div className="space-y-2">
-                {(comptes || []).filter(c => c.role === "admin" && (c.tel || "").trim()).map(c => (
-                  <div key={c.id || c.tel} className="flex items-center justify-between gap-2 bg-zinc-50 rounded-lg p-3 border">
-                    <div className="text-sm min-w-0">
-                      <div className="font-semibold truncate">👑 {c.nom}</div>
-                      <div className="text-xs text-zinc-600 truncate">🏪 {entreprise?.nom || "MotoPièces"}</div>
-                      <div className="text-xs text-zinc-600">📞 {c.tel}</div>
-                    </div>
-                    <a
-                      href={"tel:" + (c.tel || "").replace(/[^+\d]/g, "")}
-                      className="h-11 px-4 inline-flex items-center rounded-md bg-green-600 hover:bg-green-700 text-white text-sm font-bold shrink-0">
-                      📞 Appeler
-                    </a>
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
         </div>
       )}
       <Filtres recherche={recherche} setRecherche={setRecherche} cat={cat} setCat={setCat}
@@ -3901,14 +3875,6 @@ function MessagerieEquipe({ role, userActif, comptes }) {
   const membresEquipe = (comptes || []).filter(c =>
     TALKIE_ROLES.includes(c.role) && (c.tel || "").trim() && (c.tel || "").trim() !== monTel && cleEquipeDe(c) === maCle);
   const lesAdmins = (comptes || []).filter(c => c.role === "admin" && (c.tel || "").trim() !== monTel);
-  // v69 : échange direct entre le client et la boutique (secrétaire / administrateur)
-  const mesBoutiques = (role === "client")
-    ? (comptes || []).filter(c => (c.role === "admin" || c.role === "secretaire") && (c.tel || "").trim() && (c.tel || "").trim() !== monTel)
-    : [];
-  // v69 : la boutique (administrateur / secrétaire) voit ses clients pour répondre
-  const mesClients = (estAdmin || role === "secretaire")
-    ? (comptes || []).filter(c => c.role === "client" && (c.tel || "").trim() && (c.tel || "").trim() !== monTel)
-    : [];
 
   const canalIdPerso = (tel) => "perso:" + [monTel, tel].sort().join("|");
   const idDuCanal = (c) => c === "equipe" ? "equipe:" + maCle : c === "admins" ? "admins" : canalIdPerso(c);
@@ -3943,9 +3909,6 @@ function MessagerieEquipe({ role, userActif, comptes }) {
       ...(estAdmin ? ["admins"] : []),
       ...membresEquipe.map(m => canalIdPerso((m.tel || "").trim())),
       ...(estAdmin ? lesAdmins.map(a => canalIdPerso((a.tel || "").trim())) : []),
-      // v69 : le client discute avec la boutique ; la boutique (admin / secrétaire) reçoit ses clients
-      ...(role === "client" ? mesBoutiques.map(b => canalIdPerso((b.tel || "").trim())) : []),
-      ...((estAdmin || role === "secretaire") ? mesClients.map(cl => canalIdPerso((cl.tel || "").trim())) : []),
     ];
     const verifier = async () => {
       try {
@@ -4222,14 +4185,7 @@ function MessagerieEquipe({ role, userActif, comptes }) {
 
   const messagesDuCanal = messages.filter(m => m.destinataire === idDuCanal(canal));
 
-  // v69 : le client ouvre la messagerie directement sur sa boutique (secrétaire / administrateur)
-  useEffect(() => {
-    if (role === "client" && canal === "equipe" && mesBoutiques.length > 0) {
-      setCanal((mesBoutiques[0].tel || "").trim());
-    }
-  }, [role, canal, mesBoutiques.length]);
-
-  if (role !== "client" && !TALKIE_ROLES.includes(role)) return null;
+  if (!TALKIE_ROLES.includes(role)) return null;
 
   return (
     <div>
@@ -4271,9 +4227,7 @@ function MessagerieEquipe({ role, userActif, comptes }) {
 
           {/* Choix de la destination */}
           <div className="p-2 border-b bg-zinc-50 flex flex-wrap gap-2">
-            {role !== "client" && (
-              <Button variant={canal === "equipe" ? "default" : "outline"} className={canal === "equipe" ? "ring-2 ring-green-600 ring-offset-1" : ""} onClick={() => setCanal("equipe")}>👥 Mon équipe ({membresEquipe.length})</Button>
-            )}
+            <Button variant={canal === "equipe" ? "default" : "outline"} className={canal === "equipe" ? "ring-2 ring-green-600 ring-offset-1" : ""} onClick={() => setCanal("equipe")}>👥 Mon équipe ({membresEquipe.length})</Button>
             {estAdmin && (
               <Button variant={canal === "admins" ? "default" : "outline"} className={canal === "admins" ? "ring-2 ring-amber-600 ring-offset-1" : ""} onClick={() => setCanal("admins")}>👑 Admins ({lesAdmins.length})</Button>
             )}
@@ -4282,12 +4236,6 @@ function MessagerieEquipe({ role, userActif, comptes }) {
             ))}
             {estAdmin && lesAdmins.map(c => (
               <Button key={c.tel} variant={canal === c.tel ? "default" : "outline"} className={canal === c.tel ? "ring-2 ring-amber-600 ring-offset-1" : ""} onClick={() => setCanal((c.tel || "").trim())}>👑 {c.nom}</Button>
-            ))}
-            {/* v69 : échange client ↔ boutique (secrétaire / administrateur) */}
-            {(role === "client" ? mesBoutiques : mesClients).map(c => (
-              <Button key={c.tel} variant={canal === (c.tel || "").trim() ? "default" : "outline"} className={canal === (c.tel || "").trim() ? "ring-2 ring-purple-600 ring-offset-1" : ""} onClick={() => setCanal((c.tel || "").trim())}>
-                {role === "client" ? (c.role === "secretaire" ? "👩‍💼" : "🏪") : "🛍️"} {c.nom}
-              </Button>
             ))}
           </div>
 
@@ -4917,22 +4865,9 @@ export default function App() {
   const cleProduits = (role === "admin")
     ? ((userActif?.tel || "").trim())
     : ((userActif?.equipe || "").trim());
-  const estArticleDeMaCle = (p) => {
-    const eq = (p.equipe || "").trim();
-    if (eq === cleProduits) return true;
-    if (role === "admin") {
-      // v70 — réparation : les articles enregistrés avant (étiquette vide ou
-      // vieille clé) appartiennent à l'administrateur. Il les récupère et les
-      // renvoie sur le serveur sous sa clé, pour que les clients les voient.
-      if (!eq) return true;
-      const autreAdmin = (comptes || []).some(c =>
-        c.role === "admin" && (c.tel || "").trim() &&
-        (c.tel || "").trim() !== ((userActif?.tel || "")).trim() &&
-        (c.tel || "").trim() === eq);
-      return !autreAdmin;
-    }
-    return false;
-  };
+  const estArticleDeMaCle = (p) =>
+    ((p.equipe || "").trim() === cleProduits) ||
+    (!(p.equipe || "").trim() && role === "admin");
 
   // Chargement automatique des articles depuis la base de données dès la connexion :
   // si le téléphone change ou est perdu, les articles reviennent tout seuls.
@@ -4942,15 +4877,22 @@ export default function App() {
     (async () => {
       try {
         if (role === "client") {
-          // Le client voit les articles de toutes les boutiques : chargement direct
-          // de TOUS les articles, sans dépendre de la liste des comptes ni des rôles.
-          const tout = await chargerTousProduitsSupabase();
-          if (annule || !Array.isArray(tout)) return;
+          // Le client voit les articles de toutes les boutiques : on charge chaque équipe d'admin.
+          const telsAdmins = (comptes || [])
+            .filter(c => c.role === "admin")
+            .map(c => (c.tel || "").trim())
+            .filter(Boolean);
+          const listes = await Promise.all(telsAdmins.map(t => chargerProduitsSupabase(t)));
+          if (annule) return;
           setProduits(prev => {
-            const cle = (p) => String(p.id) + "|" + ((p.equipe || "")).trim();
-            const cles = new Set(tout.map(cle));
-            const locaux = prev.filter(p => !cles.has(cle(p)));
-            return [...locaux, ...tout];
+            const equipesServeur = new Set();
+            const duServeur = [];
+            listes.forEach((liste, i) => (liste || []).forEach(p => {
+              equipesServeur.add(telsAdmins[i]);
+              duServeur.push({ ...p, equipe: (p.equipe || telsAdmins[i]) });
+            }));
+            const locaux = prev.filter(p => !equipesServeur.has((p.equipe || "").trim()));
+            return [...locaux, ...duServeur];
           });
         } else if (cleProduits) {
           const liste = await chargerProduitsSupabase(cleProduits);
@@ -5020,25 +4962,9 @@ export default function App() {
   // chaque article enregistré est copié sur le serveur, impossible de le perdre.
   useEffect(() => {
     if (!userActif || role === "client" || !cleProduits) return;
-    const minuteur = setTimeout(async () => {
-      try {
-        const miens = produits.filter(p => estArticleDeMaCle(p));
-        if (miens.length === 0) {
-          // v72 — PROTECTION : ce téléphone n'a aucun article (nouveau navigateur,
-          // mémoire vide). On n'efface PAS le serveur (sinon plus aucun client ne
-          // voit les articles) : on récupère plutôt les articles du serveur.
-          const serveur = await chargerProduitsSupabase(cleProduits);
-          if (Array.isArray(serveur) && serveur.length > 0) {
-            setProduits(prev => {
-              const cles = new Set(prev.map(p => String(p.id) + "|" + ((p.equipe || "")).trim()));
-              const ajouts = serveur.filter(p => !cles.has(String(p.id) + "|" + ((p.equipe || "")).trim()));
-              return [...prev, ...ajouts.map(p => ({ ...p, equipe: (p.equipe || cleProduits) }))];
-            });
-          }
-          return;
-        }
-        sauvegarderProduitsSupabase(cleProduits, miens);
-      } catch (e) {}
+    const minuteur = setTimeout(() => {
+      const miens = produits.filter(p => estArticleDeMaCle(p));
+      sauvegarderProduitsSupabase(cleProduits, miens);
     }, 1200);
     return () => clearTimeout(minuteur);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -5613,7 +5539,6 @@ export default function App() {
             onNegocierPrix={negocierPrixArticle}
             userActif={userActif}
             comptes={comptes}
-            entreprise={entreprise}
           />
         </div>
       )}
@@ -5658,8 +5583,7 @@ export default function App() {
       )}
 
       {/* Messagerie photos / vidéos / textes / vocaux : contenu stocké dans les téléphones, purgé du serveur */}
-      {/* v69 : les clients y ont aussi accès pour échanger avec la boutique (secrétaire / administrateur) */}
-      {(TALKIE_ROLES.includes(role) || role === "client") && (
+      {TALKIE_ROLES.includes(role) && (
         <MessagerieEquipe role={role} userActif={userActif} comptes={comptes} />
       )}
     </div>

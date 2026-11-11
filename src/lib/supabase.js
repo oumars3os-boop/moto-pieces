@@ -23,7 +23,9 @@ export async function synchroniserCompteSupabase(compte) {
           role: compte.role || "vendeur",
           cle: compte.cle || null,
           bloque: Boolean(compte.bloque),
+          // Photo de profil (enregistrée en direct)
           photo: compte.photo || null,
+          // Équipe : le téléphone de l'administrateur qui a créé ce compte
           equipe: compte.equipe || null,
         },
         { onConflict: "tel" }
@@ -40,167 +42,6 @@ export async function synchroniserCompteSupabase(compte) {
 }
 
 /**
- * Enregistre ou met à jour un article/produit dans les tables public.parts et public.pieces_enregistrees de Supabase
- */
-export async function enregistrerProduitSupabase(p) {
-  try {
-    const motsArray = Array.isArray(p.mots)
-      ? p.mots
-      : (p.mots || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
-
-    const payload = {
-      nom: p.nom,
-      code: p.code || `ART-${String(p.id || Date.now()).slice(-4)}`,
-      cat: p.cat || "moteur",
-      marque: p.marque || "Générique",
-      prix: Number(p.prix) || 0,
-      stock: Number(p.stock) || 0,
-      photo: p.photo || null,
-      note: p.note || 4.5,
-      mots: motsArray,
-      boutique: p.boutique || "MotoPièces Principal",
-      equipe: p.equipe || null,
-      case_id: p.caseId || null,
-    };
-
-    if (typeof p.id === "number" && p.id > 0) {
-      payload.id = p.id;
-    }
-
-    const { data, error } = await supabase
-      .from("parts")
-      .upsert(payload, { onConflict: "code" })
-      .select();
-
-    try {
-      await supabase
-        .from("pieces_enregistrees")
-        .upsert(payload, { onConflict: "code" });
-    } catch (e) {
-      console.warn("Notice enregistrement pieces_enregistrees:", e);
-    }
-
-    if (error) {
-      console.warn("Avis enregistrement produit Supabase:", error.message);
-      return { success: false, error };
-    }
-    return { success: true, data };
-  } catch (err) {
-    console.warn("Erreur réseau enregistrement produit Supabase:", err);
-    return { success: false, error: err };
-  }
-}
-
-/**
- * Récupère tous les articles/produits enregistrés depuis la base de données Supabase
- */
-export async function chargerProduitsSupabase() {
-  try {
-    let { data, error } = await supabase
-      .from("pieces_enregistrees")
-      .select("*")
-      .order("id", { ascending: true });
-
-    if (error || !data || data.length === 0) {
-      const resParts = await supabase
-        .from("parts")
-        .select("*")
-        .neq("boutique", "PROMO_BANNER")
-        .order("id", { ascending: true });
-      data = resParts.data;
-    }
-
-    if (!data || data.length === 0) return [];
-
-    return data.map((p) => ({
-      id: p.id,
-      code: p.code,
-      nom: p.nom,
-      cat: p.cat,
-      marque: p.marque,
-      prix: Number(p.prix) || 0,
-      stock: Number(p.stock) || 0,
-      stockInit: Number(p.stock_init || p.stock) || 0,
-      photo: p.photo || null,
-      note: Number(p.note) || 4.5,
-      mots: Array.isArray(p.mots) ? p.mots : [],
-      caseId: p.case_id || null,
-      boutique: p.boutique || "MotoPièces Principal",
-      equipe: p.equipe || null,
-    }));
-  } catch (err) {
-    console.warn("Erreur réseau chargement produits Supabase:", err);
-    return [];
-  }
-}
-
-/**
- * Enregistre une bannière publicitaire / image promotionnelle dans Supabase
- */
-export async function enregistrerPubliciteSupabase(pub) {
-  try {
-    const { data, error } = await supabase
-      .from("parts")
-      .upsert({
-        code: `PROMO-${pub.id || Date.now()}`,
-        nom: pub.titre || "Offre Spéciale MotoPièces",
-        cat: "accessoires",
-        marque: "Promo",
-        prix: 0,
-        stock: 1,
-        photo: pub.image,
-        description: pub.date || new Date().toLocaleDateString("fr-FR"),
-        boutique: "PROMO_BANNER",
-      }, { onConflict: "code" })
-      .select();
-
-    if (error) {
-      console.warn("Avis enregistrement pub Supabase:", error.message);
-    }
-    return { data, error };
-  } catch (err) {
-    console.warn("Erreur réseau pub Supabase:", err);
-    return { error: err };
-  }
-}
-
-/**
- * Récupère toutes les bannières publicitaires enregistrées sur Supabase
- */
-export async function chargerPublicitesSupabase() {
-  try {
-    const { data, error } = await supabase
-      .from("parts")
-      .select("*")
-      .eq("boutique", "PROMO_BANNER")
-      .order("created_at", { ascending: false });
-
-    if (error || !data) return [];
-
-    return data.map((p) => ({
-      id: p.id,
-      titre: p.nom,
-      image: p.photo,
-      date: p.description || new Date(p.created_at).toLocaleDateString("fr-FR"),
-    }));
-  } catch (err) {
-    console.warn("Erreur réseau chargement bannières Supabase:", err);
-    return [];
-  }
-}
-
-/**
- * Supprime une bannière publicitaire de Supabase
- */
-export async function supprimerPubliciteSupabase(id) {
-  try {
-    await supabase.from("parts").delete().eq("id", id);
-  } catch (err) {
-    console.warn("Erreur suppression pub Supabase:", err);
-  }
-}
-
-/**
  * Exécute une requête d'écriture serveur directe dans la table d'historique des ventes public.sales de Supabase
  */
 export async function enregistrerVenteSupabase(vente) {
@@ -210,6 +51,7 @@ export async function enregistrerVenteSupabase(vente) {
       return s + (p * (it.qte || 1));
     }, 0) || 0;
 
+    // Écriture serveur directe vers la table sales
     const { data: saleData, error: saleError } = await supabase
       .from("sales")
       .insert([
@@ -230,6 +72,10 @@ export async function enregistrerVenteSupabase(vente) {
       return { success: false, error: saleError };
     }
 
+    // Écriture serveur directe des lignes d'articles vers la table sale_items
+    // Correctif : part_id mis à null — les articles de la boutique ne sont pas dans la table
+    // en ligne "parts" (vide), et une référence inexistante fait échouer SILENCIEUSEMENT
+    // l'enregistrement des lignes, ce qui vidait les ventes après actualisation.
     if (saleData && vente.items && vente.items.length > 0) {
       const itemsPayload = vente.items.map((it) => ({
         sale_id: saleData.id,
@@ -257,7 +103,8 @@ export async function enregistrerVenteSupabase(vente) {
 }
 
 /**
- * Met à jour une vente déjà enregistrée dans Supabase (prix et statut réels après validation)
+ * Met à jour une vente déjà enregistrée dans Supabase (prix et statut réels après validation),
+ * au lieu d'insérer une seconde ligne. Crée la vente si elle n'existe pas encore en ligne.
  */
 export async function majVenteSupabase(vente) {
   try {
@@ -267,8 +114,9 @@ export async function majVenteSupabase(vente) {
       return s + (p * (it.qte || 1));
     }, 0) || 0;
 
-    if (!idSup) return enregistrerVenteSupabase(vente);
+    if (!idSup) return enregistrerVenteSupabase(vente); // pas encore en ligne : première insertion
 
+    // 1) Mettre à jour la ligne principale (total réel + statut payée)
     const { error: majError } = await supabase
       .from("sales")
       .update({
@@ -283,10 +131,11 @@ export async function majVenteSupabase(vente) {
       return { success: false, error: majError };
     }
 
+    // 2) Réécrire les lignes d'articles avec les prix réels (prix fixés par le vendeur/secrétaire)
     await supabase.from("sale_items").delete().eq("sale_id", idSup);
     const itemsPayload = (vente.items || []).map((it) => ({
       sale_id: idSup,
-      part_id: null,
+      part_id: null, // même correctif : jamais de référence à la table "parts" vide
       nom: it.p?.nom || it.nom || "Article",
       quantite: it.qte || 1,
       prix_unitaire: it.prixLigne ?? (it.p ? it.p.prix : it.prix) ?? 0,
@@ -341,5 +190,205 @@ export async function chargerVentesSupabase() {
   } catch (err) {
     console.warn("Erreur réseau chargement ventes Supabase:", err);
     return [];
+  }
+}
+
+/**
+ * v61 — Sauvegarde la liste complète des articles d'une équipe dans public.produits_data.
+ * La base de données devient la copie de sécurité officielle : plus aucune perte d'articles.
+ */
+export async function sauvegarderProduitsSupabase(equipe, produits) {
+  try {
+    const liste = Array.isArray(produits) ? produits : [];
+    const { data, error } = await supabase
+      .from("produits_data")
+      .upsert(
+        { equipe: equipe, contenu: liste, maj: new Date().toISOString() },
+        { onConflict: "equipe" }
+      );
+    if (error) console.warn("Notice sauvegarde articles Supabase:", error.message);
+    return { data, error };
+  } catch (err) {
+    console.warn("Erreur réseau sauvegarde articles Supabase:", err);
+    return { error: err };
+  }
+}
+
+/**
+ * v61 — Récupère la liste des articles d'une équipe depuis la base de données.
+ */
+export async function chargerProduitsSupabase(equipe) {
+  try {
+    const { data, error } = await supabase
+      .from("produits_data")
+      .select("contenu")
+      .eq("equipe", equipe)
+      .maybeSingle();
+    if (error) {
+      console.warn("Notice chargement articles Supabase:", error.message);
+      return [];
+    }
+    const liste = data && data.contenu;
+    return Array.isArray(liste) ? liste : [];
+  } catch (err) {
+    console.warn("Erreur réseau chargement articles Supabase:", err);
+    return [];
+  }
+}
+
+/**
+ * v64 — Récupère TOUS les articles de toutes les boutiques, sans compte.
+ * Le site devient public : dès l'ouverture, tout s'affiche, comme un vrai site de vente en ligne.
+ */
+export async function chargerTousProduitsSupabase() {
+  try {
+    const { data, error } = await supabase
+      .from("produits_data")
+      .select("equipe, contenu");
+    if (error) {
+      console.warn("Notice chargement articles public Supabase:", error.message);
+      return [];
+    }
+    const tout = [];
+    (data || []).forEach((ligne) => {
+      const liste = ligne && ligne.contenu;
+      const eq = (ligne && ligne.equipe) || "";
+      if (Array.isArray(liste)) {
+        liste.forEach((p) => tout.push({ ...p, equipe: p.equipe || eq }));
+      }
+    });
+    return tout;
+  } catch (err) {
+    console.warn("Erreur réseau chargement articles public Supabase:", err);
+    return [];
+  }
+}
+
+/**
+ * v64 — Temps réel : prévient le site dès qu'un article change dans la base de données.
+ */
+export function abonnerProduitsTempsReel(callback) {
+  try {
+    const canal = supabase
+      .channel("produits-temps-reel", { config: { broadcast: { self: false } } })
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "produits_data" },
+        () => { try { callback(); } catch (e) {} }
+      )
+      .subscribe();
+    return canal;
+  } catch (err) {
+    console.warn("Erreur abonnement temps réel produits:", err);
+    return null;
+  }
+}
+
+/**
+ * v67 — Publicités en temps réel : les publicités sont stockées dans la base
+ * de données, donc tous les téléphones les voient en même temps.
+ */
+export async function chargerPublicitesSupabase() {
+  try {
+    const { data, error } = await supabase
+      .from("publicites_data")
+      .select("*")
+      .order("id", { ascending: false });
+    if (error) {
+      console.warn("Notice chargement publicites Supabase:", error.message);
+      return null;
+    }
+    return (data || []).map((l) => ({
+      id: l.id,
+      titre: l.titre,
+      image: l.image,
+      date: l.date,
+      jours: l.jours || 1,
+      expire_le: l.expire_le || null,
+      cree_par: l.cree_par || "",
+    }));
+  } catch (err) {
+    console.warn("Erreur réseau chargement publicites:", err);
+    return null;
+  }
+}
+
+export async function ajouterPubliciteSupabase(pub) {
+  try {
+    const { error } = await supabase.from("publicites_data").insert({
+      titre: pub.titre || "",
+      image: pub.image || "",
+      date: pub.date || "",
+      jours: pub.jours || 1,
+      expire_le: pub.expire_le || null,
+      cree_par: pub.cree_par || "",
+    });
+    if (error) console.warn("Notice enregistrement publicite:", error.message);
+    return !error;
+  } catch (err) {
+    console.warn("Erreur reseau enregistrement publicite:", err);
+    return false;
+  }
+}
+
+export async function supprimerPubliciteSupabase(id) {
+  try {
+    const { error } = await supabase.from("publicites_data").delete().eq("id", id);
+    if (error) console.warn("Notice suppression publicite:", error.message);
+    return !error;
+  } catch (err) {
+    console.warn("Erreur reseau suppression publicite:", err);
+    return false;
+  }
+}
+
+/**
+ * v67 — Temps réel : prévient le site dès qu'une publicité change dans la base.
+ */
+export function abonnerPublicitesTempsReel(callback) {
+  try {
+    const canal = supabase
+      .channel("publicites-temps-reel", { config: { broadcast: { self: false } } })
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "publicites_data" },
+        () => { try { callback(); } catch (e) {} }
+      )
+      .subscribe();
+    return canal;
+  } catch (err) {
+    console.warn("Erreur abonnement temps reel publicites:", err);
+    return null;
+  }
+}
+
+/**
+ * v67 — Durée des publicités (nombre de jours), décidée par le développeur.
+ */
+export async function chargerDureePubliciteSupabase() {
+  try {
+    const { data, error } = await supabase
+      .from("parametres_data")
+      .select("valeur")
+      .eq("cle", "duree_publicite")
+      .maybeSingle();
+    if (error || !data) return null;
+    const j = parseInt(data.valeur);
+    return isNaN(j) ? null : j;
+  } catch (err) {
+    return null;
+  }
+}
+
+export async function sauvegarderDureePubliciteSupabase(jours) {
+  try {
+    const { error } = await supabase
+      .from("parametres_data")
+      .upsert({ cle: "duree_publicite", valeur: String(jours) }, { onConflict: "cle" });
+    if (error) console.warn("Notice sauvegarde duree publicite:", error.message);
+    return !error;
+  } catch (err) {
+    console.warn("Erreur reseau sauvegarde duree publicite:", err);
+    return false;
   }
 }

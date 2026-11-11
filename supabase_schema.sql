@@ -269,12 +269,7 @@ CREATE POLICY "Gestion produits_data" ON public.produits_data FOR ALL USING (tru
 -- ============================================================
 
 -- 1) Activer les notifications en direct pour la table des articles
--- (protégé : si la table est déjà activée, on continue sans erreur)
-DO $$
-BEGIN
-  ALTER PUBLICATION supabase_realtime ADD TABLE public.produits_data;
-EXCEPTION WHEN duplicate_object THEN NULL;
-END $$;
+ALTER PUBLICATION supabase_realtime ADD TABLE public.produits_data;
 
 -- 2) S'assurer que tout le monde peut lire les articles sans compte
 DROP POLICY IF EXISTS "Lecture publique produits_data" ON public.produits_data;
@@ -332,39 +327,3 @@ DROP POLICY IF EXISTS "Ecriture publique parametres_data" ON public.parametres_d
 CREATE POLICY "Ecriture publique parametres_data" ON public.parametres_data FOR INSERT WITH CHECK (true);
 DROP POLICY IF EXISTS "Mise a jour publique parametres_data" ON public.parametres_data;
 CREATE POLICY "Mise a jour publique parametres_data" ON public.parametres_data FOR UPDATE USING (true);
-
--- ============================================================
--- v70 : Colonnes photo et équipe pour les comptes (utilisées par l'application)
--- ============================================================
-ALTER TABLE public.users ADD COLUMN IF NOT EXISTS photo TEXT;
-ALTER TABLE public.users ADD COLUMN IF NOT EXISTS equipe TEXT;
-
--- ============================================================
--- v70 : Table des messages (messagerie client <-> boutique, textes, photos, vocaux)
--- ============================================================
-CREATE TABLE IF NOT EXISTS public.messages (
-  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  destinataire text,
-  de text,
-  nom text,
-  type text,
-  contenu text,
-  date timestamptz,
-  telecharges text
-);
-
-DO $$
-BEGIN
-  ALTER PUBLICATION supabase_realtime ADD TABLE public.messages;
-EXCEPTION WHEN duplicate_object THEN NULL;
-END $$;
-
-ALTER TABLE public.messages ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "Lecture publique messages" ON public.messages;
-CREATE POLICY "Lecture publique messages" ON public.messages FOR SELECT USING (true);
-DROP POLICY IF EXISTS "Ecriture publique messages" ON public.messages;
-CREATE POLICY "Ecriture publique messages" ON public.messages FOR INSERT WITH CHECK (true);
-DROP POLICY IF EXISTS "Mise a jour publique messages" ON public.messages;
-CREATE POLICY "Mise a jour publique messages" ON public.messages FOR UPDATE USING (true);
-DROP POLICY IF EXISTS "Suppression publique messages" ON public.messages;
-CREATE POLICY "Suppression publique messages" ON public.messages FOR DELETE USING (true);
