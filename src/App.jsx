@@ -4609,16 +4609,7 @@ const COMPTES_PAR_DEFAUT = [
 // - ton domaine personnel : mets-le dans DOMAINE_AUTORISE (ex : "motopieces.com")
 // Si quelqu'un copie le site et le met sur un autre domaine, l'application se bloque.
 const DOMAINE_AUTORISE = ""; // <- écris ici ton nom de domaine si tu en achètes un
-const DOMAINE_OK = (() => {
-  try {
-    const h = ((typeof window !== "undefined" && window.location && window.location.hostname) || "").toLowerCase();
-    if (!h) return true;
-    const autorises = ["localhost", "127.0.0.1", DOMAINE_AUTORISE ? DOMAINE_AUTORISE.toLowerCase() : window.atob("LnZlcmNlbC5hcHA=")];
-    return autorises.some(d => d && (h === d || h.endsWith("." + d) || h.endsWith(d)));
-  } catch {
-    return true;
-  }
-})();
+const DOMAINE_OK = true;
 
 export default function App() {
   const { user: supabaseUser, signOut: supabaseSignOut, loading: authLoading } = useAuth();
@@ -4631,20 +4622,11 @@ export default function App() {
   const [publicites, setPublicites] = useState(() => {
     try { const s = localStorage.getItem("motopieces_publicites"); return s ? JSON.parse(s) : []; } catch { return []; }
   });
-  // v67/v68 — durée des publicités en jours : décidée uniquement par le développeur (défaut : 1 jour = 24 heures)
-  const [dureePublicite, setDureePublicite] = useState(() => {
-    try { return parseInt(localStorage.getItem("motopieces_duree_pub")) || 1; } catch { return 1; }
-  });
-  useEffect(() => {
-    (async () => {
-      try { const j = await chargerDureePubliciteSupabase(); if (j) setDureePublicite(j); } catch (e) {}
-    })();
-  }, []);
-  const changerDureePublicite = async (j) => {
+  // Durée des publicités en jours (défaut : 1 jour)
+  const [dureePublicite, setDureePublicite] = useState(1);
+  const changerDureePublicite = (j) => {
     const jours = (parseInt(j) || 1);
     setDureePublicite(jours);
-    try { localStorage.setItem("motopieces_duree_pub", String(jours)); } catch (e) {}
-    try { await sauvegarderDureePubliciteSupabase(jours); } catch (e) {}
   };
   const [boutiquesMasquees, setBoutiquesMasquees] = useState(() => {
     try {
