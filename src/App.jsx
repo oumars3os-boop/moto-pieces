@@ -4929,22 +4929,15 @@ export default function App() {
     (async () => {
       try {
         if (role === "client") {
-          // Le client voit les articles de toutes les boutiques : on charge chaque équipe d'admin.
-          const telsAdmins = (comptes || [])
-            .filter(c => c.role === "admin")
-            .map(c => (c.tel || "").trim())
-            .filter(Boolean);
-          const listes = await Promise.all(telsAdmins.map(t => chargerProduitsSupabase(t)));
-          if (annule) return;
+          // Le client voit les articles de toutes les boutiques : chargement direct
+          // de TOUS les articles, sans dépendre de la liste des comptes ni des rôles.
+          const tout = await chargerTousProduitsSupabase();
+          if (annule || !Array.isArray(tout)) return;
           setProduits(prev => {
-            const equipesServeur = new Set();
-            const duServeur = [];
-            listes.forEach((liste, i) => (liste || []).forEach(p => {
-              equipesServeur.add(telsAdmins[i]);
-              duServeur.push({ ...p, equipe: (p.equipe || telsAdmins[i]) });
-            }));
-            const locaux = prev.filter(p => !equipesServeur.has((p.equipe || "").trim()));
-            return [...locaux, ...duServeur];
+            const cle = (p) => String(p.id) + "|" + ((p.equipe || "")).trim();
+            const cles = new Set(tout.map(cle));
+            const locaux = prev.filter(p => !cles.has(cle(p)));
+            return [...locaux, ...tout];
           });
         } else if (cleProduits) {
           const liste = await chargerProduitsSupabase(cleProduits);
