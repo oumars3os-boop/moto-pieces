@@ -312,7 +312,7 @@ function BoutonSupprimer({ onSupprimer, label = "🗑️ Supprimer", duree = 500
 
 // ---------- Composants communs ----------
 
-function Produit({ p, onAjout, onRetirer, admin, onEditer, categories, qteDansPanier, onNegocierPrix, elementTalkie }) {
+function Produit({ p, onAjout, onRetirer, admin, onEditer, categories, qteDansPanier, onNegocierPrix, elementTalkie, comptes, userActif }) {
   const [flash, setFlash] = useState(false);
   const [flashMoins, setFlashMoins] = useState(false);
   const [openDetail, setOpenDetail] = useState(false);
@@ -368,7 +368,6 @@ function Produit({ p, onAjout, onRetirer, admin, onEditer, categories, qteDansPa
               <Badge variant="outline" className="text-[9px] sm:text-[10px] bg-blue-50 text-blue-800 border-blue-200">
                 🏪 {nomBoutique}
               </Badge>
-              {elementTalkie}
             </div>
           </div>
           <div className="flex items-center justify-between text-xs sm:text-sm">
@@ -417,13 +416,30 @@ function Produit({ p, onAjout, onRetirer, admin, onEditer, categories, qteDansPa
                 : <IconeMoto />}
             </div>
 
-            {/* Badge de provenance boutique */}
-            <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg flex items-center justify-between">
-              <div>
-                <p className="text-[10px] text-blue-600 font-semibold uppercase tracking-wider">Provenance / Vendeur</p>
-                <p className="font-bold text-blue-900 text-sm">🏪 {nomBoutique}</p>
+            {/* 🏪 Profil du magasin (v74) : visible quand on clique sur l'article */}
+            <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg space-y-2">
+              <div className="flex items-center justify-between">
+                <p className="text-[10px] text-blue-600 font-semibold uppercase tracking-wider">Profil du magasin</p>
+                <Badge className="bg-blue-600 text-white text-xs">Achat Direct</Badge>
               </div>
-              <Badge className="bg-blue-600 text-white text-xs">Achat Direct</Badge>
+              <p className="font-bold text-blue-900 text-sm">🏪 {nomBoutique}</p>
+              {(comptes || []).filter(c => c.role === "admin" && (c.tel || "").trim()).map(c => (
+                <div key={c.id || c.tel} className="bg-white rounded-lg p-2 border space-y-2">
+                  <div className="text-xs">
+                    <div className="font-semibold text-zinc-900">👑 {c.nom}</div>
+                    <div className="text-zinc-600">📞 {c.tel}</div>
+                  </div>
+                  <a
+                    href={"https://wa.me/" + (c.tel || "").replace(/[^+\d]/g, "").replace(/^\+/, "") + "?text=" + encodeURIComponent("Bonjour, je suis intéressé par : " + (p.nom || "un article"))}
+                    target="_blank" rel="noreferrer"
+                    className="w-full h-10 inline-flex items-center justify-center rounded-md bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold">
+                    💬 Causer sur WhatsApp
+                  </a>
+                </div>
+              ))}
+              {userActif
+                ? elementTalkie
+                : <p className="text-[11px] text-zinc-500">Connectez-vous pour causer dans l'application.</p>}
             </div>
 
             <div className="grid grid-cols-2 gap-2 text-xs">
@@ -753,32 +769,6 @@ function VueClient({ produits, marques, creerVente, photosCategories, photosMarq
           </Dialog>
         </div>
       )}
-      {/* 🏪 Profil du magasin (v69) : l'administrateur, le nom du magasin et le numéro de téléphone */}
-      {(comptes || []).filter(c => c.role === "admin" && (c.tel || "").trim()).length > 0 && (
-        <div className="max-w-[1400px] mx-auto px-3 sm:px-6 lg:px-8 pt-3">
-          <Card className="bg-white border shadow-sm">
-            <CardContent className="p-4">
-              <div className="font-bold text-base mb-2">🏪 Profil du magasin</div>
-              <div className="space-y-2">
-                {(comptes || []).filter(c => c.role === "admin" && (c.tel || "").trim()).map(c => (
-                  <div key={c.id || c.tel} className="flex items-center justify-between gap-2 bg-zinc-50 rounded-lg p-3 border">
-                    <div className="text-sm min-w-0">
-                      <div className="font-semibold truncate">👑 {c.nom}</div>
-                      <div className="text-xs text-zinc-600 truncate">🏪 {entreprise?.nom || "MotoPièces"}</div>
-                      <div className="text-xs text-zinc-600">📞 {c.tel}</div>
-                    </div>
-                    <a
-                      href={"tel:" + (c.tel || "").replace(/[^+\d]/g, "")}
-                      className="h-11 px-4 inline-flex items-center rounded-md bg-green-600 hover:bg-green-700 text-white text-sm font-bold shrink-0">
-                      📞 Appeler
-                    </a>
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      )}
       <Filtres recherche={recherche} setRecherche={setRecherche} cat={cat} setCat={setCat}
         marque={marque} setMarque={setMarque} marques={marques} tri={tri} setTri={setTri} photosCategories={photosCategories} photosMarques={photosMarques} categories={categories} />
       <main className="max-w-[1400px] mx-auto px-3 sm:px-6 lg:px-8 pb-24">
@@ -786,7 +776,8 @@ function VueClient({ produits, marques, creerVente, photosCategories, photosMarq
           {liste.map(p => <Produit key={p.id} p={p} onAjout={ajouter} onRetirer={retirer} categories={categories}
             qteDansPanier={panier.find(i => i.p.id === p.id)?.qte || 0}
             onNegocierPrix={onNegocierPrix}
-            elementTalkie={userActif ? <TalkieClientArticle article={p} userActif={userActif} comptes={comptes} /> : null} />)}
+            elementTalkie={userActif ? <TalkieClientArticle article={p} userActif={userActif} comptes={comptes} /> : null}
+            comptes={comptes} userActif={userActif} />)}
         </div>
       </main>
 
