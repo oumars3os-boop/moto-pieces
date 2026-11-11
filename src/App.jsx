@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/context/AuthContext";
-import { supabase, synchroniserCompteSupabase, enregistrerVenteSupabase, majVenteSupabase, chargerVentesSupabase, sauvegarderProduitsSupabase, chargerProduitsSupabase, chargerTousProduitsSupabase, abonnerProduitsTempsReel } from "@/lib/supabase";
+import { supabase, synchroniserCompteSupabase, enregistrerVenteSupabase, majVenteSupabase, chargerVentesSupabase, sauvegarderProduitsSupabase, chargerProduitsSupabase, chargerTousProduitsSupabase, abonnerProduitsTempsReel, chargerPublicitesSupabase, ajouterPubliciteSupabase, supprimerPubliciteSupabase, abonnerPublicitesTempsReel, chargerDureePubliciteSupabase, sauvegarderDureePubliciteSupabase } from "@/lib/supabase";
 import { extraireTexteImage } from "@/lib/ocr";
 import { demanderAssistantMistral } from "@/lib/mistral";
 import { verifierQualiteImage } from "@/lib/imageProcessor";
@@ -1819,7 +1819,7 @@ function VueSecretaire({ ventes, confirmerPaiement, majPrixLigne, modePrix, entr
 
 // Vue combinée : une personne qui est vendeur ET secrétaire en même temps
 // Contenu du menu développeur : code + création/suppression des comptes administrateurs
-function ContenuMenuDev({ codeOk, setCodeOk, codeSaisi, setCodeSaisi, nouvelAdmin, setNouvelAdmin, comptes, setComptes, fermer, CODE_DEV }) {
+function ContenuMenuDev({ codeOk, setCodeOk, codeSaisi, setCodeSaisi, nouvelAdmin, setNouvelAdmin, comptes, setComptes, fermer, CODE_DEV, dureePublicite = 1, onChangerDuree = () => {} }) {
   const [erreur, setErreur] = useState("");
   const [pinGenere, setPinGenere] = useState(null); // { nom, pin }
   const reinitialiserPinAdmin = (c) => {
@@ -1847,6 +1847,20 @@ function ContenuMenuDev({ codeOk, setCodeOk, codeSaisi, setCodeSaisi, nouvelAdmi
   return (
     <div className="grid gap-1.5">
       <DialogHeader><DialogTitle>👑 Comptes administrateurs</DialogTitle></DialogHeader>
+
+      {/* v68 : la durée des publicités est décidée uniquement par le développeur.
+          Par défaut une publicité dure 24 heures ; c'est ici qu'on peut la faire durer plus longtemps. */}
+      <div className="pt-1 pb-2 border-b">
+        <Label>⏱️ Durée des publicités (jours)</Label>
+        <p className="text-[11px] text-muted-foreground mt-1">Par défaut, une publicité dure 24 heures puis disparaît. Si tu veux que les publicités durent plus longtemps, change le nombre de jours ici. Ce réglage vaut pour tout le monde.</p>
+        <div className="flex items-center gap-2 mt-2">
+          <input type="number" min="1" max="365" value={dureePublicite}
+            onChange={e => onChangerDuree(parseInt(e.target.value) || 1)}
+            className="w-20 border border-zinc-300 rounded px-2 py-1 text-base" />
+          <span className="text-sm text-muted-foreground">jours</span>
+        </div>
+      </div>
+
       <Label>Nom complet</Label>
       <Input value={nouvelAdmin.nom} onChange={e => setNouvelAdmin({ ...nouvelAdmin, nom: e.target.value })} placeholder="Ex : Oumar Sekongo" />
       <Label className="pt-2">Téléphone</Label>
@@ -2557,7 +2571,8 @@ function VueAdmin({
       )}
 
       {onglet === "publicites" && (
-        <SectionPublicites publicites={publicites} setPublicites={setPublicites} autoriserUpload={true} />
+        <SectionPublicites publicites={publicites} setPublicites={setPublicites} autoriserUpload={true}
+          />
       )}
 
       {onglet === "utilisateurs" && (
@@ -4006,7 +4021,14 @@ function MessagerieEquipe({ role, userActif, comptes }) {
     if (type !== "texte") demarrerBarre(type);
     else setEnvoi({ type, pct: 50, phase: "envoi" });
     try {
-      const { data, error } = await supabase.from("messages").insert(msg).select("id").single();
+      // v66 : si l'envoi échoue (réseau faible), on réessaie tout seul une seconde fois
+      let data = null, error = null;
+      for (let essai = 0; essai < 2; essai++) {
+        const r = await supabase.from("messages").insert(msg).select("id").single();
+        data = r.data; error = r.error;
+        if (!error) break;
+        await new Promise(res => setTimeout(res, 2000));
+      }
       if (error) {
         finirBarre();
         setInfo("⚠️ Envoi impossible : " + (error.message || "erreur") + ". Vérifie que la table « messages » a été créée dans Supabase.");
@@ -4326,21 +4348,29 @@ function MessagerieEquipe({ role, userActif, comptes }) {
 }
 
 // ---------- Composant Section Publicités & Promotions avec Analyse Qualité Image ----------
-function SectionPublicites({ publicites, setPublicites, autoriserUpload = false }) {
+function SectionPublicites({ publicites, setPublicites, autoriserUpload = false, dureeJours = 1 }) {
   const [openModal, setOpenModal] = useState(false);
   const [titre, setTitre] = useState("");
   const [image, setImage] = useState(null);
   const [analyse, setAnalyse] = useState(null);
   // Carrousel : une seule publicité affichée à la fois, changement automatique toutes les 3 secondes
   const [indexPub, setIndexPub] = useState(0);
+  // v67 : une publicité s'arrête toute seule à la fin de sa durée (en jours, fixée par l'administrateur)
+  const aujourdhui = new Date().toISOString().slice(0, 10);
+  const pubsActives = (publicites || []).filter(p => !p.expire_le || String(p.expire_le).slice(0, 10) >= aujourdhui);
+  const calculerExpiration = (jours) => {
+    const d = new Date();
+    d.setDate(d.getDate() + (parseInt(jours) || 1));
+    return d.toISOString().slice(0, 10);
+  };
   useEffect(() => {
-    if (!publicites || publicites.length <= 1) return;
+    if (!pubsActives || pubsActives.length <= 1) return;
     const t = setInterval(() => {
-      setIndexPub((i) => (i + 1) % publicites.length);
+      setIndexPub((i) => (i + 1) % pubsActives.length);
     }, 3000);
     return () => clearInterval(t);
   }, [publicites && publicites.length]);
-  const pubVisible = publicites && publicites.length > 0 ? publicites[indexPub % publicites.length] : null;
+  const pubVisible = pubsActives && pubsActives.length > 0 ? pubsActives[indexPub % pubsActives.length] : null;
 
   const handleUploadDirect = async (e) => {
     const file = e.target.files?.[0];
@@ -4361,8 +4391,11 @@ function SectionPublicites({ publicites, setPublicites, autoriserUpload = false 
           titre: titre.trim() || "Offre Spéciale MotoPièces",
           image: resultatAnalyse.dataUrl,
           date: new Date().toLocaleDateString("fr-FR"),
+          jours: dureeJours,
+          expire_le: calculerExpiration(dureeJours),
         };
         setPublicites((prev) => [nouvellePub, ...prev]);
+        try { ajouterPubliciteSupabase(nouvellePub); } catch (e) {}
         setTitre("");
         setImage(null);
         setAnalyse(null);
@@ -4380,8 +4413,11 @@ function SectionPublicites({ publicites, setPublicites, autoriserUpload = false 
       titre: titre.trim() || "Offre Spéciale MotoPièces",
       image,
       date: new Date().toLocaleDateString("fr-FR"),
+      jours: dureeJours,
+      expire_le: calculerExpiration(dureeJours),
     };
     setPublicites((prev) => [nouvellePub, ...prev]);
+    try { ajouterPubliciteSupabase(nouvellePub); } catch (e) {}
     setTitre("");
     setImage(null);
     setAnalyse(null);
@@ -4390,6 +4426,7 @@ function SectionPublicites({ publicites, setPublicites, autoriserUpload = false 
 
   const supprimerPub = (id) => {
     setPublicites((prev) => prev.filter((p) => p.id !== id));
+    try { supprimerPubliciteSupabase(id); } catch (e) {}
   };
 
   return (
@@ -4409,7 +4446,7 @@ function SectionPublicites({ publicites, setPublicites, autoriserUpload = false 
         )}
       </div>
 
-      {publicites.length === 0 ? (
+      {pubsActives.length === 0 ? (
         <Card className="bg-gradient-to-r from-blue-600 to-indigo-700 text-white border-none shadow-md">
           <CardContent className="p-5 flex flex-col md:flex-row items-center justify-between gap-4">
             <div>
@@ -4438,10 +4475,10 @@ function SectionPublicites({ publicites, setPublicites, autoriserUpload = false 
             <CardContent className="p-3 flex items-center justify-between gap-2 flex-wrap">
               <div>
                 <h3 className="font-bold text-sm text-zinc-900">{pubVisible.titre}</h3>
-                <p className="text-[10px] text-zinc-500 mt-1">Publié le {pubVisible.date}</p>
+                <p className="text-[10px] text-zinc-500 mt-1">Publié le {pubVisible.date}{pubVisible.expire_le ? <> — ⏱️ finit le {String(pubVisible.expire_le).slice(0, 10)}</> : null}</p>
               </div>
               <div className="flex items-center gap-1">
-                {publicites.map((_, i) => (
+                {pubsActives.map((_, i) => (
                   <span key={i} className={"h-2 rounded-full transition-all " + (i === indexPub % publicites.length ? "w-5 bg-blue-600" : "w-2 bg-zinc-300")}></span>
                 ))}
               </div>
@@ -4542,6 +4579,21 @@ export default function App() {
   const [publicites, setPublicites] = useState(() => {
     try { const s = localStorage.getItem("motopieces_publicites"); return s ? JSON.parse(s) : []; } catch { return []; }
   });
+  // v67/v68 — durée des publicités en jours : décidée uniquement par le développeur (défaut : 1 jour = 24 heures)
+  const [dureePublicite, setDureePublicite] = useState(() => {
+    try { return parseInt(localStorage.getItem("motopieces_duree_pub")) || 1; } catch { return 1; }
+  });
+  useEffect(() => {
+    (async () => {
+      try { const j = await chargerDureePubliciteSupabase(); if (j) setDureePublicite(j); } catch (e) {}
+    })();
+  }, []);
+  const changerDureePublicite = async (j) => {
+    const jours = (parseInt(j) || 1);
+    setDureePublicite(jours);
+    try { localStorage.setItem("motopieces_duree_pub", String(jours)); } catch (e) {}
+    try { await sauvegarderDureePubliciteSupabase(jours); } catch (e) {}
+  };
   const [boutiquesMasquees, setBoutiquesMasquees] = useState(() => {
     try {
       const s = localStorage.getItem("motopieces_boutiques_masquees");
@@ -4767,6 +4819,19 @@ export default function App() {
     try { localStorage.setItem("motopieces_comptes", JSON.stringify(comptes)); } catch {}
   }, [comptes]);
 
+  // v66 : connexion surveillée — bandeau hors ligne et rechargement automatique dès que le réseau revient
+  const [enLigne, setEnLigne] = useState(typeof navigator !== "undefined" ? navigator.onLine : true);
+  useEffect(() => {
+    const reseauOk = () => { setEnLigne(true); setTimeout(() => { try { location.reload(); } catch {} }, 800); };
+    const reseauKo = () => setEnLigne(false);
+    try {
+      window.addEventListener("online", reseauOk);
+      window.addEventListener("offline", reseauKo);
+      setEnLigne(navigator.onLine);
+    } catch {}
+    return () => { try { window.removeEventListener("online", reseauOk); window.removeEventListener("offline", reseauKo); } catch {} };
+  }, []);
+
   // Anti-capture d'écran : l'écran se floute aussitôt qu'on quitte l'application
   // ou qu'elle perd le focus. On ne peut pas lire l'écran depuis une autre application.
   useEffect(() => {
@@ -4871,6 +4936,26 @@ export default function App() {
   useEffect(() => {
     const canal = abonnerProduitsTempsReel(() => setMajPublique(v => v + 1));
     return () => { try { if (canal && supabase) supabase.removeChannel(canal); } catch (e) {} };
+  }, []);
+
+  // v67 — publicités en temps réel : les publicités vivent dans la base de données,
+  // donc dès qu'une personne publie une publicité, TOUS les téléphones la voient tout de suite.
+  const [majPub, setMajPub] = useState(0);
+  useEffect(() => {
+    let annule = false;
+    (async () => {
+      try {
+        const liste = await chargerPublicitesSupabase();
+        if (!annule && liste !== null) setPublicites(liste);
+      } catch (e) {}
+    })();
+    return () => { annule = true; };
+  }, [majPub]);
+  useEffect(() => {
+    const canal = abonnerPublicitesTempsReel(() => setMajPub(v => v + 1));
+    // Filet de sécurité : rafraîchissement toutes les 15 secondes aussi
+    const minuteur = setInterval(() => setMajPub(v => v + 1), 15000);
+    return () => { try { if (canal && supabase) supabase.removeChannel(canal); } catch (e) {} clearInterval(minuteur); };
   }, []);
 
   // Sauvegarde automatique dans la base de données (petite pause pour regrouper les changements) :
@@ -5223,6 +5308,12 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-zinc-100 pb-10">
+      {/* v66 : bandeau hors ligne — le site se reconnecte et s'actualise tout seul */}
+      {!enLigne && (
+        <div className="bg-red-600 text-white text-center text-sm font-semibold py-2 px-3 sticky top-0 z-30">
+          📴 Pas de connexion — tout se remet en marche automatiquement dès que le réseau revient.
+        </div>
+      )}
       {/* En-tête principal : Titre MotoPièces tout en haut, Bouton de Connexion / Profil en haut à droite */}
       <header className="bg-zinc-900 text-white sticky top-0 z-20 shadow">
         <div className="max-w-[1400px] mx-auto px-3 sm:px-6 lg:px-8 py-3 flex items-center justify-between gap-3">
@@ -5424,7 +5515,8 @@ export default function App() {
             nouvelAdmin={nouvelAdmin} setNouvelAdmin={setNouvelAdmin}
             comptes={comptes} setComptes={setComptes}
             fermer={() => { setMenuDev(false); setCodeOk(false); setCodeSaisi(""); }}
-            CODE_DEV={CODE_DEV} />
+            CODE_DEV={CODE_DEV}
+            dureePublicite={dureePublicite} onChangerDuree={changerDureePublicite} />
         </DialogContent>
       </Dialog>
 
@@ -5435,6 +5527,7 @@ export default function App() {
             publicites={publicites}
             setPublicites={setPublicites}
             autoriserUpload={role === "admin"}
+            dureeJours={dureePublicite}
           />
           <VueClient
             produits={produits.filter(p => !boutiquesMasquees.includes(p.boutique || "MotoPièces Principal"))}

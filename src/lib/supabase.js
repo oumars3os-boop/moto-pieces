@@ -283,3 +283,112 @@ export function abonnerProduitsTempsReel(callback) {
     return null;
   }
 }
+
+/**
+ * v67 — Publicités en temps réel : les publicités sont stockées dans la base
+ * de données, donc tous les téléphones les voient en même temps.
+ */
+export async function chargerPublicitesSupabase() {
+  try {
+    const { data, error } = await supabase
+      .from("publicites_data")
+      .select("*")
+      .order("id", { ascending: false });
+    if (error) {
+      console.warn("Notice chargement publicites Supabase:", error.message);
+      return null;
+    }
+    return (data || []).map((l) => ({
+      id: l.id,
+      titre: l.titre,
+      image: l.image,
+      date: l.date,
+      jours: l.jours || 1,
+      expire_le: l.expire_le || null,
+      cree_par: l.cree_par || "",
+    }));
+  } catch (err) {
+    console.warn("Erreur réseau chargement publicites:", err);
+    return null;
+  }
+}
+
+export async function ajouterPubliciteSupabase(pub) {
+  try {
+    const { error } = await supabase.from("publicites_data").insert({
+      titre: pub.titre || "",
+      image: pub.image || "",
+      date: pub.date || "",
+      jours: pub.jours || 1,
+      expire_le: pub.expire_le || null,
+      cree_par: pub.cree_par || "",
+    });
+    if (error) console.warn("Notice enregistrement publicite:", error.message);
+    return !error;
+  } catch (err) {
+    console.warn("Erreur reseau enregistrement publicite:", err);
+    return false;
+  }
+}
+
+export async function supprimerPubliciteSupabase(id) {
+  try {
+    const { error } = await supabase.from("publicites_data").delete().eq("id", id);
+    if (error) console.warn("Notice suppression publicite:", error.message);
+    return !error;
+  } catch (err) {
+    console.warn("Erreur reseau suppression publicite:", err);
+    return false;
+  }
+}
+
+/**
+ * v67 — Temps réel : prévient le site dès qu'une publicité change dans la base.
+ */
+export function abonnerPublicitesTempsReel(callback) {
+  try {
+    const canal = supabase
+      .channel("publicites-temps-reel", { config: { broadcast: { self: false } } })
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "publicites_data" },
+        () => { try { callback(); } catch (e) {} }
+      )
+      .subscribe();
+    return canal;
+  } catch (err) {
+    console.warn("Erreur abonnement temps reel publicites:", err);
+    return null;
+  }
+}
+
+/**
+ * v67 — Durée des publicités (nombre de jours), décidée par le développeur.
+ */
+export async function chargerDureePubliciteSupabase() {
+  try {
+    const { data, error } = await supabase
+      .from("parametres_data")
+      .select("valeur")
+      .eq("cle", "duree_publicite")
+      .maybeSingle();
+    if (error || !data) return null;
+    const j = parseInt(data.valeur);
+    return isNaN(j) ? null : j;
+  } catch (err) {
+    return null;
+  }
+}
+
+export async function sauvegarderDureePubliciteSupabase(jours) {
+  try {
+    const { error } = await supabase
+      .from("parametres_data")
+      .upsert({ cle: "duree_publicite", valeur: String(jours) }, { onConflict: "cle" });
+    if (error) console.warn("Notice sauvegarde duree publicite:", error.message);
+    return !error;
+  } catch (err) {
+    console.warn("Erreur reseau sauvegarde duree publicite:", err);
+    return false;
+  }
+}

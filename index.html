@@ -4,7 +4,24 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <meta name="theme-color" content="#18181b" />
+    <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
     <title>MotoPièces - Vente de Pièces & Accessoires Moto</title>
+    <script>
+      // v66 : le cache se vide tout seul et le site s'actualise tout seul
+      try { if ('caches' in window) { caches.keys().then(function (ks) { ks.forEach(function (k) { caches.delete(k); }); }); } } catch (e) {}
+      try { if ('serviceWorker' in navigator) { navigator.serviceWorker.getRegistrations().then(function (rs) { rs.forEach(function (r) { r.unregister(); }); }); } } catch (e) {}
+      try { if ('storage' in navigator && navigator.storage && navigator.storage.persist) { navigator.storage.persist(); } } catch (e) {}
+      // Dès que la connexion revient, on recharge une page toute neuve
+      window.addEventListener('online', function () { setTimeout(function () { location.reload(); }, 800); });
+      // Quand on revient sur l'application et que le réseau est là, on vérifie qu'on n'a pas une vieille page
+      var etaitHorsLigne = false;
+      window.addEventListener('offline', function () { etaitHorsLigne = true; });
+      document.addEventListener('visibilitychange', function () {
+        if (!document.hidden && etaitHorsLigne && navigator.onLine) { setTimeout(function () { location.reload(); }, 500); }
+      });
+    </script>
   </head>
   <body>
     <div id="root"></div>
