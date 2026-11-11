@@ -5020,9 +5020,25 @@ export default function App() {
   // chaque article enregistré est copié sur le serveur, impossible de le perdre.
   useEffect(() => {
     if (!userActif || role === "client" || !cleProduits) return;
-    const minuteur = setTimeout(() => {
-      const miens = produits.filter(p => estArticleDeMaCle(p));
-      sauvegarderProduitsSupabase(cleProduits, miens);
+    const minuteur = setTimeout(async () => {
+      try {
+        const miens = produits.filter(p => estArticleDeMaCle(p));
+        if (miens.length === 0) {
+          // v72 — PROTECTION : ce téléphone n'a aucun article (nouveau navigateur,
+          // mémoire vide). On n'efface PAS le serveur (sinon plus aucun client ne
+          // voit les articles) : on récupère plutôt les articles du serveur.
+          const serveur = await chargerProduitsSupabase(cleProduits);
+          if (Array.isArray(serveur) && serveur.length > 0) {
+            setProduits(prev => {
+              const cles = new Set(prev.map(p => String(p.id) + "|" + ((p.equipe || "")).trim()));
+              const ajouts = serveur.filter(p => !cles.has(String(p.id) + "|" + ((p.equipe || "")).trim()));
+              return [...prev, ...ajouts.map(p => ({ ...p, equipe: (p.equipe || cleProduits) }))];
+            });
+          }
+          return;
+        }
+        sauvegarderProduitsSupabase(cleProduits, miens);
+      } catch (e) {}
     }, 1200);
     return () => clearTimeout(minuteur);
     // eslint-disable-next-line react-hooks/exhaustive-deps
