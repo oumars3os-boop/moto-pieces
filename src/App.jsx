@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/context/AuthContext";
-import { supabase, synchroniserCompteSupabase, enregistrerVenteSupabase, majVenteSupabase, chargerVentesSupabase, sauvegarderProduitsSupabase, chargerProduitsSupabase, chargerTousProduitsSupabase, abonnerProduitsTempsReel, chargerPublicitesSupabase, ajouterPubliciteSupabase, supprimerPubliciteSupabase, abonnerPublicitesTempsReel, chargerDureePubliciteSupabase, sauvegarderDureePubliciteSupabase } from "@/lib/supabase";
+import { supabase, synchroniserCompteSupabase, enregistrerProduitSupabase, chargerProduitsSupabase, enregistrerPubliciteSupabase, chargerPublicitesSupabase, supprimerPubliciteSupabase, enregistrerVenteSupabase, majVenteSupabase, chargerVentesSupabase } from "@/lib/supabase";
 import { extraireTexteImage } from "@/lib/ocr";
 import { demanderAssistantMistral } from "@/lib/mistral";
 import { verifierQualiteImage } from "@/lib/imageProcessor";
