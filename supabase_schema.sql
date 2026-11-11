@@ -269,12 +269,7 @@ CREATE POLICY "Gestion produits_data" ON public.produits_data FOR ALL USING (tru
 -- ============================================================
 
 -- 1) Activer les notifications en direct pour la table des articles
--- (protégé : si la table est déjà activée, on continue sans erreur)
-DO $$
-BEGIN
-  ALTER PUBLICATION supabase_realtime ADD TABLE public.produits_data;
-EXCEPTION WHEN duplicate_object THEN NULL;
-END $$;
+ALTER PUBLICATION supabase_realtime ADD TABLE public.produits_data;
 
 -- 2) S'assurer que tout le monde peut lire les articles sans compte
 DROP POLICY IF EXISTS "Lecture publique produits_data" ON public.produits_data;
@@ -368,3 +363,23 @@ DROP POLICY IF EXISTS "Mise a jour publique messages" ON public.messages;
 CREATE POLICY "Mise a jour publique messages" ON public.messages FOR UPDATE USING (true);
 DROP POLICY IF EXISTS "Suppression publique messages" ON public.messages;
 CREATE POLICY "Suppression publique messages" ON public.messages FOR DELETE USING (true);
+
+
+-- ============================================================
+-- v71 : TEMPS RÉEL SUR TOUT (ventes, lignes de vente, comptes)
+-- À exécuter UNE FOIS dans Supabase (SQL Editor) puis « Run ».
+-- Sans risque : peut être relancé sans erreur.
+-- ============================================================
+DO $$ BEGIN ALTER PUBLICATION supabase_realtime ADD TABLE public.sales;
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN ALTER PUBLICATION supabase_realtime ADD TABLE public.sale_items;
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN ALTER PUBLICATION supabase_realtime ADD TABLE public.users;
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- Pour que les suppressions et modifications soient envoyées avec toutes les colonnes
+ALTER TABLE public.sales REPLICA IDENTITY FULL;
+ALTER TABLE public.sale_items REPLICA IDENTITY FULL;
+ALTER TABLE public.users REPLICA IDENTITY FULL;
