@@ -274,3 +274,56 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.produits_data;
 -- 2) S'assurer que tout le monde peut lire les articles sans compte
 DROP POLICY IF EXISTS "Lecture publique produits_data" ON public.produits_data;
 CREATE POLICY "Lecture publique produits_data" ON public.produits_data FOR SELECT USING (true);
+
+-- ============================================================
+-- v67 : PUBLICITÉS EN TEMPS RÉEL + DURÉE DES PUBLICITÉS
+-- À exécuter une fois dans Supabase (SQL Editor), puis « Run ».
+-- ============================================================
+
+-- 1) Table des publicités (partagées entre tous les téléphones)
+CREATE TABLE IF NOT EXISTS public.publicites_data (
+  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  titre text,
+  image text,
+  date text,
+  jours int DEFAULT 1,
+  expire_le text,
+  cree_par text,
+  cree_le timestamptz DEFAULT now()
+);
+
+-- 2) Temps réel : chaque changement de publicité est annoncé à tous les téléphones
+DO $$
+BEGIN
+  ALTER PUBLICATION supabase_realtime ADD TABLE public.publicites_data;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+-- 3) Tout le monde peut voir, publier et supprimer les publicités
+ALTER TABLE public.publicites_data ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Lecture publique publicites_data" ON public.publicites_data;
+CREATE POLICY "Lecture publique publicites_data" ON public.publicites_data FOR SELECT USING (true);
+DROP POLICY IF EXISTS "Publication publique publicites_data" ON public.publicites_data;
+CREATE POLICY "Publication publique publicites_data" ON public.publicites_data FOR INSERT WITH CHECK (true);
+DROP POLICY IF EXISTS "Suppression publique publicites_data" ON public.publicites_data;
+CREATE POLICY "Suppression publique publicites_data" ON public.publicites_data FOR DELETE USING (true);
+
+-- 4) Réglages partagés : ici la durée des publicités en jours (choisie par le développeur)
+CREATE TABLE IF NOT EXISTS public.parametres_data (
+  cle text PRIMARY KEY,
+  valeur text
+);
+
+DO $$
+BEGIN
+  ALTER PUBLICATION supabase_realtime ADD TABLE public.parametres_data;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+ALTER TABLE public.parametres_data ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Lecture publique parametres_data" ON public.parametres_data;
+CREATE POLICY "Lecture publique parametres_data" ON public.parametres_data FOR SELECT USING (true);
+DROP POLICY IF EXISTS "Ecriture publique parametres_data" ON public.parametres_data;
+CREATE POLICY "Ecriture publique parametres_data" ON public.parametres_data FOR INSERT WITH CHECK (true);
+DROP POLICY IF EXISTS "Mise a jour publique parametres_data" ON public.parametres_data;
+CREATE POLICY "Mise a jour publique parametres_data" ON public.parametres_data FOR UPDATE USING (true);
