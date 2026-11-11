@@ -5,7 +5,6 @@
  */
 export async function verifierQualiteImage(fileOrDataUrl) {
   return new Promise((resolve) => {
-    let srcUrl = "";
     if (fileOrDataUrl instanceof File || fileOrDataUrl instanceof Blob) {
       const reader = new FileReader();
       reader.onload = (e) => {
