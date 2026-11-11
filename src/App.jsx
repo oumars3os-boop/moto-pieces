@@ -4917,9 +4917,22 @@ export default function App() {
   const cleProduits = (role === "admin")
     ? ((userActif?.tel || "").trim())
     : ((userActif?.equipe || "").trim());
-  const estArticleDeMaCle = (p) =>
-    ((p.equipe || "").trim() === cleProduits) ||
-    (!(p.equipe || "").trim() && role === "admin");
+  const estArticleDeMaCle = (p) => {
+    const eq = (p.equipe || "").trim();
+    if (eq === cleProduits) return true;
+    if (role === "admin") {
+      // v70 — réparation : les articles enregistrés avant (étiquette vide ou
+      // vieille clé) appartiennent à l'administrateur. Il les récupère et les
+      // renvoie sur le serveur sous sa clé, pour que les clients les voient.
+      if (!eq) return true;
+      const autreAdmin = (comptes || []).some(c =>
+        c.role === "admin" && (c.tel || "").trim() &&
+        (c.tel || "").trim() !== ((userActif?.tel || "")).trim() &&
+        (c.tel || "").trim() === eq);
+      return !autreAdmin;
+    }
+    return false;
+  };
 
   // Chargement automatique des articles depuis la base de données dès la connexion :
   // si le téléphone change ou est perdu, les articles reviennent tout seuls.
