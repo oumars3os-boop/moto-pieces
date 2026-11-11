@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/context/AuthContext";
-import { supabase, synchroniserCompteSupabase, enregistrerVenteSupabase, majVenteSupabase, chargerVentesSupabase, sauvegarderProduitsSupabase, chargerProduitsSupabase } from "@/lib/supabase";
+import { supabase, synchroniserCompteSupabase, enregistrerVenteSupabase, majVenteSupabase, chargerVentesSupabase, sauvegarderProduitsSupabase, chargerProduitsSupabase, chargerTousProduitsSupabase, abonnerProduitsTempsReel } from "@/lib/supabase";
 import { extraireTexteImage } from "@/lib/ocr";
 import { demanderAssistantMistral } from "@/lib/mistral";
 import { verifierQualiteImage } from "@/lib/imageProcessor";
@@ -1323,7 +1323,7 @@ function FeuilleA4({ children, onFermer, autoPrint }) {
   }, [autoPrint]);
   return (
     <div className="fixed inset-0 z-50 bg-black/60 overflow-auto p-4 print:bg-white print:p-0 print:static">
-      <style>{`@media print { .print-exclure { display: none !important; } .zone-impression { position: static !important; box-shadow: none !important; margin: 0 !important; width: 100% !important; } }`}</style>
+      <style>{`@media print { body * { visibility: hidden !important; } .zone-impression, .zone-impression * { visibility: visible !important; } .print-exclure { display: none !important; } .zone-impression { position: absolute !important; left: 0 !important; top: 0 !important; box-shadow: none !important; margin: 0 !important; width: 100% !important; } }`}</style>
       <div className="zone-impression relative mx-auto bg-white shadow-2xl" style={{ width: "210mm", minHeight: "297mm", padding: "15mm", boxSizing: "border-box" }}>
         <div className="print-exclure absolute top-2 right-2 flex gap-2 z-10">
           <Button size="sm" className="bg-blue-600 hover:bg-blue-700 text-white shadow-md" onClick={() => window.print()}>🖨️ Imprimer</Button>
@@ -1345,7 +1345,7 @@ function FeuilleTicket({ children, onFermer, autoPrint }) {
   }, [autoPrint]);
   return (
     <div className="fixed inset-0 z-50 bg-black/60 overflow-auto p-4 print:bg-white print:p-0 print:static">
-      <style>{`@media print { .print-exclure { display: none !important; } .zone-impression { position: static !important; box-shadow: none !important; margin: 0 !important; width: 100% !important; border: none !important; } }`}</style>
+      <style>{`@media print { body * { visibility: hidden !important; } .zone-impression, .zone-impression * { visibility: visible !important; } .print-exclure { display: none !important; } .zone-impression { position: absolute !important; left: 0 !important; top: 0 !important; box-shadow: none !important; margin: 0 !important; width: 100% !important; border: none !important; } }`}</style>
       <div className="zone-impression mx-auto bg-white shadow-2xl border border-dashed border-zinc-300"
         style={{ width: "80mm", padding: "6mm 5mm", boxSizing: "border-box", fontFamily: "monospace" }}>
         <div className="print-exclure flex justify-between mb-2 text-sans">
@@ -1355,6 +1355,55 @@ function FeuilleTicket({ children, onFermer, autoPrint }) {
         {children}
       </div>
     </div>
+  );
+}
+
+// v65 — Reçu INDIVIDUEL d'une commande : chaque commande a SON reçu, imprimé seul,
+// que la commande contienne 1 article ou 20 articles. Rien d'autre ne s'imprime avec.
+function RecuVente({ vente, entreprise, onFermer }) {
+  const totalRecu = (vente.items || []).reduce((s, it) => s + (it.prixLigne ?? (it.p ? it.p.prix : it.prix)) * (it.qte || 1), 0);
+  return (
+    <FeuilleTicket onFermer={onFermer} autoPrint={true}>
+      <div className="text-center">
+        <div className="font-bold text-sm">{entreprise ? entreprise.nom : "MotoPièces"}</div>
+        <div className="text-[10px]">📞 {entreprise ? entreprise.tel : ""}</div>
+        <div className="text-[10px]">--------------------------------</div>
+        <div className="font-semibold text-xs">REÇU N° {vente.id}</div>
+      </div>
+      <div className="text-[10px] my-1">
+        {vente.date || ""}<br />
+        Client : {vente.client}<br />
+        Tel : {vente.tel}
+      </div>
+      <div className="text-[10px]">================================</div>
+      {(vente.items || []).map((it, i) => {
+        const photoItem = it.photo || it.p?.photo || null;
+        return (
+          <div key={i} className="flex gap-2 items-start py-1 border-b border-dotted border-zinc-300">
+            {photoItem ? (
+              <img src={photoItem} alt="" className="w-12 h-12 object-cover rounded border border-zinc-400 shrink-0" />
+            ) : (
+              <div className="w-12 h-12 rounded border border-dashed border-zinc-400 shrink-0 flex items-center justify-center text-[8px] text-zinc-500">📦</div>
+            )}
+            <div className="text-[10px] flex-1">
+              <div className="font-semibold">{it.p ? it.p.nom : it.nom}</div>
+              <div className="flex justify-between">
+                <span>{it.qte || 1} x {((it.prixLigne ?? (it.p ? it.p.prix : it.prix))).toLocaleString("fr-FR")}</span>
+                <span>{((it.prixLigne ?? (it.p ? it.p.prix : it.prix)) * (it.qte || 1)).toLocaleString("fr-FR")} F</span>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+      <div className="text-[10px]">================================</div>
+      <div className="flex justify-between font-bold text-sm mt-1">
+        <span>TOTAL</span>
+        <span>{totalRecu.toLocaleString("fr-FR")} FCFA</span>
+      </div>
+      <div className="text-[10px] mt-1">{vente.statut === "payée" ? "PAYÉ ✅ — Merci !" : "EN ATTENTE DE PAIEMENT ⏳"}</div>
+      <div className="text-center text-[10px] mt-3">* * *</div>
+      <div className="text-center text-[9px]">{entreprise ? entreprise.nom : ""} — {entreprise ? entreprise.tel : ""}</div>
+    </FeuilleTicket>
   );
 }
 
@@ -1733,8 +1782,14 @@ function VueSecretaire({ ventes, confirmerPaiement, majPrixLigne, modePrix, entr
         </p>
       )}
       {liste.length === 0 ? <p className="text-muted-foreground">Aucune vente dans cette catégorie.</p> : liste.map(v => (
-        <LigneVente key={v.id} v={v} onConfirmer={confirmerEtProposer}
-          saisiePrix={saisie} onSaisirPrix={majPrixLigne} />
+        <div key={v.id}>
+          <LigneVente v={v} onConfirmer={confirmerEtProposer}
+            saisiePrix={saisie} onSaisirPrix={majPrixLigne} />
+          {/* v65 : bouton pour réimprimer le reçu de CETTE commande seulement */}
+          <div className="px-3 pb-2 flex justify-end">
+            <Button size="sm" variant="outline" onClick={() => setRecuA4(v)}>🧾 Reçu de cette commande</Button>
+          </div>
+        </div>
       ))}
 
       {/* Après confirmation du paiement : proposition d'imprimer le reçu */}
@@ -1750,49 +1805,9 @@ function VueSecretaire({ ventes, confirmerPaiement, majPrixLigne, modePrix, entr
         </DialogContent>
       </Dialog>
 
-      {/* Reçu au format ticket de caisse, impression automatique dès l'ouverture */}
+      {/* Reçu individuel : chaque commande imprime SON reçu, et lui seul */}
       {recuA4 && (
-        <FeuilleTicket onFermer={() => setRecuA4(null)} autoPrint={true}>
-          <div className="text-center">
-            <div className="font-bold text-sm">{entreprise ? entreprise.nom : "MotoPièces"}</div>
-            <div className="text-[10px]">📞 {entreprise ? entreprise.tel : ""}</div>
-            <div className="text-[10px]">--------------------------------</div>
-            <div className="font-semibold text-xs">REÇU N° {recuA4.id}</div>
-          </div>
-          <div className="text-[10px] my-1">
-            {recuA4.date || ""}<br />
-            Client : {recuA4.client}<br />
-            Tel : {recuA4.tel}
-          </div>
-          <div className="text-[10px]">================================</div>
-          {recuA4.items.map((it, i) => {
-            const photoItem = it.photo || it.p?.photo || null;
-            return (
-              <div key={i} className="flex gap-2 items-start py-1 border-b border-dotted border-zinc-300">
-                {photoItem ? (
-                  <img src={photoItem} alt="" className="w-12 h-12 object-cover rounded border border-zinc-400 shrink-0" />
-                ) : (
-                  <div className="w-12 h-12 rounded border border-dashed border-zinc-400 shrink-0 flex items-center justify-center text-[8px] text-zinc-500">📦</div>
-                )}
-                <div className="text-[10px] flex-1">
-                  <div className="font-semibold">{it.p ? it.p.nom : it.nom}</div>
-                  <div className="flex justify-between">
-                    <span>{it.qte || 1} x {((it.prixLigne ?? (it.p ? it.p.prix : it.prix))).toLocaleString("fr-FR")}</span>
-                    <span>{((it.prixLigne ?? (it.p ? it.p.prix : it.prix)) * (it.qte || 1)).toLocaleString("fr-FR")} F</span>
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-          <div className="text-[10px]">================================</div>
-          <div className="flex justify-between font-bold text-sm mt-1">
-            <span>TOTAL</span>
-            <span>{totalCalcule(recuA4).toLocaleString("fr-FR")} FCFA</span>
-          </div>
-          <div className="text-[10px] mt-1">PAYÉ ✅ — Merci !</div>
-          <div className="text-center text-[10px] mt-3">* * *</div>
-          <div className="text-center text-[9px]">{entreprise ? entreprise.nom : ""} — {entreprise ? entreprise.tel : ""}</div>
-        </FeuilleTicket>
+        <RecuVente vente={recuA4} entreprise={entreprise} onFermer={() => setRecuA4(null)} />
       )}
       </>
       )}
@@ -1980,6 +1995,7 @@ function VueAdmin({
   const [scanPieceOuvert, setScanPieceOuvert] = useState(false); // scanner direct pour les pièces
   const [scanCible, setScanCible] = useState("ajout"); // "ajout" | "modif"
   const [facture, setFacture] = useState(null);
+  const [recuVente, setRecuVente] = useState(null); // v65 : reçu individuel d'une commande
   const [imprimerTableau, setImprimerTableau] = useState(false);
   const [nouveauCompte, setNouveauCompte] = useState({ nom: "", tel: "", role: "vendeur", pin: "" });
   const [erreurCompte, setErreurCompte] = useState("");
@@ -2851,6 +2867,7 @@ function VueAdmin({
               <LigneVente v={v} />
               <div className="px-3 pb-2 flex justify-end">
                 <Button size="sm" variant="outline" onClick={() => setFacture(v)}>🧾 Facture</Button>
+                <Button size="sm" variant="outline" className="ml-2" onClick={() => setRecuVente(v)}>🧾 Reçu</Button>
               </div>
             </div>
           ))}
@@ -2909,6 +2926,11 @@ function VueAdmin({
               </FeuilleA4>
             );
           })()}
+
+          {/* v65 : reçu individuel de la commande (ticket seul, rien d'autre) */}
+          {recuVente && (
+            <RecuVente vente={recuVente} entreprise={entreprise} onFermer={() => setRecuVente(null)} />
+          )}
         </div>
       )}
     </div>
@@ -4821,6 +4843,35 @@ export default function App() {
     return () => { annule = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userActif?.tel, userActif?.equipe, role, comptes]);
+
+  // v64 — site public : dès l'ouverture, SANS compte, tous les articles de toutes les boutiques
+  // s'affichent automatiquement, comme un vrai site de vente en ligne.
+  const [majPublique, setMajPublique] = useState(0);
+  useEffect(() => {
+    let annule = false;
+    (async () => {
+      try {
+        const liste = await chargerTousProduitsSupabase();
+        if (annule || !Array.isArray(liste) || liste.length === 0) return;
+        setProduits(prev => {
+          const cle = (p) => String(p.id) + "|" + ((p.equipe || "")).trim();
+          const cles = new Set(liste.map(cle));
+          const locaux = prev.filter(p => !cles.has(cle(p)));
+          return [...locaux, ...liste];
+        });
+      } catch (e) { console.warn("Chargement public des articles:", e); }
+    })();
+    // Rafraîchissement automatique toutes les 15 secondes (filet de sécurité)
+    const minuteur = setInterval(() => setMajPublique(v => v + 1), 15000);
+    return () => { annule = true; clearInterval(minuteur); };
+  }, [majPublique]);
+
+  // v64 — temps réel : dès qu'un téléphone enregistre un article, tous les autres téléphones
+  // le voient apparaître tout de suite, sans recharger la page.
+  useEffect(() => {
+    const canal = abonnerProduitsTempsReel(() => setMajPublique(v => v + 1));
+    return () => { try { if (canal && supabase) supabase.removeChannel(canal); } catch (e) {} };
+  }, []);
 
   // Sauvegarde automatique dans la base de données (petite pause pour regrouper les changements) :
   // chaque article enregistré est copié sur le serveur, impossible de le perdre.

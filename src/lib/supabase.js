@@ -235,3 +235,51 @@ export async function chargerProduitsSupabase(equipe) {
     return [];
   }
 }
+
+/**
+ * v64 — Récupère TOUS les articles de toutes les boutiques, sans compte.
+ * Le site devient public : dès l'ouverture, tout s'affiche, comme un vrai site de vente en ligne.
+ */
+export async function chargerTousProduitsSupabase() {
+  try {
+    const { data, error } = await supabase
+      .from("produits_data")
+      .select("equipe, contenu");
+    if (error) {
+      console.warn("Notice chargement articles public Supabase:", error.message);
+      return [];
+    }
+    const tout = [];
+    (data || []).forEach((ligne) => {
+      const liste = ligne && ligne.contenu;
+      const eq = (ligne && ligne.equipe) || "";
+      if (Array.isArray(liste)) {
+        liste.forEach((p) => tout.push({ ...p, equipe: p.equipe || eq }));
+      }
+    });
+    return tout;
+  } catch (err) {
+    console.warn("Erreur réseau chargement articles public Supabase:", err);
+    return [];
+  }
+}
+
+/**
+ * v64 — Temps réel : prévient le site dès qu'un article change dans la base de données.
+ */
+export function abonnerProduitsTempsReel(callback) {
+  try {
+    const canal = supabase
+      .channel("produits-temps-reel", { config: { broadcast: { self: false } } })
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "produits_data" },
+        () => { try { callback(); } catch (e) {} }
+      )
+      .subscribe();
+    return canal;
+  } catch (err) {
+    console.warn("Erreur abonnement temps réel produits:", err);
+    return null;
+  }
+}
