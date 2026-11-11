@@ -269,7 +269,12 @@ CREATE POLICY "Gestion produits_data" ON public.produits_data FOR ALL USING (tru
 -- ============================================================
 
 -- 1) Activer les notifications en direct pour la table des articles
-ALTER PUBLICATION supabase_realtime ADD TABLE public.produits_data;
+-- (protégé : si la table est déjà activée, on continue sans erreur)
+DO $$
+BEGIN
+  ALTER PUBLICATION supabase_realtime ADD TABLE public.produits_data;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
 -- 2) S'assurer que tout le monde peut lire les articles sans compte
 DROP POLICY IF EXISTS "Lecture publique produits_data" ON public.produits_data;

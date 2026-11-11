@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/context/AuthContext";
-import { supabase, synchroniserCompteSupabase, enregistrerProduitSupabase, chargerProduitsSupabase, enregistrerPubliciteSupabase, chargerPublicitesSupabase, supprimerPubliciteSupabase, enregistrerVenteSupabase, majVenteSupabase, chargerVentesSupabase } from "@/lib/supabase";
+import { supabase, synchroniserCompteSupabase, enregistrerVenteSupabase, majVenteSupabase, chargerVentesSupabase, sauvegarderProduitsSupabase, chargerProduitsSupabase, chargerTousProduitsSupabase, abonnerProduitsTempsReel, chargerPublicitesSupabase, ajouterPubliciteSupabase, supprimerPubliciteSupabase, abonnerPublicitesTempsReel, chargerDureePubliciteSupabase, sauvegarderDureePubliciteSupabase } from "@/lib/supabase";
 import { extraireTexteImage } from "@/lib/ocr";
 import { demanderAssistantMistral } from "@/lib/mistral";
 import { verifierQualiteImage } from "@/lib/imageProcessor";
@@ -4609,7 +4609,16 @@ const COMPTES_PAR_DEFAUT = [
 // - ton domaine personnel : mets-le dans DOMAINE_AUTORISE (ex : "motopieces.com")
 // Si quelqu'un copie le site et le met sur un autre domaine, l'application se bloque.
 const DOMAINE_AUTORISE = ""; // <- écris ici ton nom de domaine si tu en achètes un
-const DOMAINE_OK = true;
+const DOMAINE_OK = (() => {
+  try {
+    const h = ((typeof window !== "undefined" && window.location && window.location.hostname) || "").toLowerCase();
+    if (!h) return true;
+    const autorises = ["localhost", "127.0.0.1", DOMAINE_AUTORISE ? DOMAINE_AUTORISE.toLowerCase() : window.atob("LnZlcmNlbC5hcHA=")];
+    return autorises.some(d => d && (h === d || h.endsWith("." + d) || h.endsWith(d)));
+  } catch {
+    return true;
+  }
+})();
 
 export default function App() {
   const { user: supabaseUser, signOut: supabaseSignOut, loading: authLoading } = useAuth();
@@ -4622,11 +4631,20 @@ export default function App() {
   const [publicites, setPublicites] = useState(() => {
     try { const s = localStorage.getItem("motopieces_publicites"); return s ? JSON.parse(s) : []; } catch { return []; }
   });
-  // Durée des publicités en jours (défaut : 1 jour)
-  const [dureePublicite, setDureePublicite] = useState(1);
-  const changerDureePublicite = (j) => {
+  // v67/v68 — durée des publicités en jours : décidée uniquement par le développeur (défaut : 1 jour = 24 heures)
+  const [dureePublicite, setDureePublicite] = useState(() => {
+    try { return parseInt(localStorage.getItem("motopieces_duree_pub")) || 1; } catch { return 1; }
+  });
+  useEffect(() => {
+    (async () => {
+      try { const j = await chargerDureePubliciteSupabase(); if (j) setDureePublicite(j); } catch (e) {}
+    })();
+  }, []);
+  const changerDureePublicite = async (j) => {
     const jours = (parseInt(j) || 1);
     setDureePublicite(jours);
+    try { localStorage.setItem("motopieces_duree_pub", String(jours)); } catch (e) {}
+    try { await sauvegarderDureePubliciteSupabase(jours); } catch (e) {}
   };
   const [boutiquesMasquees, setBoutiquesMasquees] = useState(() => {
     try {
@@ -4724,12 +4742,10 @@ export default function App() {
   const [produits, setProduits] = useState(() => {
     try {
       const s = localStorage.getItem("motopieces_produits");
-      if (s) {
-        const parsed = JSON.parse(s);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-      }
+      if (s) return JSON.parse(s);
     } catch {}
-    return PRODUITS.map(p => ({ ...p, code: p.code || ("ART-" + String(p.id).padStart(3, "0")), stockInit: p.stock }));
+    // Plus de catalogue par défaut : chaque vendeur ajoute ses propres marchandises.
+    return [];
   });
   const [marques, setMarques] = useState([]);
   const [categories, setCategories] = useState(CATEGORIES_DEFAUT);
@@ -4901,9 +4917,22 @@ export default function App() {
   const cleProduits = (role === "admin")
     ? ((userActif?.tel || "").trim())
     : ((userActif?.equipe || "").trim());
-  const estArticleDeMaCle = (p) =>
-    ((p.equipe || "").trim() === cleProduits) ||
-    (!(p.equipe || "").trim() && role === "admin");
+  const estArticleDeMaCle = (p) => {
+    const eq = (p.equipe || "").trim();
+    if (eq === cleProduits) return true;
+    if (role === "admin") {
+      // v70 — réparation : les articles enregistrés avant (étiquette vide ou
+      // vieille clé) appartiennent à l'administrateur. Il les récupère et les
+      // renvoie sur le serveur sous sa clé, pour que les clients les voient.
+      if (!eq) return true;
+      const autreAdmin = (comptes || []).some(c =>
+        c.role === "admin" && (c.tel || "").trim() &&
+        (c.tel || "").trim() !== ((userActif?.tel || "")).trim() &&
+        (c.tel || "").trim() === eq);
+      return !autreAdmin;
+    }
+    return false;
+  };
 
   // Chargement automatique des articles depuis la base de données dès la connexion :
   // si le téléphone change ou est perdu, les articles reviennent tout seuls.
@@ -4913,22 +4942,15 @@ export default function App() {
     (async () => {
       try {
         if (role === "client") {
-          // Le client voit les articles de toutes les boutiques : on charge chaque équipe d'admin.
-          const telsAdmins = (comptes || [])
-            .filter(c => c.role === "admin")
-            .map(c => (c.tel || "").trim())
-            .filter(Boolean);
-          const listes = await Promise.all(telsAdmins.map(t => chargerProduitsSupabase(t)));
-          if (annule) return;
+          // Le client voit les articles de toutes les boutiques : chargement direct
+          // de TOUS les articles, sans dépendre de la liste des comptes ni des rôles.
+          const tout = await chargerTousProduitsSupabase();
+          if (annule || !Array.isArray(tout)) return;
           setProduits(prev => {
-            const equipesServeur = new Set();
-            const duServeur = [];
-            listes.forEach((liste, i) => (liste || []).forEach(p => {
-              equipesServeur.add(telsAdmins[i]);
-              duServeur.push({ ...p, equipe: (p.equipe || telsAdmins[i]) });
-            }));
-            const locaux = prev.filter(p => !equipesServeur.has((p.equipe || "").trim()));
-            return [...locaux, ...duServeur];
+            const cle = (p) => String(p.id) + "|" + ((p.equipe || "")).trim();
+            const cles = new Set(tout.map(cle));
+            const locaux = prev.filter(p => !cles.has(cle(p)));
+            return [...locaux, ...tout];
           });
         } else if (cleProduits) {
           const liste = await chargerProduitsSupabase(cleProduits);
@@ -4998,9 +5020,25 @@ export default function App() {
   // chaque article enregistré est copié sur le serveur, impossible de le perdre.
   useEffect(() => {
     if (!userActif || role === "client" || !cleProduits) return;
-    const minuteur = setTimeout(() => {
-      const miens = produits.filter(p => estArticleDeMaCle(p));
-      sauvegarderProduitsSupabase(cleProduits, miens);
+    const minuteur = setTimeout(async () => {
+      try {
+        const miens = produits.filter(p => estArticleDeMaCle(p));
+        if (miens.length === 0) {
+          // v72 — PROTECTION : ce téléphone n'a aucun article (nouveau navigateur,
+          // mémoire vide). On n'efface PAS le serveur (sinon plus aucun client ne
+          // voit les articles) : on récupère plutôt les articles du serveur.
+          const serveur = await chargerProduitsSupabase(cleProduits);
+          if (Array.isArray(serveur) && serveur.length > 0) {
+            setProduits(prev => {
+              const cles = new Set(prev.map(p => String(p.id) + "|" + ((p.equipe || "")).trim()));
+              const ajouts = serveur.filter(p => !cles.has(String(p.id) + "|" + ((p.equipe || "")).trim()));
+              return [...prev, ...ajouts.map(p => ({ ...p, equipe: (p.equipe || cleProduits) }))];
+            });
+          }
+          return;
+        }
+        sauvegarderProduitsSupabase(cleProduits, miens);
+      } catch (e) {}
     }, 1200);
     return () => clearTimeout(minuteur);
     // eslint-disable-next-line react-hooks/exhaustive-deps
