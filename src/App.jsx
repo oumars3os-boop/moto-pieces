@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/context/AuthContext";
-import { supabase, synchroniserCompteSupabase, enregistrerVenteSupabase, majVenteSupabase, chargerVentesSupabase, sauvegarderProduitsSupabase, chargerProduitsSupabase, chargerTousProduitsSupabase, abonnerProduitsTempsReel, chargerPublicitesSupabase, ajouterPubliciteSupabase, supprimerPubliciteSupabase, abonnerPublicitesTempsReel, chargerDureePubliciteSupabase, sauvegarderDureePubliciteSupabase, chargerEntrepriseSupabase, sauvegarderEntrepriseSupabase, abonnerParametresTempsReel, abonnerComptesTempsReel } from "@/lib/supabase";
+import { supabase, synchroniserCompteSupabase, enregistrerVenteSupabase, majVenteSupabase, chargerVentesSupabase, sauvegarderProduitsSupabase, chargerProduitsSupabase, chargerTousProduitsSupabase, abonnerProduitsTempsReel, chargerPublicitesSupabase, ajouterPubliciteSupabase, supprimerPubliciteSupabase, abonnerPublicitesTempsReel, chargerDureePubliciteSupabase, sauvegarderDureePubliciteSupabase } from "@/lib/supabase";
 import { extraireTexteImage } from "@/lib/ocr";
 import { demanderAssistantMistral } from "@/lib/mistral";
 import { verifierQualiteImage } from "@/lib/imageProcessor";
@@ -5025,59 +5025,6 @@ export default function App() {
   useEffect(() => {
     try { localStorage.setItem("motopieces_entreprise", JSON.stringify(entreprise)); } catch {}
   }, [entreprise]);
-  // v70 — Profil du magasin en temps réel : le profil de l'administrateur (nom du
-  // magasin, numéro de téléphone) est enregistré dans la base de données et
-  // s'affiche tout seul sur les téléphones des clients, sans rien recharger.
-  const entrepriseChargeeRef = useRef(false);
-  const entrepriseSauvegardeRef = useRef("");
-  useEffect(() => {
-    (async () => {
-      try {
-        const val = await chargerEntrepriseSupabase();
-        if (val && val.nom) { entrepriseSauvegardeRef.current = JSON.stringify(val); setEntreprise(val); }
-      } catch (e) {}
-      entrepriseChargeeRef.current = true;
-    })();
-  }, []);
-  // L'administrateur enregistre le profil du magasin dans la base de données
-  useEffect(() => {
-    if (!entrepriseChargeeRef.current) return;
-    if (role !== "admin") return;
-    const cle = JSON.stringify(entreprise);
-    if (cle === entrepriseSauvegardeRef.current) return;
-    entrepriseSauvegardeRef.current = cle;
-    const minuteur = setTimeout(() => { try { sauvegarderEntrepriseSupabase(entreprise); } catch (e) {} }, 800);
-    return () => clearTimeout(minuteur);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entreprise, role]);
-  // Dès qu'un réglage change dans la base (profil du magasin ou durée des
-  // publicités), tous les téléphones le reçoivent tout de suite.
-  useEffect(() => {
-    const canal = abonnerParametresTempsReel((cle, valeur) => {
-      try {
-        if (cle === "entreprise" && valeur) {
-          const val = JSON.parse(valeur);
-          if (val && val.nom) { entrepriseSauvegardeRef.current = JSON.stringify(val); setEntreprise(val); }
-        } else if (cle === "duree_publicite") {
-          const j = parseInt(valeur); if (j) setDureePublicite(j);
-        }
-      } catch (e) {}
-    });
-    return () => { try { if (canal) supabase.removeChannel(canal); } catch (e) {} };
-  }, []);
-  // v70 — Comptes en temps réel : si un profil change (nom, numéro, photo),
-  // la liste des comptes se met à jour toute seule chez tout le monde.
-  useEffect(() => {
-    const canal = abonnerComptesTempsReel(() => {
-      (async () => {
-        try {
-          const { data, error } = await supabase.from("users").select("*");
-          if (!error && data && data.length > 0) setComptes(data);
-        } catch (e) {}
-      })();
-    });
-    return () => { try { if (canal) supabase.removeChannel(canal); } catch (e) {} };
-  }, []);
 
   useEffect(() => {
     try { localStorage.setItem("motopieces_next_vente", String(nextVente)); } catch {}
