@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/context/AuthContext";
-import { supabase, synchroniserCompteSupabase, enregistrerProduitSupabase, chargerProduitsSupabase, enregistrerPubliciteSupabase, chargerPublicitesSupabase, supprimerPubliciteSupabase, enregistrerVenteSupabase, majVenteSupabase, chargerVentesSupabase } from "@/lib/supabase";
+import { supabase, synchroniserCompteSupabase, enregistrerVenteSupabase, majVenteSupabase, chargerVentesSupabase, sauvegarderProduitsSupabase, chargerProduitsSupabase, chargerTousProduitsSupabase, abonnerProduitsTempsReel, chargerPublicitesSupabase, ajouterPubliciteSupabase, supprimerPubliciteSupabase, abonnerPublicitesTempsReel, chargerDureePubliciteSupabase, sauvegarderDureePubliciteSupabase } from "@/lib/supabase";
 import { extraireTexteImage } from "@/lib/ocr";
 import { demanderAssistantMistral } from "@/lib/mistral";
 import { verifierQualiteImage } from "@/lib/imageProcessor";
@@ -1256,10 +1256,13 @@ function VueVendeur({ produits, ventes, creerVente, categories = [], credits = [
                         {photos.some(ph => !ph.article) && (
                           <p className="text-xs text-red-600">⚠️ Identifiez toutes les photos avant d'envoyer.</p>
                         )}
+                        {identifies.some(ph => !(ph.article.prix > 0)) && (
+                          <p className="text-xs text-red-600">⚠️ Un ou plusieurs articles n'ont pas de prix (0 FCFA). L'admin doit fixer le prix dans l'inventaire avant la vente.</p>
+                        )}
                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                           <Input placeholder="Nom du client" value={client.nom} onChange={e => setClient({ ...client, nom: e.target.value })} />
                           <Input placeholder="Téléphone" value={client.tel} onChange={e => setClient({ ...client, tel: e.target.value })} />
-                          <Button disabled={identifies.length === 0 || photos.some(ph => !ph.article)}
+                          <Button disabled={identifies.length === 0 || photos.some(ph => !ph.article) || identifies.some(ph => !(ph.article.prix > 0))}
                             onClick={envoyer}>{creditActif ? "💳 Envoyer la vente à crédit" : "➡️ Envoyer à la secrétaire"}</Button>
                         </div>
 
@@ -1327,7 +1330,7 @@ function VueVendeur({ produits, ventes, creerVente, categories = [], credits = [
             <div className="text-xs text-muted-foreground">🧺 Cagnotte en cours</div>
             <div className="font-bold text-lg">{totalAuto.toLocaleString("fr-FR")} FCFA</div>
           </div>
-          <Button disabled={photos.some(ph => !ph.article)} onClick={envoyer}>➡️ Envoyer à la secrétaire</Button>
+          <Button disabled={photos.some(ph => !ph.article) || identifies.some(ph => !(ph.article.prix > 0))} onClick={envoyer}>➡️ Envoyer à la secrétaire</Button>
         </div>
       )}
     </div>
