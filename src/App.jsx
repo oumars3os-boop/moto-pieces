@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/context/AuthContext";
-import { supabase, synchroniserCompteSupabase, enregistrerVenteSupabase, majVenteSupabase, chargerVentesSupabase, sauvegarderProduitsSupabase, chargerProduitsSupabase, chargerTousProduitsSupabase, abonnerProduitsTempsReel, chargerPublicitesSupabase, ajouterPubliciteSupabase, supprimerPubliciteSupabase, abonnerPublicitesTempsReel, chargerDureePubliciteSupabase, sauvegarderDureePubliciteSupabase } from "@/lib/supabase";
+import { supabase, synchroniserCompteSupabase, enregistrerVenteSupabase, majVenteSupabase, chargerVentesSupabase, sauvegarderProduitsSupabase, chargerProduitsSupabase } from "@/lib/supabase";
 import { extraireTexteImage } from "@/lib/ocr";
 import { demanderAssistantMistral } from "@/lib/mistral";
 import { verifierQualiteImage } from "@/lib/imageProcessor";
@@ -599,7 +599,7 @@ function LigneVente({ v, onConfirmer, onSaisirPrix, saisiePrix }) {
 
 // ---------- Vue Client ----------
 
-function VueClient({ produits, marques, creerVente, photosCategories, photosMarques, categories, onNegocierPrix, userActif, comptes, entreprise }) {
+function VueClient({ produits, marques, creerVente, photosCategories, photosMarques, categories, onNegocierPrix, userActif, comptes }) {
   const [recherche, setRecherche] = useState("");
   const [cat, setCat] = useState("toutes");
   const [marque, setMarque] = useState("toutes");
@@ -751,32 +751,6 @@ function VueClient({ produits, marques, creerVente, photosCategories, photosMarq
               </div>
             </DialogContent>
           </Dialog>
-        </div>
-      )}
-      {/* 🏪 Profil du magasin (v69) : l'administrateur, le nom du magasin et le numéro de téléphone */}
-      {(comptes || []).filter(c => c.role === "admin" && (c.tel || "").trim()).length > 0 && (
-        <div className="max-w-[1400px] mx-auto px-3 sm:px-6 lg:px-8 pt-3">
-          <Card className="bg-white border shadow-sm">
-            <CardContent className="p-4">
-              <div className="font-bold text-base mb-2">🏪 Profil du magasin</div>
-              <div className="space-y-2">
-                {(comptes || []).filter(c => c.role === "admin" && (c.tel || "").trim()).map(c => (
-                  <div key={c.id || c.tel} className="flex items-center justify-between gap-2 bg-zinc-50 rounded-lg p-3 border">
-                    <div className="text-sm min-w-0">
-                      <div className="font-semibold truncate">👑 {c.nom}</div>
-                      <div className="text-xs text-zinc-600 truncate">🏪 {entreprise?.nom || "MotoPièces"}</div>
-                      <div className="text-xs text-zinc-600">📞 {c.tel}</div>
-                    </div>
-                    <a
-                      href={"tel:" + (c.tel || "").replace(/[^+\d]/g, "")}
-                      className="h-11 px-4 inline-flex items-center rounded-md bg-green-600 hover:bg-green-700 text-white text-sm font-bold shrink-0">
-                      📞 Appeler
-                    </a>
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
         </div>
       )}
       <Filtres recherche={recherche} setRecherche={setRecherche} cat={cat} setCat={setCat}
@@ -1349,7 +1323,7 @@ function FeuilleA4({ children, onFermer, autoPrint }) {
   }, [autoPrint]);
   return (
     <div className="fixed inset-0 z-50 bg-black/60 overflow-auto p-4 print:bg-white print:p-0 print:static">
-      <style>{`@media print { body * { visibility: hidden !important; } .zone-impression, .zone-impression * { visibility: visible !important; } .print-exclure { display: none !important; } .zone-impression { position: absolute !important; left: 0 !important; top: 0 !important; box-shadow: none !important; margin: 0 !important; width: 100% !important; } }`}</style>
+      <style>{`@media print { .print-exclure { display: none !important; } .zone-impression { position: static !important; box-shadow: none !important; margin: 0 !important; width: 100% !important; } }`}</style>
       <div className="zone-impression relative mx-auto bg-white shadow-2xl" style={{ width: "210mm", minHeight: "297mm", padding: "15mm", boxSizing: "border-box" }}>
         <div className="print-exclure absolute top-2 right-2 flex gap-2 z-10">
           <Button size="sm" className="bg-blue-600 hover:bg-blue-700 text-white shadow-md" onClick={() => window.print()}>🖨️ Imprimer</Button>
@@ -1371,7 +1345,7 @@ function FeuilleTicket({ children, onFermer, autoPrint }) {
   }, [autoPrint]);
   return (
     <div className="fixed inset-0 z-50 bg-black/60 overflow-auto p-4 print:bg-white print:p-0 print:static">
-      <style>{`@media print { body * { visibility: hidden !important; } .zone-impression, .zone-impression * { visibility: visible !important; } .print-exclure { display: none !important; } .zone-impression { position: absolute !important; left: 0 !important; top: 0 !important; box-shadow: none !important; margin: 0 !important; width: 100% !important; border: none !important; } }`}</style>
+      <style>{`@media print { .print-exclure { display: none !important; } .zone-impression { position: static !important; box-shadow: none !important; margin: 0 !important; width: 100% !important; border: none !important; } }`}</style>
       <div className="zone-impression mx-auto bg-white shadow-2xl border border-dashed border-zinc-300"
         style={{ width: "80mm", padding: "6mm 5mm", boxSizing: "border-box", fontFamily: "monospace" }}>
         <div className="print-exclure flex justify-between mb-2 text-sans">
@@ -1381,55 +1355,6 @@ function FeuilleTicket({ children, onFermer, autoPrint }) {
         {children}
       </div>
     </div>
-  );
-}
-
-// v65 — Reçu INDIVIDUEL d'une commande : chaque commande a SON reçu, imprimé seul,
-// que la commande contienne 1 article ou 20 articles. Rien d'autre ne s'imprime avec.
-function RecuVente({ vente, entreprise, onFermer }) {
-  const totalRecu = (vente.items || []).reduce((s, it) => s + (it.prixLigne ?? (it.p ? it.p.prix : it.prix)) * (it.qte || 1), 0);
-  return (
-    <FeuilleTicket onFermer={onFermer} autoPrint={true}>
-      <div className="text-center">
-        <div className="font-bold text-sm">{entreprise ? entreprise.nom : "MotoPièces"}</div>
-        <div className="text-[10px]">📞 {entreprise ? entreprise.tel : ""}</div>
-        <div className="text-[10px]">--------------------------------</div>
-        <div className="font-semibold text-xs">REÇU N° {vente.id}</div>
-      </div>
-      <div className="text-[10px] my-1">
-        {vente.date || ""}<br />
-        Client : {vente.client}<br />
-        Tel : {vente.tel}
-      </div>
-      <div className="text-[10px]">================================</div>
-      {(vente.items || []).map((it, i) => {
-        const photoItem = it.photo || it.p?.photo || null;
-        return (
-          <div key={i} className="flex gap-2 items-start py-1 border-b border-dotted border-zinc-300">
-            {photoItem ? (
-              <img src={photoItem} alt="" className="w-12 h-12 object-cover rounded border border-zinc-400 shrink-0" />
-            ) : (
-              <div className="w-12 h-12 rounded border border-dashed border-zinc-400 shrink-0 flex items-center justify-center text-[8px] text-zinc-500">📦</div>
-            )}
-            <div className="text-[10px] flex-1">
-              <div className="font-semibold">{it.p ? it.p.nom : it.nom}</div>
-              <div className="flex justify-between">
-                <span>{it.qte || 1} x {((it.prixLigne ?? (it.p ? it.p.prix : it.prix))).toLocaleString("fr-FR")}</span>
-                <span>{((it.prixLigne ?? (it.p ? it.p.prix : it.prix)) * (it.qte || 1)).toLocaleString("fr-FR")} F</span>
-              </div>
-            </div>
-          </div>
-        );
-      })}
-      <div className="text-[10px]">================================</div>
-      <div className="flex justify-between font-bold text-sm mt-1">
-        <span>TOTAL</span>
-        <span>{totalRecu.toLocaleString("fr-FR")} FCFA</span>
-      </div>
-      <div className="text-[10px] mt-1">{vente.statut === "payée" ? "PAYÉ ✅ — Merci !" : "EN ATTENTE DE PAIEMENT ⏳"}</div>
-      <div className="text-center text-[10px] mt-3">* * *</div>
-      <div className="text-center text-[9px]">{entreprise ? entreprise.nom : ""} — {entreprise ? entreprise.tel : ""}</div>
-    </FeuilleTicket>
   );
 }
 
@@ -1808,14 +1733,8 @@ function VueSecretaire({ ventes, confirmerPaiement, majPrixLigne, modePrix, entr
         </p>
       )}
       {liste.length === 0 ? <p className="text-muted-foreground">Aucune vente dans cette catégorie.</p> : liste.map(v => (
-        <div key={v.id}>
-          <LigneVente v={v} onConfirmer={confirmerEtProposer}
-            saisiePrix={saisie} onSaisirPrix={majPrixLigne} />
-          {/* v65 : bouton pour réimprimer le reçu de CETTE commande seulement */}
-          <div className="px-3 pb-2 flex justify-end">
-            <Button size="sm" variant="outline" onClick={() => setRecuA4(v)}>🧾 Reçu de cette commande</Button>
-          </div>
-        </div>
+        <LigneVente key={v.id} v={v} onConfirmer={confirmerEtProposer}
+          saisiePrix={saisie} onSaisirPrix={majPrixLigne} />
       ))}
 
       {/* Après confirmation du paiement : proposition d'imprimer le reçu */}
@@ -1831,9 +1750,49 @@ function VueSecretaire({ ventes, confirmerPaiement, majPrixLigne, modePrix, entr
         </DialogContent>
       </Dialog>
 
-      {/* Reçu individuel : chaque commande imprime SON reçu, et lui seul */}
+      {/* Reçu au format ticket de caisse, impression automatique dès l'ouverture */}
       {recuA4 && (
-        <RecuVente vente={recuA4} entreprise={entreprise} onFermer={() => setRecuA4(null)} />
+        <FeuilleTicket onFermer={() => setRecuA4(null)} autoPrint={true}>
+          <div className="text-center">
+            <div className="font-bold text-sm">{entreprise ? entreprise.nom : "MotoPièces"}</div>
+            <div className="text-[10px]">📞 {entreprise ? entreprise.tel : ""}</div>
+            <div className="text-[10px]">--------------------------------</div>
+            <div className="font-semibold text-xs">REÇU N° {recuA4.id}</div>
+          </div>
+          <div className="text-[10px] my-1">
+            {recuA4.date || ""}<br />
+            Client : {recuA4.client}<br />
+            Tel : {recuA4.tel}
+          </div>
+          <div className="text-[10px]">================================</div>
+          {recuA4.items.map((it, i) => {
+            const photoItem = it.photo || it.p?.photo || null;
+            return (
+              <div key={i} className="flex gap-2 items-start py-1 border-b border-dotted border-zinc-300">
+                {photoItem ? (
+                  <img src={photoItem} alt="" className="w-12 h-12 object-cover rounded border border-zinc-400 shrink-0" />
+                ) : (
+                  <div className="w-12 h-12 rounded border border-dashed border-zinc-400 shrink-0 flex items-center justify-center text-[8px] text-zinc-500">📦</div>
+                )}
+                <div className="text-[10px] flex-1">
+                  <div className="font-semibold">{it.p ? it.p.nom : it.nom}</div>
+                  <div className="flex justify-between">
+                    <span>{it.qte || 1} x {((it.prixLigne ?? (it.p ? it.p.prix : it.prix))).toLocaleString("fr-FR")}</span>
+                    <span>{((it.prixLigne ?? (it.p ? it.p.prix : it.prix)) * (it.qte || 1)).toLocaleString("fr-FR")} F</span>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+          <div className="text-[10px]">================================</div>
+          <div className="flex justify-between font-bold text-sm mt-1">
+            <span>TOTAL</span>
+            <span>{totalCalcule(recuA4).toLocaleString("fr-FR")} FCFA</span>
+          </div>
+          <div className="text-[10px] mt-1">PAYÉ ✅ — Merci !</div>
+          <div className="text-center text-[10px] mt-3">* * *</div>
+          <div className="text-center text-[9px]">{entreprise ? entreprise.nom : ""} — {entreprise ? entreprise.tel : ""}</div>
+        </FeuilleTicket>
       )}
       </>
       )}
@@ -1845,7 +1804,7 @@ function VueSecretaire({ ventes, confirmerPaiement, majPrixLigne, modePrix, entr
 
 // Vue combinée : une personne qui est vendeur ET secrétaire en même temps
 // Contenu du menu développeur : code + création/suppression des comptes administrateurs
-function ContenuMenuDev({ codeOk, setCodeOk, codeSaisi, setCodeSaisi, nouvelAdmin, setNouvelAdmin, comptes, setComptes, fermer, CODE_DEV, dureePublicite = 1, onChangerDuree = () => {} }) {
+function ContenuMenuDev({ codeOk, setCodeOk, codeSaisi, setCodeSaisi, nouvelAdmin, setNouvelAdmin, comptes, setComptes, fermer, CODE_DEV }) {
   const [erreur, setErreur] = useState("");
   const [pinGenere, setPinGenere] = useState(null); // { nom, pin }
   const reinitialiserPinAdmin = (c) => {
@@ -1873,20 +1832,6 @@ function ContenuMenuDev({ codeOk, setCodeOk, codeSaisi, setCodeSaisi, nouvelAdmi
   return (
     <div className="grid gap-1.5">
       <DialogHeader><DialogTitle>👑 Comptes administrateurs</DialogTitle></DialogHeader>
-
-      {/* v68 : la durée des publicités est décidée uniquement par le développeur.
-          Par défaut une publicité dure 24 heures ; c'est ici qu'on peut la faire durer plus longtemps. */}
-      <div className="pt-1 pb-2 border-b">
-        <Label>⏱️ Durée des publicités (jours)</Label>
-        <p className="text-[11px] text-muted-foreground mt-1">Par défaut, une publicité dure 24 heures puis disparaît. Si tu veux que les publicités durent plus longtemps, change le nombre de jours ici. Ce réglage vaut pour tout le monde.</p>
-        <div className="flex items-center gap-2 mt-2">
-          <input type="number" min="1" max="365" value={dureePublicite}
-            onChange={e => onChangerDuree(parseInt(e.target.value) || 1)}
-            className="w-20 border border-zinc-300 rounded px-2 py-1 text-base" />
-          <span className="text-sm text-muted-foreground">jours</span>
-        </div>
-      </div>
-
       <Label>Nom complet</Label>
       <Input value={nouvelAdmin.nom} onChange={e => setNouvelAdmin({ ...nouvelAdmin, nom: e.target.value })} placeholder="Ex : Oumar Sekongo" />
       <Label className="pt-2">Téléphone</Label>
@@ -2035,7 +1980,6 @@ function VueAdmin({
   const [scanPieceOuvert, setScanPieceOuvert] = useState(false); // scanner direct pour les pièces
   const [scanCible, setScanCible] = useState("ajout"); // "ajout" | "modif"
   const [facture, setFacture] = useState(null);
-  const [recuVente, setRecuVente] = useState(null); // v65 : reçu individuel d'une commande
   const [imprimerTableau, setImprimerTableau] = useState(false);
   const [nouveauCompte, setNouveauCompte] = useState({ nom: "", tel: "", role: "vendeur", pin: "" });
   const [erreurCompte, setErreurCompte] = useState("");
@@ -2597,8 +2541,7 @@ function VueAdmin({
       )}
 
       {onglet === "publicites" && (
-        <SectionPublicites publicites={publicites} setPublicites={setPublicites} autoriserUpload={true}
-          />
+        <SectionPublicites publicites={publicites} setPublicites={setPublicites} autoriserUpload={true} />
       )}
 
       {onglet === "utilisateurs" && (
@@ -2908,7 +2851,6 @@ function VueAdmin({
               <LigneVente v={v} />
               <div className="px-3 pb-2 flex justify-end">
                 <Button size="sm" variant="outline" onClick={() => setFacture(v)}>🧾 Facture</Button>
-                <Button size="sm" variant="outline" className="ml-2" onClick={() => setRecuVente(v)}>🧾 Reçu</Button>
               </div>
             </div>
           ))}
@@ -2967,11 +2909,6 @@ function VueAdmin({
               </FeuilleA4>
             );
           })()}
-
-          {/* v65 : reçu individuel de la commande (ticket seul, rien d'autre) */}
-          {recuVente && (
-            <RecuVente vente={recuVente} entreprise={entreprise} onFermer={() => setRecuVente(null)} />
-          )}
         </div>
       )}
     </div>
@@ -3901,14 +3838,6 @@ function MessagerieEquipe({ role, userActif, comptes }) {
   const membresEquipe = (comptes || []).filter(c =>
     TALKIE_ROLES.includes(c.role) && (c.tel || "").trim() && (c.tel || "").trim() !== monTel && cleEquipeDe(c) === maCle);
   const lesAdmins = (comptes || []).filter(c => c.role === "admin" && (c.tel || "").trim() !== monTel);
-  // v69 : échange direct entre le client et la boutique (secrétaire / administrateur)
-  const mesBoutiques = (role === "client")
-    ? (comptes || []).filter(c => (c.role === "admin" || c.role === "secretaire") && (c.tel || "").trim() && (c.tel || "").trim() !== monTel)
-    : [];
-  // v69 : la boutique (administrateur / secrétaire) voit ses clients pour répondre
-  const mesClients = (estAdmin || role === "secretaire")
-    ? (comptes || []).filter(c => c.role === "client" && (c.tel || "").trim() && (c.tel || "").trim() !== monTel)
-    : [];
 
   const canalIdPerso = (tel) => "perso:" + [monTel, tel].sort().join("|");
   const idDuCanal = (c) => c === "equipe" ? "equipe:" + maCle : c === "admins" ? "admins" : canalIdPerso(c);
@@ -3943,9 +3872,6 @@ function MessagerieEquipe({ role, userActif, comptes }) {
       ...(estAdmin ? ["admins"] : []),
       ...membresEquipe.map(m => canalIdPerso((m.tel || "").trim())),
       ...(estAdmin ? lesAdmins.map(a => canalIdPerso((a.tel || "").trim())) : []),
-      // v69 : le client discute avec la boutique ; la boutique (admin / secrétaire) reçoit ses clients
-      ...(role === "client" ? mesBoutiques.map(b => canalIdPerso((b.tel || "").trim())) : []),
-      ...((estAdmin || role === "secretaire") ? mesClients.map(cl => canalIdPerso((cl.tel || "").trim())) : []),
     ];
     const verifier = async () => {
       try {
@@ -4058,14 +3984,7 @@ function MessagerieEquipe({ role, userActif, comptes }) {
     if (type !== "texte") demarrerBarre(type);
     else setEnvoi({ type, pct: 50, phase: "envoi" });
     try {
-      // v66 : si l'envoi échoue (réseau faible), on réessaie tout seul une seconde fois
-      let data = null, error = null;
-      for (let essai = 0; essai < 2; essai++) {
-        const r = await supabase.from("messages").insert(msg).select("id").single();
-        data = r.data; error = r.error;
-        if (!error) break;
-        await new Promise(res => setTimeout(res, 2000));
-      }
+      const { data, error } = await supabase.from("messages").insert(msg).select("id").single();
       if (error) {
         finirBarre();
         setInfo("⚠️ Envoi impossible : " + (error.message || "erreur") + ". Vérifie que la table « messages » a été créée dans Supabase.");
@@ -4222,14 +4141,7 @@ function MessagerieEquipe({ role, userActif, comptes }) {
 
   const messagesDuCanal = messages.filter(m => m.destinataire === idDuCanal(canal));
 
-  // v69 : le client ouvre la messagerie directement sur sa boutique (secrétaire / administrateur)
-  useEffect(() => {
-    if (role === "client" && canal === "equipe" && mesBoutiques.length > 0) {
-      setCanal((mesBoutiques[0].tel || "").trim());
-    }
-  }, [role, canal, mesBoutiques.length]);
-
-  if (role !== "client" && !TALKIE_ROLES.includes(role)) return null;
+  if (!TALKIE_ROLES.includes(role)) return null;
 
   return (
     <div>
@@ -4271,9 +4183,7 @@ function MessagerieEquipe({ role, userActif, comptes }) {
 
           {/* Choix de la destination */}
           <div className="p-2 border-b bg-zinc-50 flex flex-wrap gap-2">
-            {role !== "client" && (
-              <Button variant={canal === "equipe" ? "default" : "outline"} className={canal === "equipe" ? "ring-2 ring-green-600 ring-offset-1" : ""} onClick={() => setCanal("equipe")}>👥 Mon équipe ({membresEquipe.length})</Button>
-            )}
+            <Button variant={canal === "equipe" ? "default" : "outline"} className={canal === "equipe" ? "ring-2 ring-green-600 ring-offset-1" : ""} onClick={() => setCanal("equipe")}>👥 Mon équipe ({membresEquipe.length})</Button>
             {estAdmin && (
               <Button variant={canal === "admins" ? "default" : "outline"} className={canal === "admins" ? "ring-2 ring-amber-600 ring-offset-1" : ""} onClick={() => setCanal("admins")}>👑 Admins ({lesAdmins.length})</Button>
             )}
@@ -4282,12 +4192,6 @@ function MessagerieEquipe({ role, userActif, comptes }) {
             ))}
             {estAdmin && lesAdmins.map(c => (
               <Button key={c.tel} variant={canal === c.tel ? "default" : "outline"} className={canal === c.tel ? "ring-2 ring-amber-600 ring-offset-1" : ""} onClick={() => setCanal((c.tel || "").trim())}>👑 {c.nom}</Button>
-            ))}
-            {/* v69 : échange client ↔ boutique (secrétaire / administrateur) */}
-            {(role === "client" ? mesBoutiques : mesClients).map(c => (
-              <Button key={c.tel} variant={canal === (c.tel || "").trim() ? "default" : "outline"} className={canal === (c.tel || "").trim() ? "ring-2 ring-purple-600 ring-offset-1" : ""} onClick={() => setCanal((c.tel || "").trim())}>
-                {role === "client" ? (c.role === "secretaire" ? "👩‍💼" : "🏪") : "🛍️"} {c.nom}
-              </Button>
             ))}
           </div>
 
@@ -4400,29 +4304,21 @@ function MessagerieEquipe({ role, userActif, comptes }) {
 }
 
 // ---------- Composant Section Publicités & Promotions avec Analyse Qualité Image ----------
-function SectionPublicites({ publicites, setPublicites, autoriserUpload = false, dureeJours = 1 }) {
+function SectionPublicites({ publicites, setPublicites, autoriserUpload = false }) {
   const [openModal, setOpenModal] = useState(false);
   const [titre, setTitre] = useState("");
   const [image, setImage] = useState(null);
   const [analyse, setAnalyse] = useState(null);
   // Carrousel : une seule publicité affichée à la fois, changement automatique toutes les 3 secondes
   const [indexPub, setIndexPub] = useState(0);
-  // v67 : une publicité s'arrête toute seule à la fin de sa durée (en jours, fixée par l'administrateur)
-  const aujourdhui = new Date().toISOString().slice(0, 10);
-  const pubsActives = (publicites || []).filter(p => !p.expire_le || String(p.expire_le).slice(0, 10) >= aujourdhui);
-  const calculerExpiration = (jours) => {
-    const d = new Date();
-    d.setDate(d.getDate() + (parseInt(jours) || 1));
-    return d.toISOString().slice(0, 10);
-  };
   useEffect(() => {
-    if (!pubsActives || pubsActives.length <= 1) return;
+    if (!publicites || publicites.length <= 1) return;
     const t = setInterval(() => {
-      setIndexPub((i) => (i + 1) % pubsActives.length);
+      setIndexPub((i) => (i + 1) % publicites.length);
     }, 3000);
     return () => clearInterval(t);
   }, [publicites && publicites.length]);
-  const pubVisible = pubsActives && pubsActives.length > 0 ? pubsActives[indexPub % pubsActives.length] : null;
+  const pubVisible = publicites && publicites.length > 0 ? publicites[indexPub % publicites.length] : null;
 
   const handleUploadDirect = async (e) => {
     const file = e.target.files?.[0];
@@ -4443,11 +4339,8 @@ function SectionPublicites({ publicites, setPublicites, autoriserUpload = false,
           titre: titre.trim() || "Offre Spéciale MotoPièces",
           image: resultatAnalyse.dataUrl,
           date: new Date().toLocaleDateString("fr-FR"),
-          jours: dureeJours,
-          expire_le: calculerExpiration(dureeJours),
         };
         setPublicites((prev) => [nouvellePub, ...prev]);
-        try { ajouterPubliciteSupabase(nouvellePub); } catch (e) {}
         setTitre("");
         setImage(null);
         setAnalyse(null);
@@ -4465,11 +4358,8 @@ function SectionPublicites({ publicites, setPublicites, autoriserUpload = false,
       titre: titre.trim() || "Offre Spéciale MotoPièces",
       image,
       date: new Date().toLocaleDateString("fr-FR"),
-      jours: dureeJours,
-      expire_le: calculerExpiration(dureeJours),
     };
     setPublicites((prev) => [nouvellePub, ...prev]);
-    try { ajouterPubliciteSupabase(nouvellePub); } catch (e) {}
     setTitre("");
     setImage(null);
     setAnalyse(null);
@@ -4478,7 +4368,6 @@ function SectionPublicites({ publicites, setPublicites, autoriserUpload = false,
 
   const supprimerPub = (id) => {
     setPublicites((prev) => prev.filter((p) => p.id !== id));
-    try { supprimerPubliciteSupabase(id); } catch (e) {}
   };
 
   return (
@@ -4498,7 +4387,7 @@ function SectionPublicites({ publicites, setPublicites, autoriserUpload = false,
         )}
       </div>
 
-      {pubsActives.length === 0 ? (
+      {publicites.length === 0 ? (
         <Card className="bg-gradient-to-r from-blue-600 to-indigo-700 text-white border-none shadow-md">
           <CardContent className="p-5 flex flex-col md:flex-row items-center justify-between gap-4">
             <div>
@@ -4527,10 +4416,10 @@ function SectionPublicites({ publicites, setPublicites, autoriserUpload = false,
             <CardContent className="p-3 flex items-center justify-between gap-2 flex-wrap">
               <div>
                 <h3 className="font-bold text-sm text-zinc-900">{pubVisible.titre}</h3>
-                <p className="text-[10px] text-zinc-500 mt-1">Publié le {pubVisible.date}{pubVisible.expire_le ? <> — ⏱️ finit le {String(pubVisible.expire_le).slice(0, 10)}</> : null}</p>
+                <p className="text-[10px] text-zinc-500 mt-1">Publié le {pubVisible.date}</p>
               </div>
               <div className="flex items-center gap-1">
-                {pubsActives.map((_, i) => (
+                {publicites.map((_, i) => (
                   <span key={i} className={"h-2 rounded-full transition-all " + (i === indexPub % publicites.length ? "w-5 bg-blue-600" : "w-2 bg-zinc-300")}></span>
                 ))}
               </div>
@@ -4631,21 +4520,6 @@ export default function App() {
   const [publicites, setPublicites] = useState(() => {
     try { const s = localStorage.getItem("motopieces_publicites"); return s ? JSON.parse(s) : []; } catch { return []; }
   });
-  // v67/v68 — durée des publicités en jours : décidée uniquement par le développeur (défaut : 1 jour = 24 heures)
-  const [dureePublicite, setDureePublicite] = useState(() => {
-    try { return parseInt(localStorage.getItem("motopieces_duree_pub")) || 1; } catch { return 1; }
-  });
-  useEffect(() => {
-    (async () => {
-      try { const j = await chargerDureePubliciteSupabase(); if (j) setDureePublicite(j); } catch (e) {}
-    })();
-  }, []);
-  const changerDureePublicite = async (j) => {
-    const jours = (parseInt(j) || 1);
-    setDureePublicite(jours);
-    try { localStorage.setItem("motopieces_duree_pub", String(jours)); } catch (e) {}
-    try { await sauvegarderDureePubliciteSupabase(jours); } catch (e) {}
-  };
   const [boutiquesMasquees, setBoutiquesMasquees] = useState(() => {
     try {
       const s = localStorage.getItem("motopieces_boutiques_masquees");
@@ -4871,19 +4745,6 @@ export default function App() {
     try { localStorage.setItem("motopieces_comptes", JSON.stringify(comptes)); } catch {}
   }, [comptes]);
 
-  // v66 : connexion surveillée — bandeau hors ligne et rechargement automatique dès que le réseau revient
-  const [enLigne, setEnLigne] = useState(typeof navigator !== "undefined" ? navigator.onLine : true);
-  useEffect(() => {
-    const reseauOk = () => { setEnLigne(true); setTimeout(() => { try { location.reload(); } catch {} }, 800); };
-    const reseauKo = () => setEnLigne(false);
-    try {
-      window.addEventListener("online", reseauOk);
-      window.addEventListener("offline", reseauKo);
-      setEnLigne(navigator.onLine);
-    } catch {}
-    return () => { try { window.removeEventListener("online", reseauOk); window.removeEventListener("offline", reseauKo); } catch {} };
-  }, []);
-
   // Anti-capture d'écran : l'écran se floute aussitôt qu'on quitte l'application
   // ou qu'elle perd le focus. On ne peut pas lire l'écran depuis une autre application.
   useEffect(() => {
@@ -4960,55 +4821,6 @@ export default function App() {
     return () => { annule = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userActif?.tel, userActif?.equipe, role, comptes]);
-
-  // v64 — site public : dès l'ouverture, SANS compte, tous les articles de toutes les boutiques
-  // s'affichent automatiquement, comme un vrai site de vente en ligne.
-  const [majPublique, setMajPublique] = useState(0);
-  useEffect(() => {
-    let annule = false;
-    (async () => {
-      try {
-        const liste = await chargerTousProduitsSupabase();
-        if (annule || !Array.isArray(liste) || liste.length === 0) return;
-        setProduits(prev => {
-          const cle = (p) => String(p.id) + "|" + ((p.equipe || "")).trim();
-          const cles = new Set(liste.map(cle));
-          const locaux = prev.filter(p => !cles.has(cle(p)));
-          return [...locaux, ...liste];
-        });
-      } catch (e) { console.warn("Chargement public des articles:", e); }
-    })();
-    // Rafraîchissement automatique toutes les 15 secondes (filet de sécurité)
-    const minuteur = setInterval(() => setMajPublique(v => v + 1), 15000);
-    return () => { annule = true; clearInterval(minuteur); };
-  }, [majPublique]);
-
-  // v64 — temps réel : dès qu'un téléphone enregistre un article, tous les autres téléphones
-  // le voient apparaître tout de suite, sans recharger la page.
-  useEffect(() => {
-    const canal = abonnerProduitsTempsReel(() => setMajPublique(v => v + 1));
-    return () => { try { if (canal && supabase) supabase.removeChannel(canal); } catch (e) {} };
-  }, []);
-
-  // v67 — publicités en temps réel : les publicités vivent dans la base de données,
-  // donc dès qu'une personne publie une publicité, TOUS les téléphones la voient tout de suite.
-  const [majPub, setMajPub] = useState(0);
-  useEffect(() => {
-    let annule = false;
-    (async () => {
-      try {
-        const liste = await chargerPublicitesSupabase();
-        if (!annule && liste !== null) setPublicites(liste);
-      } catch (e) {}
-    })();
-    return () => { annule = true; };
-  }, [majPub]);
-  useEffect(() => {
-    const canal = abonnerPublicitesTempsReel(() => setMajPub(v => v + 1));
-    // Filet de sécurité : rafraîchissement toutes les 15 secondes aussi
-    const minuteur = setInterval(() => setMajPub(v => v + 1), 15000);
-    return () => { try { if (canal && supabase) supabase.removeChannel(canal); } catch (e) {} clearInterval(minuteur); };
-  }, []);
 
   // Sauvegarde automatique dans la base de données (petite pause pour regrouper les changements) :
   // chaque article enregistré est copié sur le serveur, impossible de le perdre.
@@ -5360,12 +5172,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-zinc-100 pb-10">
-      {/* v66 : bandeau hors ligne — le site se reconnecte et s'actualise tout seul */}
-      {!enLigne && (
-        <div className="bg-red-600 text-white text-center text-sm font-semibold py-2 px-3 sticky top-0 z-30">
-          📴 Pas de connexion — tout se remet en marche automatiquement dès que le réseau revient.
-        </div>
-      )}
       {/* En-tête principal : Titre MotoPièces tout en haut, Bouton de Connexion / Profil en haut à droite */}
       <header className="bg-zinc-900 text-white sticky top-0 z-20 shadow">
         <div className="max-w-[1400px] mx-auto px-3 sm:px-6 lg:px-8 py-3 flex items-center justify-between gap-3">
@@ -5567,8 +5373,7 @@ export default function App() {
             nouvelAdmin={nouvelAdmin} setNouvelAdmin={setNouvelAdmin}
             comptes={comptes} setComptes={setComptes}
             fermer={() => { setMenuDev(false); setCodeOk(false); setCodeSaisi(""); }}
-            CODE_DEV={CODE_DEV}
-            dureePublicite={dureePublicite} onChangerDuree={changerDureePublicite} />
+            CODE_DEV={CODE_DEV} />
         </DialogContent>
       </Dialog>
 
@@ -5579,7 +5384,6 @@ export default function App() {
             publicites={publicites}
             setPublicites={setPublicites}
             autoriserUpload={role === "admin"}
-            dureeJours={dureePublicite}
           />
           <VueClient
             produits={produits.filter(p => !boutiquesMasquees.includes(p.boutique || "MotoPièces Principal"))}
@@ -5591,7 +5395,6 @@ export default function App() {
             onNegocierPrix={negocierPrixArticle}
             userActif={userActif}
             comptes={comptes}
-            entreprise={entreprise}
           />
         </div>
       )}
@@ -5636,8 +5439,7 @@ export default function App() {
       )}
 
       {/* Messagerie photos / vidéos / textes / vocaux : contenu stocké dans les téléphones, purgé du serveur */}
-      {/* v69 : les clients y ont aussi accès pour échanger avec la boutique (secrétaire / administrateur) */}
-      {(TALKIE_ROLES.includes(role) || role === "client") && (
+      {TALKIE_ROLES.includes(role) && (
         <MessagerieEquipe role={role} userActif={userActif} comptes={comptes} />
       )}
     </div>
