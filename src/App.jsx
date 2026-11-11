@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/context/AuthContext";
-import { supabase, synchroniserCompteSupabase, enregistrerVenteSupabase, majVenteSupabase, chargerVentesSupabase, sauvegarderProduitsSupabase, chargerProduitsSupabase, chargerTousProduitsSupabase, abonnerProduitsTempsReel, chargerPublicitesSupabase, ajouterPubliciteSupabase, supprimerPubliciteSupabase, abonnerPublicitesTempsReel, chargerDureePubliciteSupabase, sauvegarderDureePubliciteSupabase } from "@/lib/supabase";
+import { supabase, synchroniserCompteSupabase, enregistrerVenteSupabase, majVenteSupabase, chargerVentesSupabase, sauvegarderProduitsSupabase, chargerProduitsSupabase, chargerTousProduitsSupabase, abonnerProduitsTempsReel, chargerPublicitesSupabase, ajouterPubliciteSupabase, supprimerPubliciteSupabase, abonnerPublicitesTempsReel, chargerDureePubliciteSupabase, sauvegarderDureePubliciteSupabase, chargerEntrepriseSupabase, sauvegarderEntrepriseSupabase, abonnerParametresTempsReel, abonnerComptesTempsReel } from "@/lib/supabase";
 import { extraireTexteImage } from "@/lib/ocr";
 import { demanderAssistantMistral } from "@/lib/mistral";
 import { verifierQualiteImage } from "@/lib/imageProcessor";
@@ -599,7 +599,7 @@ function LigneVente({ v, onConfirmer, onSaisirPrix, saisiePrix }) {
 
 // ---------- Vue Client ----------
 
-function VueClient({ produits, marques, creerVente, photosCategories, photosMarques, categories, onNegocierPrix, userActif, comptes }) {
+function VueClient({ produits, marques, creerVente, photosCategories, photosMarques, categories, onNegocierPrix, userActif, comptes, entreprise }) {
   const [recherche, setRecherche] = useState("");
   const [cat, setCat] = useState("toutes");
   const [marque, setMarque] = useState("toutes");
@@ -751,6 +751,32 @@ function VueClient({ produits, marques, creerVente, photosCategories, photosMarq
               </div>
             </DialogContent>
           </Dialog>
+        </div>
+      )}
+      {/* 🏪 Profil du magasin (v69) : l'administrateur, le nom du magasin et le numéro de téléphone */}
+      {(comptes || []).filter(c => c.role === "admin" && (c.tel || "").trim()).length > 0 && (
+        <div className="max-w-[1400px] mx-auto px-3 sm:px-6 lg:px-8 pt-3">
+          <Card className="bg-white border shadow-sm">
+            <CardContent className="p-4">
+              <div className="font-bold text-base mb-2">🏪 Profil du magasin</div>
+              <div className="space-y-2">
+                {(comptes || []).filter(c => c.role === "admin" && (c.tel || "").trim()).map(c => (
+                  <div key={c.id || c.tel} className="flex items-center justify-between gap-2 bg-zinc-50 rounded-lg p-3 border">
+                    <div className="text-sm min-w-0">
+                      <div className="font-semibold truncate">👑 {c.nom}</div>
+                      <div className="text-xs text-zinc-600 truncate">🏪 {entreprise?.nom || "MotoPièces"}</div>
+                      <div className="text-xs text-zinc-600">📞 {c.tel}</div>
+                    </div>
+                    <a
+                      href={"tel:" + (c.tel || "").replace(/[^+\d]/g, "")}
+                      className="h-11 px-4 inline-flex items-center rounded-md bg-green-600 hover:bg-green-700 text-white text-sm font-bold shrink-0">
+                      📞 Appeler
+                    </a>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
         </div>
       )}
       <Filtres recherche={recherche} setRecherche={setRecherche} cat={cat} setCat={setCat}
@@ -3875,6 +3901,14 @@ function MessagerieEquipe({ role, userActif, comptes }) {
   const membresEquipe = (comptes || []).filter(c =>
     TALKIE_ROLES.includes(c.role) && (c.tel || "").trim() && (c.tel || "").trim() !== monTel && cleEquipeDe(c) === maCle);
   const lesAdmins = (comptes || []).filter(c => c.role === "admin" && (c.tel || "").trim() !== monTel);
+  // v69 : échange direct entre le client et la boutique (secrétaire / administrateur)
+  const mesBoutiques = (role === "client")
+    ? (comptes || []).filter(c => (c.role === "admin" || c.role === "secretaire") && (c.tel || "").trim() && (c.tel || "").trim() !== monTel)
+    : [];
+  // v69 : la boutique (administrateur / secrétaire) voit ses clients pour répondre
+  const mesClients = (estAdmin || role === "secretaire")
+    ? (comptes || []).filter(c => c.role === "client" && (c.tel || "").trim() && (c.tel || "").trim() !== monTel)
+    : [];
 
   const canalIdPerso = (tel) => "perso:" + [monTel, tel].sort().join("|");
   const idDuCanal = (c) => c === "equipe" ? "equipe:" + maCle : c === "admins" ? "admins" : canalIdPerso(c);
@@ -3909,6 +3943,9 @@ function MessagerieEquipe({ role, userActif, comptes }) {
       ...(estAdmin ? ["admins"] : []),
       ...membresEquipe.map(m => canalIdPerso((m.tel || "").trim())),
       ...(estAdmin ? lesAdmins.map(a => canalIdPerso((a.tel || "").trim())) : []),
+      // v69 : le client discute avec la boutique ; la boutique (admin / secrétaire) reçoit ses clients
+      ...(role === "client" ? mesBoutiques.map(b => canalIdPerso((b.tel || "").trim())) : []),
+      ...((estAdmin || role === "secretaire") ? mesClients.map(cl => canalIdPerso((cl.tel || "").trim())) : []),
     ];
     const verifier = async () => {
       try {
@@ -4185,7 +4222,14 @@ function MessagerieEquipe({ role, userActif, comptes }) {
 
   const messagesDuCanal = messages.filter(m => m.destinataire === idDuCanal(canal));
 
-  if (!TALKIE_ROLES.includes(role)) return null;
+  // v69 : le client ouvre la messagerie directement sur sa boutique (secrétaire / administrateur)
+  useEffect(() => {
+    if (role === "client" && canal === "equipe" && mesBoutiques.length > 0) {
+      setCanal((mesBoutiques[0].tel || "").trim());
+    }
+  }, [role, canal, mesBoutiques.length]);
+
+  if (role !== "client" && !TALKIE_ROLES.includes(role)) return null;
 
   return (
     <div>
@@ -4227,7 +4271,9 @@ function MessagerieEquipe({ role, userActif, comptes }) {
 
           {/* Choix de la destination */}
           <div className="p-2 border-b bg-zinc-50 flex flex-wrap gap-2">
-            <Button variant={canal === "equipe" ? "default" : "outline"} className={canal === "equipe" ? "ring-2 ring-green-600 ring-offset-1" : ""} onClick={() => setCanal("equipe")}>👥 Mon équipe ({membresEquipe.length})</Button>
+            {role !== "client" && (
+              <Button variant={canal === "equipe" ? "default" : "outline"} className={canal === "equipe" ? "ring-2 ring-green-600 ring-offset-1" : ""} onClick={() => setCanal("equipe")}>👥 Mon équipe ({membresEquipe.length})</Button>
+            )}
             {estAdmin && (
               <Button variant={canal === "admins" ? "default" : "outline"} className={canal === "admins" ? "ring-2 ring-amber-600 ring-offset-1" : ""} onClick={() => setCanal("admins")}>👑 Admins ({lesAdmins.length})</Button>
             )}
@@ -4236,6 +4282,12 @@ function MessagerieEquipe({ role, userActif, comptes }) {
             ))}
             {estAdmin && lesAdmins.map(c => (
               <Button key={c.tel} variant={canal === c.tel ? "default" : "outline"} className={canal === c.tel ? "ring-2 ring-amber-600 ring-offset-1" : ""} onClick={() => setCanal((c.tel || "").trim())}>👑 {c.nom}</Button>
+            ))}
+            {/* v69 : échange client ↔ boutique (secrétaire / administrateur) */}
+            {(role === "client" ? mesBoutiques : mesClients).map(c => (
+              <Button key={c.tel} variant={canal === (c.tel || "").trim() ? "default" : "outline"} className={canal === (c.tel || "").trim() ? "ring-2 ring-purple-600 ring-offset-1" : ""} onClick={() => setCanal((c.tel || "").trim())}>
+                {role === "client" ? (c.role === "secretaire" ? "👩‍💼" : "🏪") : "🛍️"} {c.nom}
+              </Button>
             ))}
           </div>
 
@@ -4973,6 +5025,59 @@ export default function App() {
   useEffect(() => {
     try { localStorage.setItem("motopieces_entreprise", JSON.stringify(entreprise)); } catch {}
   }, [entreprise]);
+  // v70 — Profil du magasin en temps réel : le profil de l'administrateur (nom du
+  // magasin, numéro de téléphone) est enregistré dans la base de données et
+  // s'affiche tout seul sur les téléphones des clients, sans rien recharger.
+  const entrepriseChargeeRef = useRef(false);
+  const entrepriseSauvegardeRef = useRef("");
+  useEffect(() => {
+    (async () => {
+      try {
+        const val = await chargerEntrepriseSupabase();
+        if (val && val.nom) { entrepriseSauvegardeRef.current = JSON.stringify(val); setEntreprise(val); }
+      } catch (e) {}
+      entrepriseChargeeRef.current = true;
+    })();
+  }, []);
+  // L'administrateur enregistre le profil du magasin dans la base de données
+  useEffect(() => {
+    if (!entrepriseChargeeRef.current) return;
+    if (role !== "admin") return;
+    const cle = JSON.stringify(entreprise);
+    if (cle === entrepriseSauvegardeRef.current) return;
+    entrepriseSauvegardeRef.current = cle;
+    const minuteur = setTimeout(() => { try { sauvegarderEntrepriseSupabase(entreprise); } catch (e) {} }, 800);
+    return () => clearTimeout(minuteur);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entreprise, role]);
+  // Dès qu'un réglage change dans la base (profil du magasin ou durée des
+  // publicités), tous les téléphones le reçoivent tout de suite.
+  useEffect(() => {
+    const canal = abonnerParametresTempsReel((cle, valeur) => {
+      try {
+        if (cle === "entreprise" && valeur) {
+          const val = JSON.parse(valeur);
+          if (val && val.nom) { entrepriseSauvegardeRef.current = JSON.stringify(val); setEntreprise(val); }
+        } else if (cle === "duree_publicite") {
+          const j = parseInt(valeur); if (j) setDureePublicite(j);
+        }
+      } catch (e) {}
+    });
+    return () => { try { if (canal) supabase.removeChannel(canal); } catch (e) {} };
+  }, []);
+  // v70 — Comptes en temps réel : si un profil change (nom, numéro, photo),
+  // la liste des comptes se met à jour toute seule chez tout le monde.
+  useEffect(() => {
+    const canal = abonnerComptesTempsReel(() => {
+      (async () => {
+        try {
+          const { data, error } = await supabase.from("users").select("*");
+          if (!error && data && data.length > 0) setComptes(data);
+        } catch (e) {}
+      })();
+    });
+    return () => { try { if (canal) supabase.removeChannel(canal); } catch (e) {} };
+  }, []);
 
   useEffect(() => {
     try { localStorage.setItem("motopieces_next_vente", String(nextVente)); } catch {}
@@ -5539,6 +5644,7 @@ export default function App() {
             onNegocierPrix={negocierPrixArticle}
             userActif={userActif}
             comptes={comptes}
+            entreprise={entreprise}
           />
         </div>
       )}
@@ -5583,7 +5689,8 @@ export default function App() {
       )}
 
       {/* Messagerie photos / vidéos / textes / vocaux : contenu stocké dans les téléphones, purgé du serveur */}
-      {TALKIE_ROLES.includes(role) && (
+      {/* v69 : les clients y ont aussi accès pour échanger avec la boutique (secrétaire / administrateur) */}
+      {(TALKIE_ROLES.includes(role) || role === "client") && (
         <MessagerieEquipe role={role} userActif={userActif} comptes={comptes} />
       )}
     </div>
