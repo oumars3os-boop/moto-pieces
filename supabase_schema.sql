@@ -269,12 +269,7 @@ CREATE POLICY "Gestion produits_data" ON public.produits_data FOR ALL USING (tru
 -- ============================================================
 
 -- 1) Activer les notifications en direct pour la table des articles
--- (protégé : si la table est déjà activée, on continue sans erreur)
-DO $$
-BEGIN
-  ALTER PUBLICATION supabase_realtime ADD TABLE public.produits_data;
-EXCEPTION WHEN duplicate_object THEN NULL;
-END $$;
+ALTER PUBLICATION supabase_realtime ADD TABLE public.produits_data;
 
 -- 2) S'assurer que tout le monde peut lire les articles sans compte
 DROP POLICY IF EXISTS "Lecture publique produits_data" ON public.produits_data;
@@ -313,9 +308,7 @@ CREATE POLICY "Publication publique publicites_data" ON public.publicites_data F
 DROP POLICY IF EXISTS "Suppression publique publicites_data" ON public.publicites_data;
 CREATE POLICY "Suppression publique publicites_data" ON public.publicites_data FOR DELETE USING (true);
 
--- 4) Réglages partagés : durée des publicités (choisie par le développeur),
---     et depuis la v80 : liste des marques et liste des catégories de la boutique.
---     Elles sont enregistrées sous les clés « marques » et « categories ».
+-- 4) Réglages partagés : ici la durée des publicités en jours (choisie par le développeur)
 CREATE TABLE IF NOT EXISTS public.parametres_data (
   cle text PRIMARY KEY,
   valeur text
@@ -370,3 +363,47 @@ DROP POLICY IF EXISTS "Mise a jour publique messages" ON public.messages;
 CREATE POLICY "Mise a jour publique messages" ON public.messages FOR UPDATE USING (true);
 DROP POLICY IF EXISTS "Suppression publique messages" ON public.messages;
 CREATE POLICY "Suppression publique messages" ON public.messages FOR DELETE USING (true);
+
+
+-- ============================================================
+-- v71 : TEMPS RÉEL SUR TOUT (ventes, lignes de vente, comptes)
+-- À exécuter UNE FOIS dans Supabase (SQL Editor) puis « Run ».
+-- Sans risque : peut être relancé sans erreur.
+-- ============================================================
+DO $$ BEGIN ALTER PUBLICATION supabase_realtime ADD TABLE public.sales;
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN ALTER PUBLICATION supabase_realtime ADD TABLE public.sale_items;
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN ALTER PUBLICATION supabase_realtime ADD TABLE public.users;
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- Pour que les suppressions et modifications soient envoyées avec toutes les colonnes
+ALTER TABLE public.sales REPLICA IDENTITY FULL;
+ALTER TABLE public.sale_items REPLICA IDENTITY FULL;
+ALTER TABLE public.users REPLICA IDENTITY FULL;
+
+-- ============================================================
+-- v72 : RÉGLAGES DE LA BOUTIQUE ENREGISTRÉS EN LIGNE + TEMPS RÉEL
+-- Marques, catégories, photos, cases de rangement, infos entreprise,
+-- crédits, boutiques masquées, transferts de stock.
+-- À exécuter UNE FOIS dans Supabase (SQL Editor) puis « Run ».
+-- Sans risque : peut être relancé sans erreur.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS public.reglages_data (
+  equipe text PRIMARY KEY,
+  contenu jsonb DEFAULT '{}'::jsonb,
+  maj timestamptz DEFAULT now()
+);
+
+ALTER TABLE public.reglages_data ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Lecture publique reglages_data" ON public.reglages_data;
+CREATE POLICY "Lecture publique reglages_data" ON public.reglages_data FOR SELECT USING (true);
+DROP POLICY IF EXISTS "Ecriture publique reglages_data" ON public.reglages_data;
+CREATE POLICY "Ecriture publique reglages_data" ON public.reglages_data FOR INSERT WITH CHECK (true);
+DROP POLICY IF EXISTS "Mise a jour publique reglages_data" ON public.reglages_data;
+CREATE POLICY "Mise a jour publique reglages_data" ON public.reglages_data FOR UPDATE USING (true);
+
+DO $$ BEGIN ALTER PUBLICATION supabase_realtime ADD TABLE public.reglages_data;
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;

@@ -11,11 +11,28 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/context/AuthContext";
-import { supabase, synchroniserCompteSupabase, enregistrerVenteSupabase, majVenteSupabase, chargerVentesSupabase, sauvegarderProduitsSupabase, chargerProduitsSupabase, chargerTousProduitsSupabase, abonnerProduitsTempsReel, chargerPublicitesSupabase, ajouterPubliciteSupabase, supprimerPubliciteSupabase, abonnerPublicitesTempsReel, chargerDureePubliciteSupabase, sauvegarderDureePubliciteSupabase, chargerListeSupabase, sauvegarderListeSupabase, abonnerParametresTempsReel } from "@/lib/supabase";
+import { supabase, synchroniserCompteSupabase, supprimerCompteSupabase, enregistrerVenteSupabase, majVenteSupabase, chargerVentesSupabase, sauvegarderProduitsSupabase, chargerProduitsSupabase, chargerTousProduitsSupabase, abonnerProduitsTempsReel, chargerPublicitesSupabase, ajouterPubliciteSupabase, supprimerPubliciteSupabase, abonnerPublicitesTempsReel, chargerDureePubliciteSupabase, sauvegarderDureePubliciteSupabase, abonnerComptesTempsReel, abonnerVentesTempsReel, abonnerParametresTempsReel, sauvegarderReglagesSupabase, chargerReglagesSupabase, chargerTousReglagesSupabase, abonnerReglagesTempsReel } from "@/lib/supabase";
 import { extraireTexteImage } from "@/lib/ocr";
 import { demanderAssistantMistral } from "@/lib/mistral";
 import { verifierQualiteImage } from "@/lib/imageProcessor";
 import ModeRech from "@/components/ModeRech";
+
+/* ------------------------------------------------------------------ */
+/* Gestion des comptes : chaque action part AUSSI vers le serveur      */
+/* ------------------------------------------------------------------ */
+
+// Blocage / déblocage : le changement part aussitôt vers Supabase
+export const basculerBlocageCompte = (c, setComptes) => {
+  const bloque = !c.bloque;
+  setComptes(prev => prev.map(x => x.id === c.id ? { ...x, bloque } : x));
+  try { synchroniserCompteSupabase({ ...c, bloque }); } catch {}
+};
+
+// Suppression : enlevée de l'écran ET détruite sur le serveur (tous les appareils)
+export const retirerCompte = (c, setComptes) => {
+  setComptes(prev => prev.filter(x => x.id !== c.id));
+  try { supprimerCompteSupabase(c); } catch {}
+};
 
 // Le scanner mémorise la photo et le mot-clé du dernier scan (au cas où) : l'image est gardée sur le téléphone
 function memoriserScan(src, motCle) {
@@ -312,7 +329,7 @@ function BoutonSupprimer({ onSupprimer, label = "🗑️ Supprimer", duree = 500
 
 // ---------- Composants communs ----------
 
-function Produit({ p, onAjout, onRetirer, admin, onEditer, categories, qteDansPanier, onNegocierPrix, elementTalkie, comptes, userActif }) {
+function Produit({ p, onAjout, onRetirer, admin, onEditer, categories, qteDansPanier, onNegocierPrix, elementTalkie, comptes = [], userActif = null }) {
   const [flash, setFlash] = useState(false);
   const [flashMoins, setFlashMoins] = useState(false);
   const [openDetail, setOpenDetail] = useState(false);
@@ -334,6 +351,20 @@ function Produit({ p, onAjout, onRetirer, admin, onEditer, categories, qteDansPa
   };
 
   const nomBoutique = p.boutique || "MotoPièces Principal";
+
+  // Profil du magasin et du vendeur de cet article (affichés dans les détails)
+  const telProprio = (p.equipe || "").trim();
+  const proprietaire = (comptes || []).find(c => c.role === "admin" && (c.tel || "").trim() === telProprio)
+    || (telProprio === "" ? (comptes || []).find(c => c.role === "admin" && (c.tel || "").trim()) : null);
+  const vendeursBoutique = (comptes || []).filter(c =>
+    ["vendeur", "vendeur-secretaire", "secretaire"].includes(c.role) && (c.tel || "").trim() &&
+    ((c.equipe || "").trim() === (proprietaire?.tel || telProprio || "").trim()));
+  const ecrireViaChat = (tel) => {
+    setOpenDetail(false);
+    setTimeout(() => {
+      try { window.dispatchEvent(new CustomEvent("motopieces:ouvrir-messagerie", { detail: { tel: (tel || "").trim() } })); } catch (e) {}
+    }, 150);
+  };
 
   return (
     <>
@@ -368,6 +399,7 @@ function Produit({ p, onAjout, onRetirer, admin, onEditer, categories, qteDansPa
               <Badge variant="outline" className="text-[9px] sm:text-[10px] bg-blue-50 text-blue-800 border-blue-200">
                 🏪 {nomBoutique}
               </Badge>
+              {elementTalkie}
             </div>
           </div>
           <div className="flex items-center justify-between text-xs sm:text-sm">
@@ -416,30 +448,52 @@ function Produit({ p, onAjout, onRetirer, admin, onEditer, categories, qteDansPa
                 : <IconeMoto />}
             </div>
 
-            {/* 🏪 Profil du magasin (v74) : visible quand on clique sur l'article */}
+            {/* Profil du magasin + vendeur : s'affichent seulement ici, dans les détails de l'article */}
             <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg space-y-2">
               <div className="flex items-center justify-between">
-                <p className="text-[10px] text-blue-600 font-semibold uppercase tracking-wider">Profil du magasin</p>
+                <div>
+                  <p className="text-[10px] text-blue-600 font-semibold uppercase tracking-wider">🏪 Profil du magasin</p>
+                  <p className="font-bold text-blue-900 text-sm">{nomBoutique}</p>
+                </div>
                 <Badge className="bg-blue-600 text-white text-xs">Achat Direct</Badge>
               </div>
-              <p className="font-bold text-blue-900 text-sm">🏪 {nomBoutique}</p>
-              {(comptes || []).filter(c => c.role === "admin" && (c.tel || "").trim()).map(c => (
-                <div key={c.id || c.tel} className="bg-white rounded-lg p-2 border space-y-2">
-                  <div className="text-xs">
-                    <div className="font-semibold text-zinc-900">👑 {c.nom}</div>
-                    <div className="text-zinc-600">📞 {c.tel}</div>
+              {proprietaire && (
+                <div className="flex items-center gap-2 bg-white rounded-md border p-2">
+                  {proprietaire.photo
+                    ? <img src={proprietaire.photo} alt="" className="w-10 h-10 rounded-full object-cover border" />
+                    : <span className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center text-lg">👑</span>}
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-semibold truncate">{proprietaire.nom}</div>
+                    <div className="text-[11px] text-zinc-500">Administrateur · 📞 {proprietaire.tel}</div>
                   </div>
-                  <a
-                    href={"https://wa.me/" + (c.tel || "").replace(/[^+\d]/g, "").replace(/^\+/, "") + "?text=" + encodeURIComponent("Bonjour, je suis intéressé par : " + (p.nom || "un article"))}
-                    target="_blank" rel="noreferrer"
-                    className="w-full h-10 inline-flex items-center justify-center rounded-md bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold">
-                    💬 Causer sur WhatsApp
-                  </a>
+                  <a href={"tel:" + (proprietaire.tel || "").replace(/[^+\d]/g, "")}
+                    className="h-9 px-3 inline-flex items-center rounded-md bg-green-600 text-white text-xs font-bold shrink-0">📞</a>
+                </div>
+              )}
+              {vendeursBoutique.map(v => (
+                <div key={v.tel} className="flex items-center gap-2 bg-white rounded-md border p-2">
+                  {v.photo
+                    ? <img src={v.photo} alt="" className="w-10 h-10 rounded-full object-cover border" />
+                    : <span className="w-10 h-10 rounded-full bg-zinc-100 flex items-center justify-center text-lg">{v.role === "secretaire" ? "👩‍💼" : "🧑‍💼"}</span>}
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-semibold truncate">{v.nom}</div>
+                    <div className="text-[11px] text-zinc-500">{v.role === "secretaire" ? "Secrétaire" : "Vendeur"} · 📞 {v.tel}</div>
+                  </div>
+                  {userActif && (
+                    <button type="button" onClick={() => ecrireViaChat(v.tel)}
+                      className="h-9 px-3 rounded-md bg-purple-600 text-white text-xs font-bold shrink-0">💬</button>
+                  )}
                 </div>
               ))}
               {userActif
-                ? elementTalkie
-                : <p className="text-[11px] text-zinc-500">Connectez-vous pour causer dans l'application.</p>}
+                ? (
+                  <Button className="w-full bg-green-600 hover:bg-green-700 text-white font-bold"
+                    onClick={() => ecrireViaChat((vendeursBoutique[0] || proprietaire || {}).tel)}
+                    disabled={!(vendeursBoutique[0] || proprietaire)}>
+                    💬 Écrire au magasin (photos, messages)
+                  </Button>
+                )
+                : <p className="text-[11px] text-blue-800">Connecte-toi avec ton compte client pour écrire au magasin et envoyer des photos.</p>}
             </div>
 
             <div className="grid grid-cols-2 gap-2 text-xs">
@@ -547,7 +601,7 @@ function Panier({ items, onRetirer, onVider, boutonCommande }) {
   );
 }
 
-function LigneVente({ v, onConfirmer, onSaisirPrix, saisiePrix }) {
+function LigneVente({ v, onConfirmer, onSaisirPrix, saisiePrix, onAnnuler }) {
   const prixLigne = (it) => it.prixLigne ?? (it.p ? it.p.prix : it.prix);
   const qteLigne = (it) => it.qte || 1;
   const totalCalcule = v.items.reduce((s, it) => s + prixLigne(it) * qteLigne(it), 0);
@@ -567,7 +621,9 @@ function LigneVente({ v, onConfirmer, onSaisirPrix, saisiePrix }) {
               ? <Badge className="bg-green-600">Payée ✅</Badge>
               : v.statut === "crédit"
                 ? <Badge className="bg-amber-600">Crédit 🔴</Badge>
-                : <Badge variant="destructive">En attente</Badge>}
+                : v.statut === "annulée"
+                  ? <Badge className="bg-zinc-500 text-white">Annulée 🚫</Badge>
+                  : <Badge variant="destructive">En attente</Badge>}
           </div>
         </div>
 
@@ -598,6 +654,14 @@ function LigneVente({ v, onConfirmer, onSaisirPrix, saisiePrix }) {
           })}
         </div>
       </CardContent>
+      {/* Annulation d'une commande : réservée au vendeur / à l'administrateur */}
+      {onAnnuler && v.statut !== "annulée" && (
+        <div className="px-3 pb-1">
+          <BoutonSupprimer label="🚫 Annuler la commande (maintenir 1s)" duree={1000}
+            boutonClass="w-full h-10 text-sm bg-red-600 hover:bg-red-700 text-white"
+            onSupprimer={() => onAnnuler(v.id)} />
+        </div>
+      )}
       {onConfirmer && v.statut !== "payée" && v.statut !== "crédit" && (
         <div className="px-3 pb-3">
           {saisiePrix && v.items.some(it => !prixLigne(it)) ? (
@@ -613,9 +677,44 @@ function LigneVente({ v, onConfirmer, onSaisirPrix, saisiePrix }) {
   );
 }
 
+// ---------- Suivi des commandes du client (en cours, payées, annulées) ----------
+
+function MesCommandes({ ventes = [], userActif }) {
+  const [ouvert, setOuvert] = useState(false);
+  const [filtre, setFiltre] = useState("cours");
+  const monTel = (userActif?.tel || "").trim();
+  const mesVentes = monTel ? (ventes || []).filter(v => (v.tel || "").trim() === monTel) : [];
+  const enCours = mesVentes.filter(v => v.statut !== "payée" && v.statut !== "annulée");
+  const payees = mesVentes.filter(v => v.statut === "payée");
+  const annulees = mesVentes.filter(v => v.statut === "annulée");
+  const liste = filtre === "cours" ? enCours : filtre === "payees" ? payees : annulees;
+  if (!monTel) return null;
+  return (
+    <div className="bg-white border-b shadow-sm px-4 py-2 space-y-2">
+      <button className="w-full flex items-center justify-between rounded-lg border border-blue-200 bg-blue-50 hover:bg-blue-100 px-3 py-2 font-bold text-blue-800"
+        onClick={() => setOuvert(!ouvert)}>
+        <span>📦 Mes commandes ({mesVentes.length})</span>
+        <span>{ouvert ? "▲" : "▼"}</span>
+      </button>
+      {ouvert && (
+        <div>
+          <div className="flex flex-wrap gap-2 mb-2">
+            <Button size="sm" variant={filtre === "cours" ? "default" : "outline"} onClick={() => setFiltre("cours")}>⏳ En cours ({enCours.length})</Button>
+            <Button size="sm" variant={filtre === "payees" ? "default" : "outline"} onClick={() => setFiltre("payees")}>✅ Payées ({payees.length})</Button>
+            <Button size="sm" variant={filtre === "annulees" ? "default" : "outline"} onClick={() => setFiltre("annulees")}>🚫 Annulées ({annulees.length})</Button>
+          </div>
+          {liste.length === 0
+            ? <p className="text-sm text-muted-foreground text-center py-3">Aucune commande dans cette catégorie.</p>
+            : liste.map(v => <LigneVente key={v.id} v={v} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ---------- Vue Client ----------
 
-function VueClient({ produits, marques, creerVente, photosCategories, photosMarques, categories, onNegocierPrix, userActif, comptes, entreprise }) {
+function VueClient({ produits, marques, creerVente, photosCategories, photosMarques, categories, onNegocierPrix, userActif, comptes, entreprise, ventes = [] }) {
   const [recherche, setRecherche] = useState("");
   const [cat, setCat] = useState("toutes");
   const [marque, setMarque] = useState("toutes");
@@ -769,15 +868,16 @@ function VueClient({ produits, marques, creerVente, photosCategories, photosMarq
           </Dialog>
         </div>
       )}
+      {userActif && <MesCommandes ventes={ventes} userActif={userActif} />}
       <Filtres recherche={recherche} setRecherche={setRecherche} cat={cat} setCat={setCat}
         marque={marque} setMarque={setMarque} marques={marques} tri={tri} setTri={setTri} photosCategories={photosCategories} photosMarques={photosMarques} categories={categories} />
       <main className="max-w-[1400px] mx-auto px-3 sm:px-6 lg:px-8 pb-24">
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2 sm:gap-4">
           {liste.map(p => <Produit key={p.id} p={p} onAjout={ajouter} onRetirer={retirer} categories={categories}
+            comptes={comptes} userActif={userActif}
             qteDansPanier={panier.find(i => i.p.id === p.id)?.qte || 0}
             onNegocierPrix={onNegocierPrix}
-            elementTalkie={userActif ? <TalkieClientArticle article={p} userActif={userActif} comptes={comptes} /> : null}
-            comptes={comptes} userActif={userActif} />)}
+            elementTalkie={userActif ? <TalkieClientArticle article={p} userActif={userActif} comptes={comptes} /> : null} />)}
         </div>
       </main>
 
@@ -876,7 +976,7 @@ function VueClient({ produits, marques, creerVente, photosCategories, photosMarq
 
 // ---------- Vue Vendeur ----------
 
-function VueVendeur({ produits, ventes, creerVente, categories = [], credits = [], cases = [] }) {
+function VueVendeur({ produits, ventes, creerVente, categories = [], credits = [], cases = [], annulerVente = () => {} }) {
   const [onglet, setOnglet] = useState("vendre");
   const [photos, setPhotos] = useState([]); // [{ src, article, qte }]
   // Ajout des marchandises par le vendeur
@@ -1298,7 +1398,7 @@ function VueVendeur({ produits, ventes, creerVente, categories = [], credits = [
             </CardContent></Card>
             <Card className="bg-white"><CardContent className="p-3">
               <div className="text-xs text-muted-foreground">En attente de paiement</div>
-              <div className="text-xl font-bold text-red-600">{ventes.filter(v => v.statut !== "payée").length}</div>
+              <div className="text-xl font-bold text-red-600">{ventes.filter(v => v.statut !== "payée" && v.statut !== "annulée").length}</div>
             </CardContent></Card>
           </div>
           <div className="flex flex-wrap gap-2 mb-4">
@@ -1307,8 +1407,8 @@ function VueVendeur({ produits, ventes, creerVente, categories = [], credits = [
             <Button variant={filtreVentes === "attente" ? "default" : "outline"} className={filtreVentes === "attente" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setFiltreVentes("attente")}>En attente / Crédits</Button>
           </div>
           {ventes.length === 0 ? <p className="text-muted-foreground">Aucune vente enregistrée pour le moment.</p> :
-            (filtreVentes === "toutes" ? ventes : ventes.filter(v => filtreVentes === "payée" ? v.statut === "payée" : v.statut !== "payée"))
-              .map(v => <LigneVente key={v.id} v={v} />)}
+            (filtreVentes === "toutes" ? ventes : ventes.filter(v => filtreVentes === "payée" ? v.statut === "payée" : (v.statut !== "payée" && v.statut !== "annulée")))
+              .map(v => <LigneVente key={v.id} v={v} onAnnuler={annulerVente} />)}
         </div>
       ) : onglet === "historique" ? (
         <HistoriqueGlobal ventes={ventes} />
@@ -1741,7 +1841,7 @@ function GestionCredits({ credits, ajouterCredit, ajouterVersement, validerCredi
   );
 }
 
-function VueSecretaire({ ventes, confirmerPaiement, majPrixLigne, modePrix, entreprise, credits, ajouterCredit, ajouterVersement, validerCredit }) {
+function VueSecretaire({ ventes, confirmerPaiement, annulerVente = () => {}, majPrixLigne, modePrix, entreprise, credits, ajouterCredit, ajouterVersement, validerCredit }) {
   const [ongletSec, setOngletSec] = useState("paiements"); // "paiements" | "credits"
   const [filtre, setFiltre] = useState("toutes");
   const [questionRecu, setQuestionRecu] = useState(null); // après paiement : propose l'impression du reçu
@@ -1800,7 +1900,7 @@ function VueSecretaire({ ventes, confirmerPaiement, majPrixLigne, modePrix, entr
       )}
       {liste.length === 0 ? <p className="text-muted-foreground">Aucune vente dans cette catégorie.</p> : liste.map(v => (
         <div key={v.id}>
-          <LigneVente v={v} onConfirmer={confirmerEtProposer}
+          <LigneVente v={v} onConfirmer={confirmerEtProposer} onAnnuler={annulerVente}
             saisiePrix={saisie} onSaisirPrix={majPrixLigne} />
           {/* v65 : bouton pour réimprimer le reçu de CETTE commande seulement */}
           <div className="px-3 pb-2 flex justify-end">
@@ -1836,13 +1936,14 @@ function VueSecretaire({ ventes, confirmerPaiement, majPrixLigne, modePrix, entr
 
 // Vue combinée : une personne qui est vendeur ET secrétaire en même temps
 // Contenu du menu développeur : code + création/suppression des comptes administrateurs
-function ContenuMenuDev({ codeOk, setCodeOk, codeSaisi, setCodeSaisi, nouvelAdmin, setNouvelAdmin, comptes, setComptes, fermer, CODE_DEV, dureePublicite = 1, onChangerDuree = () => {} }) {
+function ContenuMenuDev({ codeOk, setCodeOk, codeSaisi, setCodeSaisi, nouvelAdmin, setNouvelAdmin, comptes, setComptes, fermer, CODE_DEV, dureePublicite = 1, onChangerDuree = () => {}, produits = [], boutiquesMasquees = [], basculerVisibiliteBoutique = () => {} }) {
   const [erreur, setErreur] = useState("");
   const [pinGenere, setPinGenere] = useState(null); // { nom, pin }
   const reinitialiserPinAdmin = (c) => {
     const nouveau = String(Math.floor(1000 + Math.random() * 9000));
     setComptes(prev => prev.map(x => x.id === c.id ? { ...x, pin: nouveau } : x));
     setPinGenere({ nom: c.nom, pin: nouveau });
+    try { synchroniserCompteSupabase({ ...c, pin: nouveau }); } catch {}
   };
   // Blocage à distance : le changement part aussitôt vers le serveur (Supabase)
   const bloquerCompteADistance = (c) => {
@@ -1850,6 +1951,21 @@ function ContenuMenuDev({ codeOk, setCodeOk, codeSaisi, setCodeSaisi, nouvelAdmi
     setComptes(prev => prev.map(x => x.id === c.id ? { ...x, bloque } : x));
     try { synchroniserCompteSupabase({ ...c, bloque }); } catch {}
   };
+
+  // Chaque magasin (boutique) avec son administrateur : le développeur contrôle la visibilité
+  const boutiquesDev = useMemo(() => {
+    const map = new Map();
+    (produits || []).forEach(p => {
+      const nom = p.boutique || "MotoPièces Principal";
+      if (!map.has(nom)) {
+        const telEquipe = (p.equipe || "").trim();
+        const admin = (comptes || []).find(c => c.role === "admin" && (c.tel || "").trim() === telEquipe);
+        map.set(nom, { nom, adminNom: (admin && admin.nom) || "", nbArticles: 0 });
+      }
+      map.get(nom).nbArticles++;
+    });
+    return Array.from(map.values());
+  }, [produits, comptes]);
   if (!codeOk) {
     return (
       <div className="grid gap-1.5">
@@ -1916,11 +2032,11 @@ function ContenuMenuDev({ codeOk, setCodeOk, codeSaisi, setCodeSaisi, nouvelAdmi
                     onClick={() => reinitialiserPinAdmin(c)}>🔑 Réinitialiser PIN</Button>
                   <Button size="sm" variant="outline"
                     className={c.bloque ? "border-green-300 text-green-700 hover:bg-green-50" : "border-amber-300 text-amber-700 hover:bg-amber-50"}
-                    onClick={() => setComptes(prev => prev.map(x => x.id === c.id ? { ...x, bloque: !x.bloque } : x))}>
+                    onClick={() => basculerBlocageCompte(c, setComptes)}>
                     {c.bloque ? "🔓 Débloquer" : "🔒 Bloquer"}
                   </Button>
                   <BoutonSupprimer label="🗑️ Supprimer"
-                    onSupprimer={() => setComptes(prev => prev.filter(x => x.id !== c.id))} />
+                    onSupprimer={() => retirerCompte(c, setComptes)} />
                 </div>
               </div>
             </div>
@@ -1956,11 +2072,35 @@ function ContenuMenuDev({ codeOk, setCodeOk, codeSaisi, setCodeSaisi, nouvelAdmi
           <p className="text-muted-foreground text-sm mt-2">Aucun compte inscrit pour le moment.</p>
         )}
       </div>
+
+      {/* Magasins : masquer / réafficher les marchandises pour les clients — réservé au développeur */}
+      <div className="pt-3 mt-2 border-t">
+        <Label>🏪 Magasins — visibilité des marchandises ({boutiquesDev.length})</Label>
+        <p className="text-[11px] text-muted-foreground mt-1">Maintenir le bouton 5 secondes pour masquer ou réafficher un magasin. Un magasin masqué devient privé : les clients ne voient plus ses marchandises.</p>
+        {boutiquesDev.map(b => {
+          const estMasquee = boutiquesMasquees.includes(b.nom);
+          return (
+            <div key={b.nom} className={`mt-2 flex items-center justify-between gap-2 border rounded-lg p-2 ${estMasquee ? "bg-red-50 border-red-200" : "bg-zinc-50 border-zinc-200"}`}>
+              <span className="text-sm font-medium">
+                🏪 {b.nom}{b.adminNom ? <span className="text-muted-foreground"> — 👑 {b.adminNom}</span> : ""}
+                {estMasquee
+                  ? <Badge className="bg-red-600 text-white text-[10px] ml-1">🙈 Privé</Badge>
+                  : <Badge className="bg-green-600 text-white text-[10px] ml-1">👁️ Visible</Badge>}
+                <span className="block text-[11px] font-normal text-muted-foreground">{b.nbArticles} marchandise{b.nbArticles > 1 ? "s" : ""}</span>
+              </span>
+              <BoutonSupprimer label={estMasquee ? "👁️ Réafficher (5 s)" : "🙈 Masquer (5 s)"} duree={5000}
+                boutonClass={"h-9 text-xs px-3 shrink-0 text-white " + (estMasquee ? "bg-green-600 hover:bg-green-700" : "bg-red-600 hover:bg-red-700")}
+                onSupprimer={() => basculerVisibiliteBoutique(b.nom)} />
+            </div>
+          );
+        })}
+        {boutiquesDev.length === 0 && <p className="text-muted-foreground text-sm mt-2">Aucun magasin pour le moment.</p>}
+      </div>
     </div>
   );
 }
 
-function VueVendeurSecretaire({ produits, marques, ventes, creerVente, confirmerPaiement, majPrixLigne, modePrix, entreprise, credits, ajouterCredit, ajouterVersement, validerCredit, categories, cases }) {
+function VueVendeurSecretaire({ produits, marques, ventes, creerVente, confirmerPaiement, annulerVente = () => {}, majPrixLigne, modePrix, entreprise, credits, ajouterCredit, ajouterVersement, validerCredit, categories, cases }) {
   const [vue, setVue] = useState("vendre");
   return (
     <div>
@@ -1984,9 +2124,9 @@ function VueVendeurSecretaire({ produits, marques, ventes, creerVente, confirmer
       )}
       {vue === "vendre"
         ? <VueVendeur produits={produits} ventes={ventes} creerVente={creerVente}
-            categories={categories} credits={credits} cases={cases} />
+            categories={categories} credits={credits} cases={cases} annulerVente={annulerVente} />
         : vue === "secretaire"
-          ? <VueSecretaire ventes={ventes} confirmerPaiement={confirmerPaiement} majPrixLigne={majPrixLigne} modePrix={modePrix} entreprise={entreprise}
+          ? <VueSecretaire ventes={ventes} confirmerPaiement={confirmerPaiement} annulerVente={annulerVente} majPrixLigne={majPrixLigne} modePrix={modePrix} entreprise={entreprise}
               credits={credits} ajouterCredit={ajouterCredit} ajouterVersement={ajouterVersement} validerCredit={validerCredit} />
           : null}
     </div>
@@ -1994,7 +2134,7 @@ function VueVendeurSecretaire({ produits, marques, ventes, creerVente, confirmer
 }
 
 function VueAdmin({
-  produits, setProduits, marques, setMarques, ventes, genererMarque,
+  produits, setProduits, marques, setMarques, ventes, genererMarque, annulerVente = () => {},
   photosCategories, setPhotosCategories, photosMarques, setPhotosMarques,
   modePrix, setModePrix, categories, setCategories, comptes, setComptes,
   entreprise, setEntreprise, boutiquesMasquees = [], basculerVisibiliteBoutique = () => {},
@@ -2059,6 +2199,7 @@ function VueAdmin({
     const cle = String(Math.floor(100000 + Math.random() * 900000));
     setComptes(prev => prev.map(x => x.id === c.id ? { ...x, cle } : x));
     setCleAffichee({ nom: c.nom, tel: c.tel, cle });
+    try { synchroniserCompteSupabase({ ...c, cle }); } catch {}
   };
 
   const creerCompte = () => {
@@ -2202,7 +2343,6 @@ function VueAdmin({
         <Button variant={onglet === "marques" ? "default" : "outline"} className={onglet === "marques" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("marques")}>🏍️ Marques ({marques.length})</Button>
         <Button variant={onglet === "categories" ? "default" : "outline"} className={onglet === "categories" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("categories")}>🖼️ Catégories</Button>
         <Button variant={onglet === "cases" ? "default" : "outline"} className={onglet === "cases" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("cases")}>🗄️ Cases ({cases.length})</Button>
-        <Button variant={onglet === "boutiques" ? "default" : "outline"} className={onglet === "boutiques" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("boutiques")}>🏪 Magasins ({toutesLesBoutiques.length})</Button>
         <Button variant={onglet === "transferts" ? "default" : "outline"} className={onglet === "transferts" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("transferts")}>🔄 Transferts ({transfertsStock.length})</Button>
         <Button variant={onglet === "credits" ? "default" : "outline"} className={onglet === "credits" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("credits")}>💳 Crédits / Dettes ({credits.filter(c => c.statut !== "payé").length})</Button>
         <Button variant={onglet === "utilisateurs" ? "default" : "outline"} className={onglet === "utilisateurs" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("utilisateurs")}>👥 Utilisateurs</Button>
@@ -2683,11 +2823,11 @@ function VueAdmin({
                       onClick={() => genererCle(c)}>🔑 Clé</Button>
                     <Button size="sm" variant="outline"
                       className={c.bloque ? "border-green-300 text-green-700 hover:bg-green-50" : "border-amber-300 text-amber-700 hover:bg-amber-50"}
-                      onClick={() => setComptes(prev => prev.map(x => x.id === c.id ? { ...x, bloque: !x.bloque } : x))}>
+                      onClick={() => basculerBlocageCompte(c, setComptes)}>
                       {c.bloque ? "🔓 Débloquer" : "🔒 Bloquer"}
                     </Button>
                     <BoutonSupprimer label="🗑️ Supprimer"
-                      onSupprimer={() => setComptes(prev => prev.filter(x => x.id !== c.id))} />
+                      onSupprimer={() => retirerCompte(c, setComptes)} />
                   </div>
                 )}
               </CardContent>
@@ -2713,11 +2853,11 @@ function VueAdmin({
                   <div className="flex items-center gap-2">
                     <Button size="sm" variant="outline"
                       className={c.bloque ? "border-green-300 text-green-700 hover:bg-green-50" : "border-amber-300 text-amber-700 hover:bg-amber-50"}
-                      onClick={() => setComptes(prev => prev.map(x => x.id === c.id ? { ...x, bloque: !x.bloque } : x))}>
+                      onClick={() => basculerBlocageCompte(c, setComptes)}>
                       {c.bloque ? "🔓 Débloquer" : "🔒 Bloquer"}
                     </Button>
                     <BoutonSupprimer label="🗑️ Supprimer"
-                      onSupprimer={() => setComptes(prev => prev.filter(x => x.id !== c.id))} />
+                      onSupprimer={() => retirerCompte(c, setComptes)} />
                   </div>
                 </CardContent>
               </Card>
@@ -2726,58 +2866,6 @@ function VueAdmin({
               <p className="text-muted-foreground text-sm">Aucun client n'a encore commandé tes articles. Dès qu'un client achète un de tes articles, son compte apparaît ici.</p>
             )}
           </div>
-        </div>
-      )}
-
-      {onglet === "boutiques" && (
-        <div className="max-w-6xl mx-auto px-4 py-4 space-y-4">
-          <Card className="bg-white border shadow-sm">
-            <CardHeader className="p-4 border-b">
-              <CardTitle className="text-lg font-bold flex items-center justify-between">
-                <span>🏪 Contrôle de Visibilité des Magasins / Boutiques</span>
-                <Badge variant="outline" className="bg-blue-50 text-blue-800 border-blue-200">🔒 Rôle Administrateur</Badge>
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="p-4 space-y-4">
-              <p className="text-xs text-muted-foreground">
-                Masquez ou réaffichez en un clic l'intégralité des marchandises associées à une boutique spécifique sur l'interface client. Lorsqu'une boutique est masquée, ses articles n'apparaissent plus dans le catalogue général.
-              </p>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {toutesLesBoutiques.map(nomBoutique => {
-                  const estMasquee = boutiquesMasquees.includes(nomBoutique);
-                  const nbArticles = produits.filter(p => (p.boutique || "MotoPièces Principal") === nomBoutique).length;
-
-                  return (
-                    <div key={nomBoutique} className={`p-4 border rounded-lg flex items-center justify-between gap-3 transition ${estMasquee ? "bg-red-50 border-red-200" : "bg-zinc-50 border-zinc-200"}`}>
-                      <div>
-                        <p className="font-bold text-sm text-zinc-900 flex items-center gap-2">
-                          🏪 {nomBoutique}
-                          {estMasquee ? (
-                            <Badge className="bg-red-600 text-white text-[10px]">🙈 Masquée Client</Badge>
-                          ) : (
-                            <Badge className="bg-green-600 text-white text-[10px]">👁️ Visible Client</Badge>
-                          )}
-                        </p>
-                        <p className="text-xs text-zinc-500 mt-1">
-                          {nbArticles} marchandise{nbArticles > 1 ? "s" : ""} associée{nbArticles > 1 ? "s" : ""}
-                        </p>
-                      </div>
-
-                      <Button
-                        size="sm"
-                        variant={estMasquee ? "default" : "outline"}
-                        className={estMasquee ? "bg-green-600 hover:bg-green-700 text-white text-xs font-semibold" : "border-red-300 text-red-700 hover:bg-red-50 text-xs font-semibold"}
-                        onClick={() => basculerVisibiliteBoutique(nomBoutique)}
-                      >
-                        {estMasquee ? "👁️ Réafficher" : "🙈 Masquer"}
-                      </Button>
-                    </div>
-                  );
-                })}
-              </div>
-            </CardContent>
-          </Card>
         </div>
       )}
 
@@ -2896,7 +2984,7 @@ function VueAdmin({
         <div className="max-w-6xl mx-auto px-4 py-4">
           {ventes.length === 0 ? <p className="text-muted-foreground">Aucune vente.</p> : ventes.map(v => (
             <div key={v.id}>
-              <LigneVente v={v} />
+              <LigneVente v={v} onAnnuler={annulerVente} />
               <div className="px-3 pb-2 flex justify-end">
                 <Button size="sm" variant="outline" onClick={() => setFacture(v)}>🧾 Facture</Button>
                 <Button size="sm" variant="outline" className="ml-2" onClick={() => setRecuVente(v)}>🧾 Reçu</Button>
@@ -3894,14 +3982,25 @@ function MessagerieEquipe({ role, userActif, comptes }) {
   const lesAdmins = (comptes || []).filter(c => c.role === "admin" && (c.tel || "").trim() !== monTel);
   // v69 : échange direct entre le client et la boutique (secrétaire / administrateur)
   const mesBoutiques = (role === "client")
-    ? (comptes || []).filter(c => (c.role === "admin" || c.role === "secretaire") && (c.tel || "").trim() && (c.tel || "").trim() !== monTel)
+    ? (comptes || []).filter(c => ["admin", "secretaire", "vendeur", "vendeur-secretaire"].includes(c.role) && (c.tel || "").trim() && (c.tel || "").trim() !== monTel)
     : [];
   // v69 : la boutique (administrateur / secrétaire) voit ses clients pour répondre
-  const mesClients = (estAdmin || role === "secretaire")
+  const mesClients = (estAdmin || ["secretaire", "vendeur", "vendeur-secretaire"].includes(role))
     ? (comptes || []).filter(c => c.role === "client" && (c.tel || "").trim() && (c.tel || "").trim() !== monTel)
     : [];
 
   const canalIdPerso = (tel) => "perso:" + [monTel, tel].sort().join("|");
+
+  // Ouverture depuis les détails d'un article : le client tombe directement sur la bonne personne du magasin
+  useEffect(() => {
+    const ouvrir = (e) => {
+      const tel = (e?.detail?.tel || "").trim();
+      if (tel) setCanal(tel);
+      setNonLus(0); setNotification(null); setOuvert(true);
+    };
+    window.addEventListener("motopieces:ouvrir-messagerie", ouvrir);
+    return () => window.removeEventListener("motopieces:ouvrir-messagerie", ouvrir);
+  }, []);
   const idDuCanal = (c) => c === "equipe" ? "equipe:" + maCle : c === "admins" ? "admins" : canalIdPerso(c);
   const titreDuCanal = (c) => c === "equipe" ? "👥 Mon équipe" : c === "admins" ? "👑 Espace Admins" : "👤 " + (((comptes || []).find(x => (x.tel || "").trim() === c) || {}).nom || c);
 
@@ -3936,7 +4035,7 @@ function MessagerieEquipe({ role, userActif, comptes }) {
       ...(estAdmin ? lesAdmins.map(a => canalIdPerso((a.tel || "").trim())) : []),
       // v69 : le client discute avec la boutique ; la boutique (admin / secrétaire) reçoit ses clients
       ...(role === "client" ? mesBoutiques.map(b => canalIdPerso((b.tel || "").trim())) : []),
-      ...((estAdmin || role === "secretaire") ? mesClients.map(cl => canalIdPerso((cl.tel || "").trim())) : []),
+      ...((estAdmin || ["secretaire", "vendeur", "vendeur-secretaire"].includes(role)) ? mesClients.map(cl => canalIdPerso((cl.tel || "").trim())) : []),
     ];
     const verifier = async () => {
       try {
@@ -4277,7 +4376,7 @@ function MessagerieEquipe({ role, userActif, comptes }) {
             {/* v69 : échange client ↔ boutique (secrétaire / administrateur) */}
             {(role === "client" ? mesBoutiques : mesClients).map(c => (
               <Button key={c.tel} variant={canal === (c.tel || "").trim() ? "default" : "outline"} className={canal === (c.tel || "").trim() ? "ring-2 ring-purple-600 ring-offset-1" : ""} onClick={() => setCanal((c.tel || "").trim())}>
-                {role === "client" ? (c.role === "secretaire" ? "👩‍💼" : "🏪") : "🛍️"} {c.nom}
+                {role === "client" ? (c.role === "secretaire" ? "👩‍💼" : c.role === "vendeur" || c.role === "vendeur-secretaire" ? "🧑‍🔧" : "👑") : "🛍️"} {c.nom}
               </Button>
             ))}
           </div>
@@ -4627,9 +4726,13 @@ export default function App() {
     try { return parseInt(localStorage.getItem("motopieces_duree_pub")) || 1; } catch { return 1; }
   });
   useEffect(() => {
-    (async () => {
+    const charger = async () => {
       try { const j = await chargerDureePubliciteSupabase(); if (j) setDureePublicite(j); } catch (e) {}
-    })();
+    };
+    charger();
+    // TEMPS RÉEL : si le développeur change la durée, tous les téléphones la reçoivent aussitôt
+    const canal = abonnerParametresTempsReel(() => charger());
+    return () => { try { if (canal) supabase.removeChannel(canal); } catch (e) {} };
   }, []);
   const changerDureePublicite = async (j) => {
     const jours = (parseInt(j) || 1);
@@ -4824,8 +4927,57 @@ export default function App() {
       }
     }
 
+    // Rafraîchissement en direct des comptes : le serveur fait foi (ajout, modification, blocage, suppression)
+    async function rafraichirComptes() {
+      try {
+        const { data, error } = await supabase.from("users").select("*");
+        if (!error && Array.isArray(data) && data.length > 0) setComptes(data);
+      } catch (e) { console.warn("Temps réel comptes:", e); }
+    }
+
+    // Rafraîchissement en direct des ventes : on met à jour les ventes connues (statut, prix, articles) et on ajoute les nouvelles
+    async function rafraichirVentes() {
+      try {
+        const enLigne = await chargerVentesSupabase();
+        const valides = (enLigne || []).filter(s =>
+          (s.items || []).length > 0 && (s.statut === "payée" ? Number(s.total) > 0 : true));
+        if (valides.length === 0) return;
+        setVentes(prev => {
+          const parServeur = new Map(valides.map(s => [String(s.id), s]));
+          const dejaVus = new Set();
+          const misAJour = (prev || []).map(v => {
+            const idSrv = String(v.supabase_id || v.id);
+            const s = parServeur.get(idSrv);
+            if (!s) return v;
+            dejaVus.add(idSrv);
+            return { ...v, ...s, id: v.id, supabase_id: s.id };
+          });
+          const nouvelles = valides.filter(s => !dejaVus.has(String(s.id)) && !misAJour.some(v => String(v.id) === String(s.id)));
+          return nouvelles.length ? [...nouvelles, ...misAJour] : misAJour;
+        });
+      } catch (e) { console.warn("Temps réel ventes:", e); }
+    }
+
     chargerComptesSupabase();
     chargerVentesEnLigne();
+
+    // TEMPS RÉEL : dès qu'un compte ou une vente change sur le serveur, tous les téléphones se mettent à jour
+    let minuteurComptes = null, minuteurVentes = null;
+    const canalComptes = abonnerComptesTempsReel(() => {
+      clearTimeout(minuteurComptes);
+      minuteurComptes = setTimeout(rafraichirComptes, 400);
+    });
+    const canalVentes = abonnerVentesTempsReel(() => {
+      clearTimeout(minuteurVentes);
+      minuteurVentes = setTimeout(rafraichirVentes, 600);
+    });
+    // Filet de sécurité : si la connexion en direct coupe, on rafraîchit toutes les 30 secondes
+    const filet = setInterval(() => { rafraichirComptes(); rafraichirVentes(); }, 30000);
+    return () => {
+      clearTimeout(minuteurComptes); clearTimeout(minuteurVentes); clearInterval(filet);
+      try { if (canalComptes) supabase.removeChannel(canalComptes); } catch (e) {}
+      try { if (canalVentes) supabase.removeChannel(canalVentes); } catch (e) {}
+    };
   }, []);
 
   // Synchronisation directe avec l'état d'authentification Supabase en ligne
@@ -4908,22 +5060,9 @@ export default function App() {
   const cleProduits = (role === "admin")
     ? ((userActif?.tel || "").trim())
     : ((userActif?.equipe || "").trim());
-  const estArticleDeMaCle = (p) => {
-    const eq = (p.equipe || "").trim();
-    if (eq === cleProduits) return true;
-    if (role === "admin") {
-      // v70 — réparation : les articles enregistrés avant (étiquette vide ou
-      // vieille clé) appartiennent à l'administrateur. Il les récupère et les
-      // renvoie sur le serveur sous sa clé, pour que les clients les voient.
-      if (!eq) return true;
-      const autreAdmin = (comptes || []).some(c =>
-        c.role === "admin" && (c.tel || "").trim() &&
-        (c.tel || "").trim() !== ((userActif?.tel || "")).trim() &&
-        (c.tel || "").trim() === eq);
-      return !autreAdmin;
-    }
-    return false;
-  };
+  const estArticleDeMaCle = (p) =>
+    ((p.equipe || "").trim() === cleProduits) ||
+    (!(p.equipe || "").trim() && role === "admin");
 
   // Chargement automatique des articles depuis la base de données dès la connexion :
   // si le téléphone change ou est perdu, les articles reviennent tout seuls.
@@ -4933,15 +5072,22 @@ export default function App() {
     (async () => {
       try {
         if (role === "client") {
-          // Le client voit les articles de toutes les boutiques : chargement direct
-          // de TOUS les articles, sans dépendre de la liste des comptes ni des rôles.
-          const tout = await chargerTousProduitsSupabase();
-          if (annule || !Array.isArray(tout)) return;
+          // Le client voit les articles de toutes les boutiques : on charge chaque équipe d'admin.
+          const telsAdmins = (comptes || [])
+            .filter(c => c.role === "admin")
+            .map(c => (c.tel || "").trim())
+            .filter(Boolean);
+          const listes = await Promise.all(telsAdmins.map(t => chargerProduitsSupabase(t)));
+          if (annule) return;
           setProduits(prev => {
-            const cle = (p) => String(p.id) + "|" + ((p.equipe || "")).trim();
-            const cles = new Set(tout.map(cle));
-            const locaux = prev.filter(p => !cles.has(cle(p)));
-            return [...locaux, ...tout];
+            const equipesServeur = new Set();
+            const duServeur = [];
+            listes.forEach((liste, i) => (liste || []).forEach(p => {
+              equipesServeur.add(telsAdmins[i]);
+              duServeur.push({ ...p, equipe: (p.equipe || telsAdmins[i]) });
+            }));
+            const locaux = prev.filter(p => !equipesServeur.has((p.equipe || "").trim()));
+            return [...locaux, ...duServeur];
           });
         } else if (cleProduits) {
           const liste = await chargerProduitsSupabase(cleProduits);
@@ -5007,73 +5153,13 @@ export default function App() {
     return () => { try { if (canal && supabase) supabase.removeChannel(canal); } catch (e) {} clearInterval(minuteur); };
   }, []);
 
-  // ============================================================
-  // v80 — Marques et catégories partagées : elles sont enregistrées
-  // dans la base de données, donc elles restent après un rechargement
-  // et apparaissent tout de suite chez les clients (temps réel).
-  // ============================================================
-  const [majListes, setMajListes] = useState(0);
-  const [listesServeurChargees, setListesServeurChargees] = useState(false);
-  useEffect(() => {
-    let annule = false;
-    (async () => {
-      const m = await chargerListeSupabase("marques");
-      if (!annule && Array.isArray(m) && m.length > 0) {
-        const liste = m.filter(x => x);
-        setMarques(prev => (prev.length === liste.length && prev.every((x, i) => x === liste[i])) ? prev : liste);
-      }
-      const c = await chargerListeSupabase("categories");
-      if (!annule && Array.isArray(c) && c.length > 0) {
-        const liste = c.filter(x => x && x.id);
-        setCategories(prev => (prev.length === liste.length && prev.every((x, i) => x.id === liste[i].id && x.label === liste[i].label)) ? prev : liste);
-      }
-      if (!annule) setListesServeurChargees(true);
-    })();
-    return () => { annule = true; };
-  }, [majListes]);
-  useEffect(() => {
-    const canal = abonnerParametresTempsReel(() => setMajListes(v => v + 1));
-    return () => { try { if (canal && supabase) supabase.removeChannel(canal); } catch (e) {} };
-  }, []);
-  useEffect(() => {
-    if (!userActif || role === "client" || !listesServeurChargees) return;
-    const minuteur = setTimeout(() => {
-      // Protection : on n'efface jamais la liste du serveur avec une liste vide
-      if (marques.length > 0) sauvegarderListeSupabase("marques", marques);
-    }, 1200);
-    return () => clearTimeout(minuteur);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [marques, role, userActif, listesServeurChargees]);
-  useEffect(() => {
-    if (!userActif || role === "client" || !listesServeurChargees) return;
-    const minuteur = setTimeout(() => sauvegarderListeSupabase("categories", categories), 1200);
-    return () => clearTimeout(minuteur);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [categories, role, userActif, listesServeurChargees]);
-
   // Sauvegarde automatique dans la base de données (petite pause pour regrouper les changements) :
   // chaque article enregistré est copié sur le serveur, impossible de le perdre.
   useEffect(() => {
     if (!userActif || role === "client" || !cleProduits) return;
-    const minuteur = setTimeout(async () => {
-      try {
-        const miens = produits.filter(p => estArticleDeMaCle(p));
-        if (miens.length === 0) {
-          // v72 — PROTECTION : ce téléphone n'a aucun article (nouveau navigateur,
-          // mémoire vide). On n'efface PAS le serveur (sinon plus aucun client ne
-          // voit les articles) : on récupère plutôt les articles du serveur.
-          const serveur = await chargerProduitsSupabase(cleProduits);
-          if (Array.isArray(serveur) && serveur.length > 0) {
-            setProduits(prev => {
-              const cles = new Set(prev.map(p => String(p.id) + "|" + ((p.equipe || "")).trim()));
-              const ajouts = serveur.filter(p => !cles.has(String(p.id) + "|" + ((p.equipe || "")).trim()));
-              return [...prev, ...ajouts.map(p => ({ ...p, equipe: (p.equipe || cleProduits) }))];
-            });
-          }
-          return;
-        }
-        sauvegarderProduitsSupabase(cleProduits, miens);
-      } catch (e) {}
+    const minuteur = setTimeout(() => {
+      const miens = produits.filter(p => estArticleDeMaCle(p));
+      sauvegarderProduitsSupabase(cleProduits, miens);
     }, 1200);
     return () => clearTimeout(minuteur);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -5108,6 +5194,94 @@ export default function App() {
   useEffect(() => {
     try { localStorage.setItem("motopieces_transferts_stock", JSON.stringify(transfertsStock)); } catch {}
   }, [transfertsStock]);
+
+  // ====================================================================
+  // RÉGLAGES DE LA BOUTIQUE EN LIGNE (marques, catégories, photos, cases, entreprise,
+  // crédits, boutiques masquées, transferts de stock) : enregistrés dans la base de données
+  // et mis à jour en direct sur tous les téléphones.
+  // ====================================================================
+  const reglagesPretsRef = useRef(false);      // true une fois les réglages du serveur chargés (évite d'écraser le serveur avec du vide)
+  const dernierEnvoiRef = useRef("");          // dernier contenu envoyé/reçu : évite les boucles d'envoi
+  const [majReglages, setMajReglages] = useState(0);
+
+  const appliquerReglages = (r) => {
+    if (!r || typeof r !== "object") return;
+    dernierEnvoiRef.current = JSON.stringify(r);
+    if (Array.isArray(r.marques)) setMarques(r.marques);
+    if (Array.isArray(r.categories) && r.categories.length > 0) setCategories(r.categories);
+    if (r.photosCategories && typeof r.photosCategories === "object") setPhotosCategories(r.photosCategories);
+    if (r.photosMarques && typeof r.photosMarques === "object") setPhotosMarques(r.photosMarques);
+    if (Array.isArray(r.cases)) setCases(r.cases);
+    if (r.entreprise && typeof r.entreprise === "object") setEntreprise(prev => ({ ...prev, ...r.entreprise }));
+    if (Array.isArray(r.credits)) setCredits(r.credits);
+    if (Array.isArray(r.boutiquesMasquees)) setBoutiquesMasquees(r.boutiquesMasquees);
+    if (Array.isArray(r.transfertsStock)) setTransfertsStock(r.transfertsStock);
+    if (r.modePrix) setModePrix(r.modePrix);
+  };
+
+  // Chargement à la connexion et à chaque changement envoyé par le serveur
+  useEffect(() => {
+    if (userActif) {} else { reglagesPretsRef.current = false; }
+    let annule = false;
+    (async () => {
+      try {
+        if (!userActif || role === "client") {
+          // Le client voit les catégories, marques et photos de toutes les boutiques (fusionnées)
+          const toutes = await chargerTousReglagesSupabase();
+          if (annule) return;
+          const fusion = { marques: [], categories: [], photosCategories: {}, photosMarques: {}, boutiquesMasquees: [] };
+          (toutes || []).forEach(l => {
+            const r = l.contenu || {};
+            (r.marques || []).forEach(m => { if (!fusion.marques.includes(m)) fusion.marques.push(m); });
+            (r.categories || []).forEach(c => { if (!fusion.categories.some(x => x.id === c.id)) fusion.categories.push(c); });
+            Object.assign(fusion.photosCategories, r.photosCategories || {});
+            Object.assign(fusion.photosMarques, r.photosMarques || {});
+            (r.boutiquesMasquees || []).forEach(b => { if (!fusion.boutiquesMasquees.includes(b)) fusion.boutiquesMasquees.push(b); });
+          });
+          if (fusion.categories.length === 0) delete fusion.categories;
+          appliquerReglages(fusion);
+        } else if (cleProduits) {
+          const r = await chargerReglagesSupabase(cleProduits);
+          if (annule) return;
+          if (r) appliquerReglages(r);
+        }
+      } catch (e) { console.warn("Chargement des réglages:", e); }
+      finally { if (!annule) reglagesPretsRef.current = true; }
+    })();
+    return () => { annule = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userActif, role, cleProduits, majReglages]);
+
+  // Temps réel : dès qu'un réglage change sur le serveur, on recharge
+  useEffect(() => {
+    let minuteur = null;
+    const canal = abonnerReglagesTempsReel((payload) => {
+      // On ignore l'écho de notre propre envoi
+      try {
+        const nouveau = payload?.new?.contenu;
+        if (nouveau && JSON.stringify(nouveau) === dernierEnvoiRef.current) return;
+      } catch (e) {}
+      clearTimeout(minuteur);
+      minuteur = setTimeout(() => setMajReglages(v => v + 1), 500);
+    });
+    const filet = setInterval(() => setMajReglages(v => v + 1), 60000);
+    return () => { clearTimeout(minuteur); clearInterval(filet); try { if (canal) supabase.removeChannel(canal); } catch (e) {} };
+  }, []);
+
+  // Sauvegarde automatique : seuls l'administrateur et son équipe écrivent (le client ne fait que lire)
+  useEffect(() => {
+    if (!userActif || role === "client" || !cleProduits || !reglagesPretsRef.current) return;
+    const contenu = { marques, categories, photosCategories, photosMarques, cases, entreprise, credits, boutiquesMasquees, transfertsStock, modePrix };
+    const texte = JSON.stringify(contenu);
+    if (texte === dernierEnvoiRef.current) return;
+    const minuteur = setTimeout(async () => {
+      dernierEnvoiRef.current = texte;
+      const res = await sauvegarderReglagesSupabase(cleProduits, contenu);
+      if (!res?.success) dernierEnvoiRef.current = "";   // échec : on réessaiera au prochain changement
+    }, 800);
+    return () => clearTimeout(minuteur);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [marques, categories, photosCategories, photosMarques, cases, entreprise, credits, boutiquesMasquees, transfertsStock, modePrix]);
 
   const basculerVisibiliteBoutique = (nomBoutique) => {
     setBoutiquesMasquees(prev =>
@@ -5263,6 +5437,19 @@ export default function App() {
     }));
   };
 
+  // Annulation d'une commande (vendeur / administrateur) : le client voit « Annulée » dans ses commandes
+  const annulerVente = async (id) => {
+    let venteAnnulee = null;
+    setVentes(prev => prev.map(v => {
+      if (v.id !== id) return v;
+      venteAnnulee = { ...v, statut: "annulée" };
+      return venteAnnulee;
+    }));
+    if (venteAnnulee?.supabase_id) {
+      try { await majVenteSupabase({ ...venteAnnulee, statut: "annulée" }); } catch (e) { console.warn("Annulation en ligne:", e); }
+    }
+  };
+
   const confirmerPaiement = async (id) => {
     let venteValidee = null;
     setVentes(prev => prev.map(v => {
@@ -5385,6 +5572,7 @@ export default function App() {
     if (!c.cle || c.cle !== oubliCle.trim()) { setErreurLogin("Clé de réinitialisation incorrecte. Demandez-la à l'administrateur."); return; }
     if (oubliPin.length < 4 || oubliPin !== oubliPin2) { setErreurLogin("Les deux codes PIN doivent être identiques (4 chiffres)."); return; }
     setComptes(prev => prev.map(x => x.id === c.id ? { ...x, pin: oubliPin, cle: null } : x));
+    try { synchroniserCompteSupabase({ ...c, pin: oubliPin, cle: null }); } catch {}
     setSuccesMsg("Code PIN modifié avec succès ! Connectez-vous avec votre nouveau PIN.");
     setOubli(false); setOubliEtape(1); setOubliTel(""); setOubliCle(""); setOubliPin(""); setOubliPin2(""); setErreurLogin("");
   };
@@ -5625,7 +5813,10 @@ export default function App() {
             comptes={comptes} setComptes={setComptes}
             fermer={() => { setMenuDev(false); setCodeOk(false); setCodeSaisi(""); }}
             CODE_DEV={CODE_DEV}
-            dureePublicite={dureePublicite} onChangerDuree={changerDureePublicite} />
+            dureePublicite={dureePublicite} onChangerDuree={changerDureePublicite}
+            produits={produits}
+            boutiquesMasquees={boutiquesMasquees}
+            basculerVisibiliteBoutique={basculerVisibiliteBoutique} />
         </DialogContent>
       </Dialog>
 
@@ -5649,18 +5840,19 @@ export default function App() {
             userActif={userActif}
             comptes={comptes}
             entreprise={entreprise}
+            ventes={ventes}
           />
         </div>
       )}
 
       {/* Vues Métier réservées au personnel de l'entreprise */}
       {role === "vendeur" && <VueVendeur produits={produits} ventes={ventes} creerVente={creerVente}
-        categories={categories} credits={credits} cases={cases} />}
-      {role === "secretaire" && <VueSecretaire ventes={ventes} confirmerPaiement={confirmerPaiement} majPrixLigne={majPrixLigne} modePrix={modePrix} entreprise={entreprise}
+        categories={categories} credits={credits} cases={cases} annulerVente={annulerVente} />}
+      {role === "secretaire" && <VueSecretaire ventes={ventes} confirmerPaiement={confirmerPaiement} annulerVente={annulerVente} majPrixLigne={majPrixLigne} modePrix={modePrix} entreprise={entreprise}
         credits={credits} ajouterCredit={ajouterCredit} ajouterVersement={ajouterVersement} validerCredit={validerCredit} />}
       {role === "vendeur-secretaire" && (
         <VueVendeurSecretaire produits={produits} marques={marques} ventes={ventes} creerVente={creerVente}
-          confirmerPaiement={confirmerPaiement} majPrixLigne={majPrixLigne} modePrix={modePrix} entreprise={entreprise}
+          confirmerPaiement={confirmerPaiement} annulerVente={annulerVente} majPrixLigne={majPrixLigne} modePrix={modePrix} entreprise={entreprise}
           credits={credits} ajouterCredit={ajouterCredit} ajouterVersement={ajouterVersement} validerCredit={validerCredit}
           categories={categories} cases={cases} />
       )}
@@ -5670,6 +5862,7 @@ export default function App() {
           photosCategories={photosCategories} setPhotosCategories={setPhotosCategories}
           photosMarques={photosMarques} setPhotosMarques={setPhotosMarques}
           modePrix={modePrix} setModePrix={setModePrix} categories={categories} setCategories={setCategories}
+          annulerVente={annulerVente}
           comptes={comptes} setComptes={setComptes}
           entreprise={entreprise} setEntreprise={setEntreprise}
           boutiquesMasquees={boutiquesMasquees}
