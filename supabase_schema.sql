@@ -383,3 +383,27 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 ALTER TABLE public.sales REPLICA IDENTITY FULL;
 ALTER TABLE public.sale_items REPLICA IDENTITY FULL;
 ALTER TABLE public.users REPLICA IDENTITY FULL;
+
+-- ============================================================
+-- v72 : RÉGLAGES DE LA BOUTIQUE ENREGISTRÉS EN LIGNE + TEMPS RÉEL
+-- Marques, catégories, photos, cases de rangement, infos entreprise,
+-- crédits, boutiques masquées, transferts de stock.
+-- À exécuter UNE FOIS dans Supabase (SQL Editor) puis « Run ».
+-- Sans risque : peut être relancé sans erreur.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS public.reglages_data (
+  equipe text PRIMARY KEY,
+  contenu jsonb DEFAULT '{}'::jsonb,
+  maj timestamptz DEFAULT now()
+);
+
+ALTER TABLE public.reglages_data ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Lecture publique reglages_data" ON public.reglages_data;
+CREATE POLICY "Lecture publique reglages_data" ON public.reglages_data FOR SELECT USING (true);
+DROP POLICY IF EXISTS "Ecriture publique reglages_data" ON public.reglages_data;
+CREATE POLICY "Ecriture publique reglages_data" ON public.reglages_data FOR INSERT WITH CHECK (true);
+DROP POLICY IF EXISTS "Mise a jour publique reglages_data" ON public.reglages_data;
+CREATE POLICY "Mise a jour publique reglages_data" ON public.reglages_data FOR UPDATE USING (true);
+
+DO $$ BEGIN ALTER PUBLICATION supabase_realtime ADD TABLE public.reglages_data;
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;

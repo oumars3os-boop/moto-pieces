@@ -381,3 +381,62 @@ export async function sauvegarderDureePubliciteSupabase(jours) {
 export function abonnerParametresTempsReel(callback) {
   return abonnerTable("parametres-temps-reel", "parametres_data", callback);
 }
+
+/* ------------------------------------------------------------------ */
+/* Réglages de la boutique (marques, catégories, photos, cases,        */
+/* entreprise, crédits, boutiques masquées, transferts de stock)       */
+/* Une ligne par boutique, identifiée par le téléphone de l'admin.     */
+/* ------------------------------------------------------------------ */
+
+export async function sauvegarderReglagesSupabase(equipe, reglages) {
+  try {
+    if (!equipe) return { success: false };
+    const { error } = await supabase
+      .from("reglages_data")
+      .upsert(
+        { equipe, contenu: reglages || {}, maj: new Date().toISOString() },
+        { onConflict: "equipe" }
+      );
+    if (error) {
+      console.warn("Sauvegarde reglages_data:", error.message);
+      return { success: false, error };
+    }
+    return { success: true };
+  } catch (err) {
+    console.warn("Erreur réseau sauvegarde réglages:", err);
+    return { success: false, error: err };
+  }
+}
+
+export async function chargerReglagesSupabase(equipe) {
+  try {
+    if (!equipe) return null;
+    const { data, error } = await supabase
+      .from("reglages_data")
+      .select("contenu, maj")
+      .eq("equipe", equipe)
+      .maybeSingle();
+    if (error) { console.warn("Chargement reglages_data:", error.message); return null; }
+    return data?.contenu || null;
+  } catch (err) {
+    console.warn("Erreur réseau chargement réglages:", err);
+    return null;
+  }
+}
+
+/** Tous les réglages de toutes les boutiques (pour que les clients voient les bonnes catégories, marques et photos). */
+export async function chargerTousReglagesSupabase() {
+  try {
+    const { data, error } = await supabase.from("reglages_data").select("equipe, contenu");
+    if (error) { console.warn("Chargement public reglages_data:", error.message); return []; }
+    return data || [];
+  } catch (err) {
+    console.warn("Erreur réseau chargement public réglages:", err);
+    return [];
+  }
+}
+
+/** Temps réel sur les réglages des boutiques. */
+export function abonnerReglagesTempsReel(callback) {
+  return abonnerTable("reglages-temps-reel", "reglages_data", callback);
+}

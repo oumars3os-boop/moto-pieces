@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/context/AuthContext";
-import { supabase, synchroniserCompteSupabase, enregistrerVenteSupabase, majVenteSupabase, chargerVentesSupabase, sauvegarderProduitsSupabase, chargerProduitsSupabase, chargerTousProduitsSupabase, abonnerProduitsTempsReel, chargerPublicitesSupabase, ajouterPubliciteSupabase, supprimerPubliciteSupabase, abonnerPublicitesTempsReel, chargerDureePubliciteSupabase, sauvegarderDureePubliciteSupabase, abonnerComptesTempsReel, abonnerVentesTempsReel, abonnerParametresTempsReel } from "@/lib/supabase";
+import { supabase, synchroniserCompteSupabase, enregistrerVenteSupabase, majVenteSupabase, chargerVentesSupabase, sauvegarderProduitsSupabase, chargerProduitsSupabase, chargerTousProduitsSupabase, abonnerProduitsTempsReel, chargerPublicitesSupabase, ajouterPubliciteSupabase, supprimerPubliciteSupabase, abonnerPublicitesTempsReel, chargerDureePubliciteSupabase, sauvegarderDureePubliciteSupabase, abonnerComptesTempsReel, abonnerVentesTempsReel, abonnerParametresTempsReel, sauvegarderReglagesSupabase, chargerReglagesSupabase, chargerTousReglagesSupabase, abonnerReglagesTempsReel } from "@/lib/supabase";
 import { extraireTexteImage } from "@/lib/ocr";
 import { demanderAssistantMistral } from "@/lib/mistral";
 import { verifierQualiteImage } from "@/lib/imageProcessor";
@@ -312,7 +312,7 @@ function BoutonSupprimer({ onSupprimer, label = "🗑️ Supprimer", duree = 500
 
 // ---------- Composants communs ----------
 
-function Produit({ p, onAjout, onRetirer, admin, onEditer, categories, qteDansPanier, onNegocierPrix, elementTalkie }) {
+function Produit({ p, onAjout, onRetirer, admin, onEditer, categories, qteDansPanier, onNegocierPrix, elementTalkie, comptes = [], userActif = null }) {
   const [flash, setFlash] = useState(false);
   const [flashMoins, setFlashMoins] = useState(false);
   const [openDetail, setOpenDetail] = useState(false);
@@ -334,6 +334,20 @@ function Produit({ p, onAjout, onRetirer, admin, onEditer, categories, qteDansPa
   };
 
   const nomBoutique = p.boutique || "MotoPièces Principal";
+
+  // Profil du magasin et du vendeur de cet article (affichés dans les détails)
+  const telProprio = (p.equipe || "").trim();
+  const proprietaire = (comptes || []).find(c => c.role === "admin" && (c.tel || "").trim() === telProprio)
+    || (telProprio === "" ? (comptes || []).find(c => c.role === "admin" && (c.tel || "").trim()) : null);
+  const vendeursBoutique = (comptes || []).filter(c =>
+    ["vendeur", "vendeur-secretaire", "secretaire"].includes(c.role) && (c.tel || "").trim() &&
+    ((c.equipe || "").trim() === (proprietaire?.tel || telProprio || "").trim()));
+  const ecrireViaChat = (tel) => {
+    setOpenDetail(false);
+    setTimeout(() => {
+      try { window.dispatchEvent(new CustomEvent("motopieces:ouvrir-messagerie", { detail: { tel: (tel || "").trim() } })); } catch (e) {}
+    }, 150);
+  };
 
   return (
     <>
@@ -417,13 +431,52 @@ function Produit({ p, onAjout, onRetirer, admin, onEditer, categories, qteDansPa
                 : <IconeMoto />}
             </div>
 
-            {/* Badge de provenance boutique */}
-            <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg flex items-center justify-between">
-              <div>
-                <p className="text-[10px] text-blue-600 font-semibold uppercase tracking-wider">Provenance / Vendeur</p>
-                <p className="font-bold text-blue-900 text-sm">🏪 {nomBoutique}</p>
+            {/* Profil du magasin + vendeur : s'affichent seulement ici, dans les détails de l'article */}
+            <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg space-y-2">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-[10px] text-blue-600 font-semibold uppercase tracking-wider">🏪 Profil du magasin</p>
+                  <p className="font-bold text-blue-900 text-sm">{nomBoutique}</p>
+                </div>
+                <Badge className="bg-blue-600 text-white text-xs">Achat Direct</Badge>
               </div>
-              <Badge className="bg-blue-600 text-white text-xs">Achat Direct</Badge>
+              {proprietaire && (
+                <div className="flex items-center gap-2 bg-white rounded-md border p-2">
+                  {proprietaire.photo
+                    ? <img src={proprietaire.photo} alt="" className="w-10 h-10 rounded-full object-cover border" />
+                    : <span className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center text-lg">👑</span>}
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-semibold truncate">{proprietaire.nom}</div>
+                    <div className="text-[11px] text-zinc-500">Administrateur · 📞 {proprietaire.tel}</div>
+                  </div>
+                  <a href={"tel:" + (proprietaire.tel || "").replace(/[^+\d]/g, "")}
+                    className="h-9 px-3 inline-flex items-center rounded-md bg-green-600 text-white text-xs font-bold shrink-0">📞</a>
+                </div>
+              )}
+              {vendeursBoutique.map(v => (
+                <div key={v.tel} className="flex items-center gap-2 bg-white rounded-md border p-2">
+                  {v.photo
+                    ? <img src={v.photo} alt="" className="w-10 h-10 rounded-full object-cover border" />
+                    : <span className="w-10 h-10 rounded-full bg-zinc-100 flex items-center justify-center text-lg">{v.role === "secretaire" ? "👩‍💼" : "🧑‍💼"}</span>}
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-semibold truncate">{v.nom}</div>
+                    <div className="text-[11px] text-zinc-500">{v.role === "secretaire" ? "Secrétaire" : "Vendeur"} · 📞 {v.tel}</div>
+                  </div>
+                  {userActif && (
+                    <button type="button" onClick={() => ecrireViaChat(v.tel)}
+                      className="h-9 px-3 rounded-md bg-purple-600 text-white text-xs font-bold shrink-0">💬</button>
+                  )}
+                </div>
+              ))}
+              {userActif
+                ? (
+                  <Button className="w-full bg-green-600 hover:bg-green-700 text-white font-bold"
+                    onClick={() => ecrireViaChat((vendeursBoutique[0] || proprietaire || {}).tel)}
+                    disabled={!(vendeursBoutique[0] || proprietaire)}>
+                    💬 Écrire au magasin (photos, messages)
+                  </Button>
+                )
+                : <p className="text-[11px] text-blue-800">Connecte-toi avec ton compte client pour écrire au magasin et envoyer des photos.</p>}
             </div>
 
             <div className="grid grid-cols-2 gap-2 text-xs">
@@ -753,37 +806,12 @@ function VueClient({ produits, marques, creerVente, photosCategories, photosMarq
           </Dialog>
         </div>
       )}
-      {/* 🏪 Profil du magasin (v69) : l'administrateur, le nom du magasin et le numéro de téléphone */}
-      {(comptes || []).filter(c => c.role === "admin" && (c.tel || "").trim()).length > 0 && (
-        <div className="max-w-[1400px] mx-auto px-3 sm:px-6 lg:px-8 pt-3">
-          <Card className="bg-white border shadow-sm">
-            <CardContent className="p-4">
-              <div className="font-bold text-base mb-2">🏪 Profil du magasin</div>
-              <div className="space-y-2">
-                {(comptes || []).filter(c => c.role === "admin" && (c.tel || "").trim()).map(c => (
-                  <div key={c.id || c.tel} className="flex items-center justify-between gap-2 bg-zinc-50 rounded-lg p-3 border">
-                    <div className="text-sm min-w-0">
-                      <div className="font-semibold truncate">👑 {c.nom}</div>
-                      <div className="text-xs text-zinc-600 truncate">🏪 {entreprise?.nom || "MotoPièces"}</div>
-                      <div className="text-xs text-zinc-600">📞 {c.tel}</div>
-                    </div>
-                    <a
-                      href={"tel:" + (c.tel || "").replace(/[^+\d]/g, "")}
-                      className="h-11 px-4 inline-flex items-center rounded-md bg-green-600 hover:bg-green-700 text-white text-sm font-bold shrink-0">
-                      📞 Appeler
-                    </a>
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      )}
       <Filtres recherche={recherche} setRecherche={setRecherche} cat={cat} setCat={setCat}
         marque={marque} setMarque={setMarque} marques={marques} tri={tri} setTri={setTri} photosCategories={photosCategories} photosMarques={photosMarques} categories={categories} />
       <main className="max-w-[1400px] mx-auto px-3 sm:px-6 lg:px-8 pb-24">
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2 sm:gap-4">
           {liste.map(p => <Produit key={p.id} p={p} onAjout={ajouter} onRetirer={retirer} categories={categories}
+            comptes={comptes} userActif={userActif}
             qteDansPanier={panier.find(i => i.p.id === p.id)?.qte || 0}
             onNegocierPrix={onNegocierPrix}
             elementTalkie={userActif ? <TalkieClientArticle article={p} userActif={userActif} comptes={comptes} /> : null} />)}
@@ -3903,14 +3931,25 @@ function MessagerieEquipe({ role, userActif, comptes }) {
   const lesAdmins = (comptes || []).filter(c => c.role === "admin" && (c.tel || "").trim() !== monTel);
   // v69 : échange direct entre le client et la boutique (secrétaire / administrateur)
   const mesBoutiques = (role === "client")
-    ? (comptes || []).filter(c => (c.role === "admin" || c.role === "secretaire") && (c.tel || "").trim() && (c.tel || "").trim() !== monTel)
+    ? (comptes || []).filter(c => ["admin", "secretaire", "vendeur", "vendeur-secretaire"].includes(c.role) && (c.tel || "").trim() && (c.tel || "").trim() !== monTel)
     : [];
   // v69 : la boutique (administrateur / secrétaire) voit ses clients pour répondre
-  const mesClients = (estAdmin || role === "secretaire")
+  const mesClients = (estAdmin || ["secretaire", "vendeur", "vendeur-secretaire"].includes(role))
     ? (comptes || []).filter(c => c.role === "client" && (c.tel || "").trim() && (c.tel || "").trim() !== monTel)
     : [];
 
   const canalIdPerso = (tel) => "perso:" + [monTel, tel].sort().join("|");
+
+  // Ouverture depuis les détails d'un article : le client tombe directement sur la bonne personne du magasin
+  useEffect(() => {
+    const ouvrir = (e) => {
+      const tel = (e?.detail?.tel || "").trim();
+      if (tel) setCanal(tel);
+      setNonLus(0); setNotification(null); setOuvert(true);
+    };
+    window.addEventListener("motopieces:ouvrir-messagerie", ouvrir);
+    return () => window.removeEventListener("motopieces:ouvrir-messagerie", ouvrir);
+  }, []);
   const idDuCanal = (c) => c === "equipe" ? "equipe:" + maCle : c === "admins" ? "admins" : canalIdPerso(c);
   const titreDuCanal = (c) => c === "equipe" ? "👥 Mon équipe" : c === "admins" ? "👑 Espace Admins" : "👤 " + (((comptes || []).find(x => (x.tel || "").trim() === c) || {}).nom || c);
 
@@ -3945,7 +3984,7 @@ function MessagerieEquipe({ role, userActif, comptes }) {
       ...(estAdmin ? lesAdmins.map(a => canalIdPerso((a.tel || "").trim())) : []),
       // v69 : le client discute avec la boutique ; la boutique (admin / secrétaire) reçoit ses clients
       ...(role === "client" ? mesBoutiques.map(b => canalIdPerso((b.tel || "").trim())) : []),
-      ...((estAdmin || role === "secretaire") ? mesClients.map(cl => canalIdPerso((cl.tel || "").trim())) : []),
+      ...((estAdmin || ["secretaire", "vendeur", "vendeur-secretaire"].includes(role)) ? mesClients.map(cl => canalIdPerso((cl.tel || "").trim())) : []),
     ];
     const verifier = async () => {
       try {
@@ -5104,6 +5143,94 @@ export default function App() {
   useEffect(() => {
     try { localStorage.setItem("motopieces_transferts_stock", JSON.stringify(transfertsStock)); } catch {}
   }, [transfertsStock]);
+
+  // ====================================================================
+  // RÉGLAGES DE LA BOUTIQUE EN LIGNE (marques, catégories, photos, cases, entreprise,
+  // crédits, boutiques masquées, transferts de stock) : enregistrés dans la base de données
+  // et mis à jour en direct sur tous les téléphones.
+  // ====================================================================
+  const reglagesPretsRef = useRef(false);      // true une fois les réglages du serveur chargés (évite d'écraser le serveur avec du vide)
+  const dernierEnvoiRef = useRef("");          // dernier contenu envoyé/reçu : évite les boucles d'envoi
+  const [majReglages, setMajReglages] = useState(0);
+
+  const appliquerReglages = (r) => {
+    if (!r || typeof r !== "object") return;
+    dernierEnvoiRef.current = JSON.stringify(r);
+    if (Array.isArray(r.marques)) setMarques(r.marques);
+    if (Array.isArray(r.categories) && r.categories.length > 0) setCategories(r.categories);
+    if (r.photosCategories && typeof r.photosCategories === "object") setPhotosCategories(r.photosCategories);
+    if (r.photosMarques && typeof r.photosMarques === "object") setPhotosMarques(r.photosMarques);
+    if (Array.isArray(r.cases)) setCases(r.cases);
+    if (r.entreprise && typeof r.entreprise === "object") setEntreprise(prev => ({ ...prev, ...r.entreprise }));
+    if (Array.isArray(r.credits)) setCredits(r.credits);
+    if (Array.isArray(r.boutiquesMasquees)) setBoutiquesMasquees(r.boutiquesMasquees);
+    if (Array.isArray(r.transfertsStock)) setTransfertsStock(r.transfertsStock);
+    if (r.modePrix) setModePrix(r.modePrix);
+  };
+
+  // Chargement à la connexion et à chaque changement envoyé par le serveur
+  useEffect(() => {
+    if (userActif) {} else { reglagesPretsRef.current = false; }
+    let annule = false;
+    (async () => {
+      try {
+        if (!userActif || role === "client") {
+          // Le client voit les catégories, marques et photos de toutes les boutiques (fusionnées)
+          const toutes = await chargerTousReglagesSupabase();
+          if (annule) return;
+          const fusion = { marques: [], categories: [], photosCategories: {}, photosMarques: {}, boutiquesMasquees: [] };
+          (toutes || []).forEach(l => {
+            const r = l.contenu || {};
+            (r.marques || []).forEach(m => { if (!fusion.marques.includes(m)) fusion.marques.push(m); });
+            (r.categories || []).forEach(c => { if (!fusion.categories.some(x => x.id === c.id)) fusion.categories.push(c); });
+            Object.assign(fusion.photosCategories, r.photosCategories || {});
+            Object.assign(fusion.photosMarques, r.photosMarques || {});
+            (r.boutiquesMasquees || []).forEach(b => { if (!fusion.boutiquesMasquees.includes(b)) fusion.boutiquesMasquees.push(b); });
+          });
+          if (fusion.categories.length === 0) delete fusion.categories;
+          appliquerReglages(fusion);
+        } else if (cleProduits) {
+          const r = await chargerReglagesSupabase(cleProduits);
+          if (annule) return;
+          if (r) appliquerReglages(r);
+        }
+      } catch (e) { console.warn("Chargement des réglages:", e); }
+      finally { if (!annule) reglagesPretsRef.current = true; }
+    })();
+    return () => { annule = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userActif, role, cleProduits, majReglages]);
+
+  // Temps réel : dès qu'un réglage change sur le serveur, on recharge
+  useEffect(() => {
+    let minuteur = null;
+    const canal = abonnerReglagesTempsReel((payload) => {
+      // On ignore l'écho de notre propre envoi
+      try {
+        const nouveau = payload?.new?.contenu;
+        if (nouveau && JSON.stringify(nouveau) === dernierEnvoiRef.current) return;
+      } catch (e) {}
+      clearTimeout(minuteur);
+      minuteur = setTimeout(() => setMajReglages(v => v + 1), 500);
+    });
+    const filet = setInterval(() => setMajReglages(v => v + 1), 60000);
+    return () => { clearTimeout(minuteur); clearInterval(filet); try { if (canal) supabase.removeChannel(canal); } catch (e) {} };
+  }, []);
+
+  // Sauvegarde automatique : seuls l'administrateur et son équipe écrivent (le client ne fait que lire)
+  useEffect(() => {
+    if (!userActif || role === "client" || !cleProduits || !reglagesPretsRef.current) return;
+    const contenu = { marques, categories, photosCategories, photosMarques, cases, entreprise, credits, boutiquesMasquees, transfertsStock, modePrix };
+    const texte = JSON.stringify(contenu);
+    if (texte === dernierEnvoiRef.current) return;
+    const minuteur = setTimeout(async () => {
+      dernierEnvoiRef.current = texte;
+      const res = await sauvegarderReglagesSupabase(cleProduits, contenu);
+      if (!res?.success) dernierEnvoiRef.current = "";   // échec : on réessaiera au prochain changement
+    }, 800);
+    return () => clearTimeout(minuteur);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [marques, categories, photosCategories, photosMarques, cases, entreprise, credits, boutiquesMasquees, transfertsStock, modePrix]);
 
   const basculerVisibiliteBoutique = (nomBoutique) => {
     setBoutiquesMasquees(prev =>
