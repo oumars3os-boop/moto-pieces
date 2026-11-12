@@ -654,7 +654,6 @@ function LigneVente({ v, onConfirmer, onSaisirPrix, saisiePrix, onAnnuler }) {
           })}
         </div>
       </CardContent>
-      {/* Annulation d'une commande : réservée au vendeur / à l'administrateur */}
       {onAnnuler && v.statut !== "annulée" && (
         <div className="px-3 pb-1">
           <BoutonSupprimer label="🚫 Annuler la commande (maintenir 1s)" duree={1000}
@@ -5060,9 +5059,30 @@ export default function App() {
   const cleProduits = (role === "admin")
     ? ((userActif?.tel || "").trim())
     : ((userActif?.equipe || "").trim());
-  const estArticleDeMaCle = (p) =>
-    ((p.equipe || "").trim() === cleProduits) ||
-    (!(p.equipe || "").trim() && role === "admin");
+  // Chaque administrateur gère UNIQUEMENT ses marchandises : correspondance stricte avec sa clé
+  const estArticleDeMaCle = (p) => (p.equipe || "").trim() === cleProduits;
+
+  // v72 : l'admin ne peut modifier que SES articles. Ce setter filtre avant/après :
+  // les marchandises des autres administrateurs ne sont jamais touchées.
+  const setProduitsAdmin = (maj) => setProduits(prev => {
+    const maCle = (role === "admin" ? userActif?.tel : (userActif?.equipe || "")).trim();
+    const miens = prev.filter(p => (p.equipe || "").trim() === maCle);
+    const autres = prev.filter(p => (p.equipe || "").trim() !== maCle);
+    const nouveaux = typeof maj === "function" ? maj(miens) : maj;
+    const liste = (Array.isArray(nouveaux) ? nouveaux : []).map(p => ({ ...p, equipe: ((p.equipe || "")).trim() || maCle }));
+    return [...autres, ...liste];
+  });
+
+  // PURGE IMMÉDIATE : dès qu'un membre du personnel se connecte, on retire de l'écran
+  // toutes les marchandises qui n'appartiennent pas à son équipe (celles du « site public »
+  // chargées avant la connexion). Ses propres marchandises reviennent juste après, du serveur.
+  useEffect(() => {
+    if (!userActif || !role || role === "client") return;
+    const maCle = (role === "admin" ? (userActif?.tel || "") : (userActif?.equipe || "")).trim();
+    if (!maCle) return;
+    setProduits(prev => prev.filter(p => (p.equipe || "").trim() === maCle));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [role, userActif?.tel, userActif?.equipe]);
 
   // Chargement automatique des articles depuis la base de données dès la connexion :
   // si le téléphone change ou est perdu, les articles reviennent tout seuls.
@@ -5091,10 +5111,17 @@ export default function App() {
           });
         } else if (cleProduits) {
           const liste = await chargerProduitsSupabase(cleProduits);
-          if (annule || !Array.isArray(liste) || liste.length === 0) return;
+          if (annule) return;
+          // Aucun article enregistré sur le serveur : on garde UNIQUEMENT mes articles locaux
+          if (!Array.isArray(liste) || liste.length === 0) {
+            setProduits(prev => prev.filter(p => estArticleDeMaCle(p)));
+            return;
+          }
           setProduits(prev => {
             const idsServeur = new Set(liste.map(p => p.id));
-            const locauxGardes = prev.filter(p => !estArticleDeMaCle(p) || !idsServeur.has(p.id));
+            // On ne garde que SES propres articles locaux : les marchandises des autres
+            // administrateurs ne doivent jamais rester visibles dans son espace.
+            const locauxGardes = prev.filter(p => estArticleDeMaCle(p) && !idsServeur.has(p.id));
             return [...locauxGardes, ...liste.map(p => ({ ...p, equipe: (p.equipe || cleProduits) }))];
           });
         }
@@ -5111,6 +5138,9 @@ export default function App() {
     let annule = false;
     (async () => {
       try {
+        // Seuls les visiteurs et les clients voient les marchandises de toutes les boutiques.
+        // Un administrateur (ou son équipe) ne charge QUE ses propres marchandises.
+        if (role && role !== "client") return;
         const liste = await chargerTousProduitsSupabase();
         if (annule || !Array.isArray(liste) || liste.length === 0) return;
         setProduits(prev => {
@@ -5124,7 +5154,7 @@ export default function App() {
     // Rafraîchissement automatique toutes les 15 secondes (filet de sécurité)
     const minuteur = setInterval(() => setMajPublique(v => v + 1), 15000);
     return () => { annule = true; clearInterval(minuteur); };
-  }, [majPublique]);
+  }, [majPublique, role]);
 
   // v64 — temps réel : dès qu'un téléphone enregistre un article, tous les autres téléphones
   // le voient apparaître tout de suite, sans recharger la page.
@@ -5857,12 +5887,11 @@ export default function App() {
           categories={categories} cases={cases} />
       )}
       {role === "admin" && (
-        <VueAdmin produits={produits} setProduits={setProduits} marques={marques} setMarques={setMarques}
+        <VueAdmin produits={produits.filter(p => (p.equipe || "").trim() === ((userActif?.tel || "").trim()))} setProduits={setProduitsAdmin} marques={marques} setMarques={setMarques}
           ventes={ventes} genererMarque={genererMarque}
           photosCategories={photosCategories} setPhotosCategories={setPhotosCategories}
           photosMarques={photosMarques} setPhotosMarques={setPhotosMarques}
           modePrix={modePrix} setModePrix={setModePrix} categories={categories} setCategories={setCategories}
-          annulerVente={annulerVente}
           comptes={comptes} setComptes={setComptes}
           entreprise={entreprise} setEntreprise={setEntreprise}
           boutiquesMasquees={boutiquesMasquees}
