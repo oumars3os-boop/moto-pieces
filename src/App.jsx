@@ -245,6 +245,53 @@ const distanceSig = (a, b) => {
   return Math.sqrt(s / a.length) / 255;
 };
 
+// 🧿 Comparaison STRICTE : signature fine 32×32 en niveaux de gris.
+// Deux photos ne sont considérées IDENTIQUES que si elles sont pixel par pixel
+// quasi pareilles (la même photo de la même pièce).
+const sigImageFort = (src) => new Promise(resolve => {
+  const img = new Image();
+  img.onload = () => {
+    const c = document.createElement("canvas");
+    c.width = 32; c.height = 32;
+    const ctx = c.getContext("2d");
+    ctx.drawImage(img, 0, 0, 32, 32);
+    const data = ctx.getImageData(0, 0, 32, 32).data;
+    const sig = [];
+    for (let i = 0; i < data.length; i += 4) {
+      sig.push(Math.round((data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114)));
+    }
+    resolve(sig);
+  };
+  img.onerror = () => resolve(null);
+  img.src = src;
+});
+
+const distanceSigFort = (a, b) => {
+  if (!a || !b || a.length !== b.length) return Infinity;
+  let s = 0;
+  for (let i = 0; i < a.length; i++) { const d = a[i] - b[i]; s += d * d; }
+  return Math.sqrt(s / a.length) / 255;
+};
+
+// 🧿 Deux images sont IDENTIQUES : même dataURL, ou signature 32×32 quasi égale
+const imagesIdentiques = async (a, b) => {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const sa = await sigImageFort(a);
+  const sb = await sigImageFort(b);
+  return distanceSigFort(sa, sb) < 0.04;
+};
+
+// 🧿 Retrouve l'article dont la photo est IDENTIQUE à la photo scannée.
+// Retourne l'article trouvé, ou null si AUCUNE photo ne correspond.
+const trouverPhotoIdentique = async (src, produits) => {
+  const avecPhoto = (produits || []).filter(p => p && p.photo);
+  for (const p of avecPhoto) {
+    if (await imagesIdentiques(src, p.photo)) return p;
+  }
+  return null;
+};
+
 const Etoiles = ({ note }) => (
   <span className="text-amber-500 text-xs">{"★".repeat(Math.round(note))}{"☆".repeat(5 - Math.round(note))}</span>
 );
@@ -799,19 +846,21 @@ function VueClient({ produits, marques, creerVente, ventes = [], photosCategorie
   };
 
   const [ocrEffectue, setOcrEffectue] = useState(false);
-  // 🔍 Recherche par OCR : le texte écrit sur la pièce est lu automatiquement,
-  // et la marchandise correspondante s'affiche avec son prix. Pas d'import de photo.
+  // 🧿 Recherche par image : l'article ne sort QUE si la photo scannée est
+  // IDENTIQUE à la photo enregistrée d'un article. Tant que l'image n'est pas
+  // identique, aucun article ne sort.
   const chercherParImage = async (src) => {
     setPhotoRecherche(null);
     setResultatsImage([]);
     setOcrEffectue(false);
     try {
-      const resOCR = await extraireTexteImage(src);
-      if (resOCR && resOCR.success) {
-        const matchs = faireCorrespondreOCR(resOCR.text, resOCR.references, produits);
-        setResultatsImage(matchs.map(m => m.p));
+      const articleIdentique = await trouverPhotoIdentique(src, produits);
+      if (articleIdentique) {
+        setPhotoRecherche(src);
+        setResultatsImage([articleIdentique]);
       }
-    } catch (e) { console.warn("Analyse OCR client:", e); }
+      // Pas d'image identique → aucun article ne sort
+    } catch (e) { console.warn("Comparaison image client:", e); }
     setOcrEffectue(true);
   };
 
@@ -933,13 +982,13 @@ function VueClient({ produits, marques, creerVente, ventes = [], photosCategorie
           />
 
           <p className="text-[11px] text-zinc-400 mt-2 text-center leading-relaxed">
-            🔍 <b>OCR automatique</b> : pointez la caméra sur la pièce, la capture se fait toute seule.
-            Le texte écrit dessus est lu et la marchandise sort avec son prix. Pas d'import de photo.
+            🧿 <b>Photo identique</b> : pointez la caméra sur la pièce, la capture se fait toute seule.
+            L'article ne sort QUE si la photo scannée est identique à la photo enregistrée de l'article.
           </p>
 
           {chargementPhoto && (
             <div className="p-3 mt-3 bg-amber-500/20 border border-amber-500/50 rounded-lg text-xs font-semibold text-amber-200 animate-pulse flex items-center justify-center gap-2">
-              <span>🔍 Lecture OCR et recherche de la marchandise en cours...</span>
+              <span>🔍 Comparaison de la photo avec les articles en cours...</span>
             </div>
           )}
 
@@ -962,7 +1011,7 @@ function VueClient({ produits, marques, creerVente, ventes = [], photosCategorie
               </button>
             ))}
             {ocrEffectue && resultatsImage.length === 0 && !chargementPhoto && (
-              <p className="text-xs text-zinc-400 p-2 text-center">Aucune correspondance exacte — essayez la recherche par nom.</p>
+              <p className="text-xs text-zinc-400 p-2 text-center">🧿 Photo non identique à un article enregistré : aucun article ne sort. Scannez la même photo que celle de l'article, ou essayez la recherche par nom.</p>
             )}
           </div>
         </div>
@@ -1141,53 +1190,41 @@ function VueVendeur({ produits, ventes, creerVente, ventesToutes = [], moi = nul
     e.target.value = "";
   };
 
-  // Reconnaissance automatique instantanée dès la capture photo : l'article est directement identifié et ajouté au panier/vente
+  // Reconnaissance automatique dès la capture photo. 🧿 RÈGLE :
+  // l'article sort SEULEMENT si la photo scannée est IDENTIQUE à la photo
+  // enregistrée. Tant que l'image n'est pas identique, aucun article ne sort.
   const reconnaitre = async (src, index) => {
     const candidats = produits;
     if (!candidats.length) return;
 
-    // 🔍 D'ABORD L'OCR : lecture du texte écrit sur la pièce (code, marque, référence).
-    // La marchandise correspondante sort de la boutique avec son prix.
+    // 🧿 ÉTAPE 1 : comparer la photo scannée avec les photos enregistrées.
+    // Un article ne sort que si une photo est identique.
+    try {
+      const identique = await trouverPhotoIdentique(src, candidats);
+      if (identique) {
+        setPhotos(prev => prev.map((ph, j) => j === index
+          ? { ...ph, article: identique, reconnu: true, candidats: [] } : ph));
+        return;
+      }
+    } catch (errId) { console.warn("Comparaison photo identique:", errId); }
+
+    // Pas de photo identique : AUCUN article ne sort automatiquement.
+    // L'OCR sert seulement à proposer des suggestions que le vendeur choisira
+    // lui-même (l'article n'est jamais validé tout seul).
     try {
       const resOCR = await extraireTexteImage(src);
       if (resOCR && resOCR.success) {
         const matchs = faireCorrespondreOCR(resOCR.text, resOCR.references, candidats);
-        if (matchs.length && matchs[0].score >= 20) {
-          // Marchandise reconnue par OCR : elle sort de la boutique avec son prix ✅
-          setPhotos(prev => prev.map((ph, j) => j === index
-            ? { ...ph, article: matchs[0].p, reconnu: true, candidats: matchs.slice(0, 3) } : ph));
-          return;
-        }
         if (matchs.length) {
-          // L'OCR a lu des mots proches : le vendeur sélectionne la bonne marchandise
           setPhotos(prev => prev.map((ph, j) => j === index
-            ? { ...ph, candidats: matchs.slice(0, 3) } : ph));
+            ? { ...ph, candidats: matchs.slice(0, 3), reconnu: false } : ph));
           return;
         }
       }
     } catch (eOCR) { console.warn("Analyse OCR:", eOCR); }
 
-    // Filet de sécurité : comparaison d'image si l'OCR n'a rien reconnu
-    try {
-      const sig = await sigImage(src);
-      const dists = await Promise.all(candidats.map(async p => ({
-        p,
-        d: p.photo ? distanceSig(sig, await sigImage(p.photo)) : 0.5
-      })));
-      dists.sort((x, y) => x.d - y.d);
-      const best = dists[0];
-
-      // Correctif : ne plus identifier à tort l'article comme le premier produit en cas d'échec.
-      // On garde l'article seulement si une vraie correspondance photo a été trouvée.
-      if (best && best.p && best.d < 0.4) {
-        setPhotos(prev => prev.map((ph, j) => j === index ? { ...ph, article: best.p, reconnu: true } : ph));
-      } else {
-        setPhotos(prev => prev.map((ph, j) => j === index ? { ...ph, reconnu: false } : ph));
-      }
-    } catch (err) {
-      // Échec de la reconnaissance : aucune attribution automatique (vente erronée évitée)
-      setPhotos(prev => prev.map((ph, j) => j === index ? { ...ph, reconnu: false } : ph));
-    }
+    // Aucune image identique, aucune suggestion : la photo reste non reconnue
+    setPhotos(prev => prev.map((ph, j) => j === index ? { ...ph, reconnu: false } : ph));
   };
 
   // Articles identifiables manuellement : uniquement ceux qui ont une photo enregistrée
