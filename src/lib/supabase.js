@@ -58,47 +58,31 @@ function abonnerTable(nomCanal, table, callback) {
 /* Comptes utilisateurs                                                */
 /* ------------------------------------------------------------------ */
 
-// Un identifiant de compte est un UUID s'il vient du serveur Supabase.
-// Les comptes créés localement (avant synchronisation) ont un id numérique.
-function estUuid(id) {
-  return typeof id === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+// Un UUID Supabase est une chaîne de 36 caractères avec des tirets.
+export function estUuid(v) {
+  return typeof v === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v.trim());
 }
 
 export async function synchroniserCompteSupabase(compte) {
   try {
-    if (estUuid(compte?.id)) {
-      const { data, error } = await supabase
-        .from("users")
-        .update({
-          nom: compte.nom,
-          tel: compte.tel,
-          pin: compte.pin,
-          role: compte.role || "vendeur",
-          cle: compte.cle || null,
-          bloque: Boolean(compte.bloque),
-          photo: compte.photo || null,
-          equipe: compte.equipe || null,
-        })
-        .eq("id", compte.id);
-      if (!error) return { data, error };
+    const lignes = {
+      nom: compte.nom,
+      tel: compte.tel,
+      pin: compte.pin,
+      role: compte.role || "vendeur",
+      cle: compte.cle || null,
+      bloque: Boolean(compte.bloque),
+      photo: compte.photo || null,
+      equipe: compte.equipe || null,
+    };
+    // Si on connaît l'identifiant serveur (UUID), on met À JOUR cette ligne précise ;
+    // sinon on crée la ligne ou on la met à jour par numéro de téléphone.
+    let data, error;
+    if (compte.id && estUuid(compte.id)) {
+      ({ data, error } = await supabase.from("users").update(lignes).eq("id", compte.id));
+    } else {
+      ({ data, error } = await supabase.from("users").upsert(lignes, { onConflict: "tel" }));
     }
-
-    const { data, error } = await supabase
-      .from("users")
-      .upsert(
-        {
-          ...(estUuid(compte?.id) ? { id: compte.id } : {}),
-          nom: compte.nom,
-          tel: compte.tel,
-          pin: compte.pin,
-          role: compte.role || "vendeur",
-          cle: compte.cle || null,
-          bloque: Boolean(compte.bloque),
-          photo: compte.photo || null,
-          equipe: compte.equipe || null,
-        },
-        { onConflict: "tel" }
-      );
     if (error) console.warn("Synchronisation Supabase users:", error.message);
     return { data, error };
   } catch (err) {
@@ -107,22 +91,20 @@ export async function synchroniserCompteSupabase(compte) {
   }
 }
 
-/** Supprime définitivement un compte sur le serveur (par id UUID, sinon par téléphone). */
+// Suppression d'un compte sur le serveur : par UUID si on l'a, sinon par téléphone.
 export async function supprimerCompteSupabase(compte) {
   try {
-    let query = supabase.from("users").delete();
-    if (estUuid(compte?.id)) query = query.eq("id", compte.id);
-    else if (compte?.tel) query = query.eq("tel", compte.tel);
-    else return { success: false, error: new Error("Compte sans identifiant serveur ni téléphone") };
-    const { error } = await query;
-    if (error) {
-      console.warn("Suppression Supabase users:", error.message);
-      return { success: false, error };
+    let error;
+    if (compte?.id && estUuid(compte.id)) {
+      ({ error } = await supabase.from("users").delete().eq("id", compte.id));
+    } else {
+      ({ error } = await supabase.from("users").delete().eq("tel", compte?.tel));
     }
-    return { success: true };
+    if (error) console.warn("Suppression Supabase users:", error.message);
+    return { error: null };
   } catch (err) {
     console.warn("Erreur réseau suppression users:", err);
-    return { success: false, error: err };
+    return { error: err };
   }
 }
 

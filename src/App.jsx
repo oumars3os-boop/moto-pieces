@@ -12,27 +12,10 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/context/AuthContext";
 import { supabase, synchroniserCompteSupabase, supprimerCompteSupabase, enregistrerVenteSupabase, majVenteSupabase, chargerVentesSupabase, sauvegarderProduitsSupabase, chargerProduitsSupabase, chargerTousProduitsSupabase, abonnerProduitsTempsReel, chargerPublicitesSupabase, ajouterPubliciteSupabase, supprimerPubliciteSupabase, abonnerPublicitesTempsReel, chargerDureePubliciteSupabase, sauvegarderDureePubliciteSupabase, abonnerComptesTempsReel, abonnerVentesTempsReel, abonnerParametresTempsReel, sauvegarderReglagesSupabase, chargerReglagesSupabase, chargerTousReglagesSupabase, abonnerReglagesTempsReel } from "@/lib/supabase";
-import { extraireTexteImage } from "@/lib/ocr";
+import { extraireTexteImage, faireCorrespondreOCR } from "@/lib/ocr";
 import { demanderAssistantMistral } from "@/lib/mistral";
 import { verifierQualiteImage } from "@/lib/imageProcessor";
 import ModeRech from "@/components/ModeRech";
-
-/* ------------------------------------------------------------------ */
-/* Gestion des comptes : chaque action part AUSSI vers le serveur      */
-/* ------------------------------------------------------------------ */
-
-// Blocage / déblocage : le changement part aussitôt vers Supabase
-export const basculerBlocageCompte = (c, setComptes) => {
-  const bloque = !c.bloque;
-  setComptes(prev => prev.map(x => x.id === c.id ? { ...x, bloque } : x));
-  try { synchroniserCompteSupabase({ ...c, bloque }); } catch {}
-};
-
-// Suppression : enlevée de l'écran ET détruite sur le serveur (tous les appareils)
-export const retirerCompte = (c, setComptes) => {
-  setComptes(prev => prev.filter(x => x.id !== c.id));
-  try { supprimerCompteSupabase(c); } catch {}
-};
 
 // Le scanner mémorise la photo et le mot-clé du dernier scan (au cas où) : l'image est gardée sur le téléphone
 function memoriserScan(src, motCle) {
@@ -610,20 +593,20 @@ function LigneVente({ v, onConfirmer, onSaisirPrix, saisiePrix, onAnnuler }) {
       <CardContent className="p-3">
         <div className="flex items-center justify-between gap-3">
           <div className="text-sm">
-            <div className="font-medium">#{v.id} — {v.client} <span className="text-muted-foreground">({v.tel})</span></div>
+            <div className="font-medium">#{v.id} {v.ventePhoto ? "📷 " : ""}— {v.client} <span className="text-muted-foreground">({v.tel})</span></div>
             <div className="text-xs text-muted-foreground">
               par {v.vendeur}{v.date ? ` — 🗓️ ${v.date}` : ""}
             </div>
           </div>
           <div className="flex items-center gap-2">
             <span className="font-bold whitespace-nowrap">{totalCalcule.toLocaleString("fr-FR")} FCFA</span>
-            {v.statut === "payée"
+            {v.statut === "annulée"
+              ? <Badge className="bg-zinc-500">Annulée 🚫</Badge>
+              : v.statut === "payée"
               ? <Badge className="bg-green-600">Payée ✅</Badge>
               : v.statut === "crédit"
                 ? <Badge className="bg-amber-600">Crédit 🔴</Badge>
-                : v.statut === "annulée"
-                  ? <Badge className="bg-zinc-500 text-white">Annulée 🚫</Badge>
-                  : <Badge variant="destructive">En attente</Badge>}
+                : <Badge variant="destructive">En attente</Badge>}
           </div>
         </div>
 
@@ -654,14 +637,7 @@ function LigneVente({ v, onConfirmer, onSaisirPrix, saisiePrix, onAnnuler }) {
           })}
         </div>
       </CardContent>
-      {onAnnuler && v.statut !== "annulée" && (
-        <div className="px-3 pb-1">
-          <BoutonSupprimer label="🚫 Annuler la commande (maintenir 1s)" duree={1000}
-            boutonClass="w-full h-10 text-sm bg-red-600 hover:bg-red-700 text-white"
-            onSupprimer={() => onAnnuler(v.id)} />
-        </div>
-      )}
-      {onConfirmer && v.statut !== "payée" && v.statut !== "crédit" && (
+      {onConfirmer && v.statut !== "payée" && v.statut !== "crédit" && v.statut !== "annulée" && (
         <div className="px-3 pb-3">
           {saisiePrix && v.items.some(it => !prixLigne(it)) ? (
             <Button className="w-full" disabled>💰 Confirmer le paiement</Button>
@@ -672,40 +648,66 @@ function LigneVente({ v, onConfirmer, onSaisirPrix, saisiePrix, onAnnuler }) {
           )}
         </div>
       )}
+
+      {/* 🚫 Annulation de commande : réservée à l'ADMINISTRATEUR uniquement.
+          Une commande déjà validée (payée ou à crédit) ne peut JAMAIS être annulée :
+          l'information reste dans l'historique. */}
+      {onAnnuler && v.statut !== "payée" && v.statut !== "crédit" && v.statut !== "annulée" && (
+        <div className="px-3 pb-3">
+          <BoutonSupprimer label="🚫 Annuler la commande (maintenir 1s)" duree={1000}
+            boutonClass="w-full h-11 bg-red-600 hover:bg-red-700 text-white text-sm font-semibold"
+            onSupprimer={() => onAnnuler(v.id)} />
+        </div>
+      )}
     </Card>
   );
 }
 
-// ---------- Suivi des commandes du client (en cours, payées, annulées) ----------
+// ---------- Mes commandes (client) ----------
 
+// Suivi des commandes passées par le client : en cours, payées, annulées.
 function MesCommandes({ ventes = [], userActif }) {
   const [ouvert, setOuvert] = useState(false);
-  const [filtre, setFiltre] = useState("cours");
+  const [onglet, setOnglet] = useState("encours");
+  const [jour, setJour] = useState(""); // 📅 calendrier : voir mes commandes d'un jour précis
   const monTel = (userActif?.tel || "").trim();
-  const mesVentes = monTel ? (ventes || []).filter(v => (v.tel || "").trim() === monTel) : [];
-  const enCours = mesVentes.filter(v => v.statut !== "payée" && v.statut !== "annulée");
-  const payees = mesVentes.filter(v => v.statut === "payée");
-  const annulees = mesVentes.filter(v => v.statut === "annulée");
-  const liste = filtre === "cours" ? enCours : filtre === "payees" ? payees : annulees;
-  if (!monTel) return null;
+  const mesVentes = (ventes || []).filter(v => (v.tel || "").trim() === monTel);
+  // 📅 On garde d'abord les commandes du jour choisi (ou toutes)
+  const mesVentesJour = jour ? mesVentes.filter(v => jourDe(v) === isoVersJour(jour)) : mesVentes;
+  const encours = mesVentesJour.filter(v => v.statut !== "payée" && v.statut !== "annulée");
+  const payees = mesVentesJour.filter(v => v.statut === "payée");
+  const annulees = mesVentesJour.filter(v => v.statut === "annulée");
+  const liste = onglet === "encours" ? encours : onglet === "payees" ? payees : annulees;
   return (
-    <div className="bg-white border-b shadow-sm px-4 py-2 space-y-2">
-      <button className="w-full flex items-center justify-between rounded-lg border border-blue-200 bg-blue-50 hover:bg-blue-100 px-3 py-2 font-bold text-blue-800"
-        onClick={() => setOuvert(!ouvert)}>
-        <span>📦 Mes commandes ({mesVentes.length})</span>
-        <span>{ouvert ? "▲" : "▼"}</span>
-      </button>
+    <div className="max-w-6xl mx-auto px-4 pt-3">
+      <Button
+        className="w-full h-12 text-base bg-blue-600 hover:bg-blue-700 text-white font-bold"
+        onClick={() => setOuvert(o => !o)}>
+        📦 Mes commandes {ouvert ? "▲" : "▼"} ({mesVentes.length})
+      </Button>
       {ouvert && (
-        <div>
-          <div className="flex flex-wrap gap-2 mb-2">
-            <Button size="sm" variant={filtre === "cours" ? "default" : "outline"} onClick={() => setFiltre("cours")}>⏳ En cours ({enCours.length})</Button>
-            <Button size="sm" variant={filtre === "payees" ? "default" : "outline"} onClick={() => setFiltre("payees")}>✅ Payées ({payees.length})</Button>
-            <Button size="sm" variant={filtre === "annulees" ? "default" : "outline"} onClick={() => setFiltre("annulees")}>🚫 Annulées ({annulees.length})</Button>
-          </div>
-          {liste.length === 0
-            ? <p className="text-sm text-muted-foreground text-center py-3">Aucune commande dans cette catégorie.</p>
-            : liste.map(v => <LigneVente key={v.id} v={v} />)}
-        </div>
+        <Card className="bg-white mt-2 border shadow-sm">
+          <CardContent className="p-3">
+            <FiltreCalendrier valeur={jour} onChange={setJour} label="Mes commandes : voir par jour" />
+            <div className="flex flex-wrap gap-2 mb-3">
+              <Button size="sm" variant={onglet === "encours" ? "default" : "outline"}
+                className={onglet === "encours" ? "ring-2 ring-blue-600 ring-offset-1" : ""}
+                onClick={() => setOnglet("encours")}>⏳ En cours ({encours.length})</Button>
+              <Button size="sm" variant={onglet === "payees" ? "default" : "outline"}
+                className={onglet === "payees" ? "ring-2 ring-blue-600 ring-offset-1" : ""}
+                onClick={() => setOnglet("payees")}>✅ Payées ({payees.length})</Button>
+              <Button size="sm" variant={onglet === "annulees" ? "default" : "outline"}
+                className={onglet === "annulees" ? "ring-2 ring-blue-600 ring-offset-1" : ""}
+                onClick={() => setOnglet("annulees")}>🚫 Annulées ({annulees.length})</Button>
+            </div>
+            {liste.length === 0
+              ? <p className="text-sm text-muted-foreground py-2">{jour ? `Aucune commande le ${isoVersJour(jour)}.` : "Aucune commande dans cette catégorie."}</p>
+              : liste.map(v => <LigneVente key={v.id} v={v} />)}
+            <p className="text-[11px] text-muted-foreground mt-2">
+              🚫 Une commande ne peut être annulée que par l'administrateur de la boutique. Une commande déjà payée n'est jamais annulée ni supprimée.
+            </p>
+          </CardContent>
+        </Card>
       )}
     </div>
   );
@@ -713,7 +715,7 @@ function MesCommandes({ ventes = [], userActif }) {
 
 // ---------- Vue Client ----------
 
-function VueClient({ produits, marques, creerVente, photosCategories, photosMarques, categories, onNegocierPrix, userActif, comptes, entreprise, ventes = [] }) {
+function VueClient({ produits, marques, creerVente, ventes = [], photosCategories, photosMarques, categories, onNegocierPrix, userActif, comptes, entreprise }) {
   const [recherche, setRecherche] = useState("");
   const [cat, setCat] = useState("toutes");
   const [marque, setMarque] = useState("toutes");
@@ -729,7 +731,10 @@ function VueClient({ produits, marques, creerVente, photosCategories, photosMarq
     }
   });
 
-  const [infos, setInfos] = useState(null);
+  // Le nom et le numéro viennent AUTOMATIQUEMENT du compte du client (il a déjà un compte)
+  const [infos, setInfos] = useState(() => (userActif && (userActif.nom || userActif.tel)
+    ? { nom: userActif.nom || "", tel: userActif.tel || userActif.email || "" }
+    : null));
   const [chargementPhoto, setChargementPhoto] = useState(false);
 
   useEffect(() => {
@@ -793,15 +798,21 @@ function VueClient({ produits, marques, creerVente, photosCategories, photosMarq
     e.target.value = "";
   };
 
+  const [ocrEffectue, setOcrEffectue] = useState(false);
+  // 🔍 Recherche par OCR : le texte écrit sur la pièce est lu automatiquement,
+  // et la marchandise correspondante s'affiche avec son prix. Pas d'import de photo.
   const chercherParImage = async (src) => {
-    setPhotoRecherche(src);
+    setPhotoRecherche(null);
     setResultatsImage([]);
-    const avecPhoto = produits.filter(p => p.photo);
-    if (!avecPhoto.length) return;
-    const sig = await sigImage(src);
-    const dists = await Promise.all(avecPhoto.map(async p => ({ p, d: distanceSig(sig, await sigImage(p.photo)) })));
-    dists.sort((x, y) => x.d - y.d);
-    setResultatsImage(dists.slice(0, 3).map(x => x.p));
+    setOcrEffectue(false);
+    try {
+      const resOCR = await extraireTexteImage(src);
+      if (resOCR && resOCR.success) {
+        const matchs = faireCorrespondreOCR(resOCR.text, resOCR.references, produits);
+        setResultatsImage(matchs.map(m => m.p));
+      }
+    } catch (e) { console.warn("Analyse OCR client:", e); }
+    setOcrEffectue(true);
   };
 
   const resultatsNom = nomRecherche.trim()
@@ -826,8 +837,8 @@ function VueClient({ produits, marques, creerVente, photosCategories, photosMarq
     const commandePayload = {
       items: itemsSnapshot,
       total: totalSnapshot,
-      client: infos?.nom?.trim() || "Client",
-      tel: infos?.tel?.trim() || "",
+      client: infos?.nom?.trim() || userActif?.nom?.trim() || "Client",
+      tel: infos?.tel?.trim() || (userActif?.tel || userActif?.email || "").trim() || "",
       vendeur: itemsSnapshot[0]?.boutique || "MotoPièces Principal",
     };
 
@@ -844,6 +855,8 @@ function VueClient({ produits, marques, creerVente, photosCategories, photosMarq
 
   return (
     <div>
+      {/* 📦 Suivi des commandes du client : visible dès qu'il est connecté */}
+      {userActif && <MesCommandes ventes={ventes} userActif={userActif} />}
       {panier.length > 0 && (
         <div className="sticky top-0 z-40 bg-white border-b shadow-sm px-4 py-2">
           <Dialog>
@@ -867,7 +880,6 @@ function VueClient({ produits, marques, creerVente, photosCategories, photosMarq
           </Dialog>
         </div>
       )}
-      {userActif && <MesCommandes ventes={ventes} userActif={userActif} />}
       <Filtres recherche={recherche} setRecherche={setRecherche} cat={cat} setCat={setCat}
         marque={marque} setMarque={setMarque} marques={marques} tri={tri} setTri={setTri} photosCategories={photosCategories} photosMarques={photosMarques} categories={categories} />
       <main className="max-w-[1400px] mx-auto px-3 sm:px-6 lg:px-8 pb-24">
@@ -920,18 +932,14 @@ function VueClient({ produits, marques, creerVente, photosCategories, photosMarq
             onFermer={() => setModeRecherche(null)}
           />
 
-          <input
-            type="file"
-            accept="image/*"
-            capture="environment"
-            className="hidden"
-            id="photo-recherche-client-auto"
-            onChange={handleCapturePhotoAutomatique}
-          />
+          <p className="text-[11px] text-zinc-400 mt-2 text-center leading-relaxed">
+            🔍 <b>OCR automatique</b> : pointez la caméra sur la pièce, la capture se fait toute seule.
+            Le texte écrit dessus est lu et la marchandise sort avec son prix. Pas d'import de photo.
+          </p>
 
           {chargementPhoto && (
             <div className="p-3 mt-3 bg-amber-500/20 border border-amber-500/50 rounded-lg text-xs font-semibold text-amber-200 animate-pulse flex items-center justify-center gap-2">
-              <span>🔍 Reconnaissance et analyse automatique en cours...</span>
+              <span>🔍 Lecture OCR et recherche de la marchandise en cours...</span>
             </div>
           )}
 
@@ -953,7 +961,7 @@ function VueClient({ produits, marques, creerVente, photosCategories, photosMarq
                 <span className="text-xs font-bold text-green-400">{p.prix.toLocaleString("fr-FR")} FCFA — Ajouter</span>
               </button>
             ))}
-            {photoRecherche && resultatsImage.length === 0 && !chargementPhoto && (
+            {ocrEffectue && resultatsImage.length === 0 && !chargementPhoto && (
               <p className="text-xs text-zinc-400 p-2 text-center">Aucune correspondance exacte — essayez la recherche par nom.</p>
             )}
           </div>
@@ -967,7 +975,7 @@ function VueClient({ produits, marques, creerVente, photosCategories, photosMarq
           onClick={() => setModeRecherche(modeRecherche === "nom" ? null : "nom")}>🔎 Par nom</Button>
         <Button variant={modeRecherche === "image" ? "default" : "outline"}
           className={modeRecherche === "image" ? "ring-2 ring-blue-600 ring-offset-1 font-bold" : ""}
-          onClick={declencherCaptureAutomatique}>📷 Par image (Auto)</Button>
+          onClick={() => setModeRecherche("image")}>🔍 OCR scan (Auto)</Button>
       </div>
     </div>
   );
@@ -975,7 +983,97 @@ function VueClient({ produits, marques, creerVente, photosCategories, photosMarq
 
 // ---------- Vue Vendeur ----------
 
-function VueVendeur({ produits, ventes, creerVente, categories = [], credits = [], cases = [], annulerVente = () => {} }) {
+// ---------- Historique personnel (vendeur / secrétaire) ----------
+
+// 📜 Mes ventes : la liste DÉTAILLÉE des ventes réalisées par la personne connectée.
+// ---------- 📅 Calendrier des historiques : voir les ventes par jour, par date ----------
+const jourDe = (x) => (((x?.date || "") + "")).split(" à ")[0] || ("" + (x?.datePaiement || "")).split(" à ")[0] || "";
+const isoVersJour = (iso) => iso ? iso.split("-").reverse().join("/") : ""; // "2026-11-13" → "13/11/2026"
+function FiltreCalendrier({ valeur, onChange, label = "Calendrier : voir par jour" }) {
+  return (
+    <div className="flex flex-wrap items-center gap-2 mb-4">
+      <span className="text-xs font-semibold">📅 {label}</span>
+      <input type="date" value={valeur} onChange={e => onChange(e.target.value)}
+        className="h-9 rounded-md border border-zinc-300 px-3 bg-white text-sm" />
+      {valeur ? (
+        <>
+          <span className="text-xs text-blue-700 font-semibold">Ventes du {isoVersJour(valeur)}</span>
+          <Button size="sm" variant="outline" onClick={() => onChange("")}>✕ Toutes les dates</Button>
+        </>
+      ) : <span className="text-xs text-muted-foreground">Choisissez une date pour voir les ventes de ce jour-là.</span>}
+    </div>
+  );
+}
+
+function MonHistorique({ ventes = [], moi }) {
+  const [filtre, setFiltre] = useState("toutes");
+  const [jour, setJour] = useState(""); // 📅 calendrier : voir mes ventes d'un jour précis
+  const monNom = (moi?.nom || "").trim();
+  const mesVentes = (ventes || []).filter(v => !(v.vendeurNom || "").trim() || (v.vendeurNom || "").trim() === monNom);
+  const totalDe = (v) => (v.items || []).reduce((s, it) => s + (it.prixLigne ?? (it.p ? it.p.prix : it.prix)) * (it.qte || 1), 0);
+  // 📅 On garde d'abord les ventes du jour choisi (ou toutes), puis le filtre de statut
+  const mesVentesJour = jour ? mesVentes.filter(v => jourDe(v) === isoVersJour(jour)) : mesVentes;
+  const nbPayees = mesVentesJour.filter(v => v.statut === "payée").length;
+  const nbAttente = mesVentesJour.filter(v => v.statut === "en attente").length;
+  const nbCredits = mesVentesJour.filter(v => v.statut === "crédit").length;
+  const nbAnnulees = mesVentesJour.filter(v => v.statut === "annulée").length;
+  const totalEncaisse = mesVentesJour.filter(v => v.statut === "payée").reduce((s, v) => s + totalDe(v), 0);
+  const liste = filtre === "toutes" ? mesVentesJour
+    : filtre === "payée" ? mesVentesJour.filter(v => v.statut === "payée")
+    : filtre === "attente" ? mesVentesJour.filter(v => v.statut === "en attente")
+    : filtre === "crédit" ? mesVentesJour.filter(v => v.statut === "crédit")
+    : mesVentesJour.filter(v => v.statut === "annulée");
+  return (
+    <div className="max-w-6xl mx-auto px-4 py-4">
+      <div className="mb-4">
+        <h2 className="text-lg font-bold">📜 Mes ventes — {moi?.nom || "Moi"}</h2>
+        <p className="text-xs text-muted-foreground mt-1">
+          L'historique détaillé de toutes les ventes que vous avez enregistrées : client, articles, montants et statuts.
+        </p>
+      </div>
+      <FiltreCalendrier valeur={jour} onChange={setJour} label="Mes ventes : voir par jour" />
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+        <Card className="bg-white"><CardContent className="p-3">
+          <div className="text-xs text-muted-foreground">Ventes {jour ? "du " + isoVersJour(jour) : "(toutes dates)"}</div>
+          <div className="text-xl font-bold">{mesVentesJour.length}</div>
+        </CardContent></Card>
+        <Card className="bg-white"><CardContent className="p-3">
+          <div className="text-xs text-muted-foreground">Argent encaissé ✅</div>
+          <div className="text-xl font-bold text-green-700">{totalEncaisse.toLocaleString("fr-FR")} F</div>
+        </CardContent></Card>
+        <Card className="bg-white"><CardContent className="p-3">
+          <div className="text-xs text-muted-foreground">Payées / En attente</div>
+          <div className="text-xl font-bold">{nbPayees} / {nbAttente}</div>
+        </CardContent></Card>
+        <Card className="bg-white"><CardContent className="p-3">
+          <div className="text-xs text-muted-foreground">Crédits / Annulées</div>
+          <div className="text-xl font-bold">{nbCredits} / {nbAnnulees}</div>
+        </CardContent></Card>
+      </div>
+      <div className="flex flex-wrap gap-2 mb-4">
+        {[
+          ["toutes", `Toutes (${mesVentesJour.length})`],
+          ["payée", `✅ Payées (${nbPayees})`],
+          ["attente", `⏳ En attente (${nbAttente})`],
+          ["crédit", `🔴 Crédits (${nbCredits})`],
+          ["annulée", `🚫 Annulées (${nbAnnulees})`],
+        ].map(([cle, txt]) => (
+          <Button key={cle} variant={filtre === cle ? "default" : "outline"}
+            className={filtre === cle ? "ring-2 ring-blue-600 ring-offset-1" : ""}
+            onClick={() => setFiltre(cle)}>{txt}</Button>
+        ))}
+      </div>
+      {liste.length === 0
+        ? <p className="text-muted-foreground">Aucune vente dans cette catégorie pour le moment.</p>
+        : liste.map(v => <LigneVente key={v.id} v={v} />)}
+      <p className="text-[11px] text-muted-foreground mt-3">
+        ℹ️ Seul l'administrateur peut annuler une commande. Une commande déjà payée ou à crédit n'est jamais annulée ni supprimée : l'information reste.
+      </p>
+    </div>
+  );
+}
+
+function VueVendeur({ produits, ventes, creerVente, ventesToutes = [], moi = null, categories = [], credits = [], cases = [], entreprise = {}, ventePhoto = false }) {
   const [onglet, setOnglet] = useState("vendre");
   const [photos, setPhotos] = useState([]); // [{ src, article, qte }]
   // Ajout des marchandises par le vendeur
@@ -989,10 +1087,20 @@ function VueVendeur({ produits, ventes, creerVente, categories = [], credits = [
   const [client, setClient] = useState({ nom: "", tel: "" });
   const [vendu, setVendu] = useState(false);
   const [filtreVentes, setFiltreVentes] = useState("toutes");
+  const [jourVentes, setJourVentes] = useState(""); // 📅 calendrier : ventes d'un jour précis
   const [scanOuvert, setScanOuvert] = useState(false); // scanner caméra automatique
   const [creditActif, setCreditActif] = useState(false); // vente à crédit activée
   const [acompte, setAcompte] = useState(""); // montant déjà payé au moment de la vente
   const [derniereVenteCredit, setDerniereVenteCredit] = useState(false); // la vente envoyée était-elle à crédit ?
+  const [derniereVente, setDerniereVente] = useState(null); // dernière vente validée : pour faire sortir le reçu
+  const [recuOuvert, setRecuOuvert] = useState(false); // reçu affiché / imprimé après la validation
+  const [rechercheBoutique, setRechercheBoutique] = useState(""); // recherche d'une marchandise dans la boutique
+  // 📅 Calendrier de l'onglet Ventes : les ventes d'un jour précis
+  const ventesJour = jourVentes ? ventes.filter(v => jourDe(v) === isoVersJour(jourVentes)) : ventes;
+
+  // 📷 Vente par photo (option activée par l'administrateur uniquement)
+  const [photosLibres, setPhotosLibres] = useState([]); // [{ src, nom, prix }] : articles non enregistrés, vendus par photo
+  const [scanPhotoOuvert, setScanPhotoOuvert] = useState(false); // scanner de la vente par photo
 
   // Capture automatique du scanner : la photo devient un article et est reconnue tout de suite
   const scannerCapture = (fichier) => {
@@ -1035,10 +1143,31 @@ function VueVendeur({ produits, ventes, creerVente, categories = [], credits = [
 
   // Reconnaissance automatique instantanée dès la capture photo : l'article est directement identifié et ajouté au panier/vente
   const reconnaitre = async (src, index) => {
-    const avecPhoto = produits.filter(p => p.photo);
-    const candidats = avecPhoto.length ? avecPhoto : produits;
+    const candidats = produits;
     if (!candidats.length) return;
 
+    // 🔍 D'ABORD L'OCR : lecture du texte écrit sur la pièce (code, marque, référence).
+    // La marchandise correspondante sort de la boutique avec son prix.
+    try {
+      const resOCR = await extraireTexteImage(src);
+      if (resOCR && resOCR.success) {
+        const matchs = faireCorrespondreOCR(resOCR.text, resOCR.references, candidats);
+        if (matchs.length && matchs[0].score >= 20) {
+          // Marchandise reconnue par OCR : elle sort de la boutique avec son prix ✅
+          setPhotos(prev => prev.map((ph, j) => j === index
+            ? { ...ph, article: matchs[0].p, reconnu: true, candidats: matchs.slice(0, 3) } : ph));
+          return;
+        }
+        if (matchs.length) {
+          // L'OCR a lu des mots proches : le vendeur sélectionne la bonne marchandise
+          setPhotos(prev => prev.map((ph, j) => j === index
+            ? { ...ph, candidats: matchs.slice(0, 3) } : ph));
+          return;
+        }
+      }
+    } catch (eOCR) { console.warn("Analyse OCR:", eOCR); }
+
+    // Filet de sécurité : comparaison d'image si l'OCR n'a rien reconnu
     try {
       const sig = await sigImage(src);
       const dists = await Promise.all(candidats.map(async p => ({
@@ -1068,7 +1197,10 @@ function VueVendeur({ produits, ventes, creerVente, categories = [], credits = [
     [reconnaissables, recherche]);
 
   const identifies = photos.filter(ph => ph.article);
-  const totalAuto = identifies.reduce((s, ph) => s + ph.article.prix * ph.qte, 0);
+  // Prix de vente de la marchandise : par défaut le prix de la boutique, mais le vendeur peut le modifier
+  const prixEff = (ph) => Number(ph.prixVente) > 0 ? Number(ph.prixVente) : (ph.article?.prix || 0);
+  // La machine calcule automatiquement le total de toutes les marchandises du panier
+  const totalAuto = identifies.reduce((s, ph) => s + prixEff(ph) * ph.qte, 0);
 
   // Reconnaissance par mot-clé écrit sur la pièce (ex : « Papa »)
   const trouverParMot = (mot) => {
@@ -1107,18 +1239,65 @@ function VueVendeur({ produits, ventes, creerVente, categories = [], credits = [
     setRechercheCode("");
   };
 
+  // 🏪 Mode Boutique : le vendeur entre dans la boutique et sélectionne les marchandises vendues
+  const resultatsBoutique = useMemo(() => {
+    const q = rechercheBoutique.trim().toLowerCase();
+    return produits.filter(p =>
+      (p.stock ?? 0) > 0 &&
+      (!q || (p.code || "").toLowerCase().includes(q) || (p.nom || "").toLowerCase().includes(q) || (p.marque || "").toLowerCase().includes(q))
+    ).slice(0, 10);
+  }, [produits, rechercheBoutique]);
+
+  const ajouterDepuisBoutique = (p) => {
+    setPhotos(prev => [...prev, { src: null, article: p, qte: 1 }]);
+    setRechercheBoutique("");
+  };
+
+  // Le vendeur peut mettre le prix de la marchandise vendue (négociation, prix du marché…)
+  const changerPrixVente = (i, val) => setPhotos(prev => prev.map((ph, j) => j === i ? { ...ph, prixVente: val } : ph));
+
+  // 📷 Vente par photo : capture d'un article non enregistré dans la boutique
+  const scannerCaptureLibre = (fichier) => {
+    if (!fichier) return;
+    const r = new FileReader();
+    r.onload = () => {
+      setPhotosLibres(prev => [...prev, { src: r.result, nom: "", prix: "" }]);
+    };
+    r.readAsDataURL(fichier);
+  };
+  const changerNomLibre = (i, val) => setPhotosLibres(prev => prev.map((ph, j) => j === i ? { ...ph, nom: val } : ph));
+  const changerPrixLibre = (i, val) => setPhotosLibres(prev => prev.map((ph, j) => j === i ? { ...ph, prix: val } : ph));
+  const supprimerPhotoLibre = (i) => setPhotosLibres(prev => prev.filter((_, j) => j !== i));
+  // La machine calcule automatiquement le total de tous les articles pris en photo
+  const totalPhoto = photosLibres.reduce((s, ph) => s + (Number(ph.prix) || 0), 0);
+  const validerVentePhoto = () => {
+    if (!photosLibres.length || photosLibres.some(ph => !(Number(ph.prix) > 0))) return;
+    Promise.resolve(creerVente({
+      items: photosLibres.map(ph => ({ nom: (ph.nom || "").trim() || "Article (photo)", prix: Number(ph.prix) || 0, qte: 1, photo: ph.src })),
+      total: totalPhoto,
+      client: "Client", tel: "", vendeur: "Vendeur",
+      photo: photosLibres[0].src,
+      ventePhoto: true, // 📷 vente faite par photo : les images sortent alignées une à une dans la liste
+    })).then(nouvelle => { if (nouvelle) setDerniereVente(nouvelle); });
+    setDerniereVenteCredit(false);
+    setVendu(true);
+  };
+
   const envoyer = () => {
     // Correctif : impossible d'enregistrer une vente à 0 FCFA (article sans prix défini)
-    const sansPrix = identifies.filter(ph => !(ph.article.prix > 0));
+    const sansPrix = identifies.filter(ph => !(prixEff(ph) > 0));
     if (sansPrix.length > 0) return;
-    const liste = identifies.map(ph => ({ p: ph.article, qte: ph.qte, photo: ph.src }));
-    creerVente({
+    const liste = identifies.map(ph => ({ p: ph.article, qte: ph.qte, photo: ph.src, prixLigne: prixEff(ph) }));
+    Promise.resolve(creerVente({
       items: liste,
       total: totalAuto,
-      client: client.nom || "Client", tel: client.tel, vendeur: "Vendeur",
+      // Vente directe : pas de nom ni de numéro de client. Vente à crédit : nom et numéro (obligatoires, vérifiés plus haut).
+      client: creditActif ? (client.nom.trim() || "Client") : "Client",
+      tel: creditActif ? client.tel.trim() : "",
+      vendeur: "Vendeur",
       photo: liste[0].photo,
       credit: creditActif, dejaPaye: Number(acompte) || 0,
-    });
+    })).then(nouvelle => { if (nouvelle) setDerniereVente(nouvelle); });
     setDerniereVenteCredit(creditActif);
     setCreditActif(false);
     setAcompte("");
@@ -1127,6 +1306,8 @@ function VueVendeur({ produits, ventes, creerVente, categories = [], credits = [
 
   const reinitialiser = () => {
     setPhotos([]); setClient({ nom: "", tel: "" }); setVendu(false); setRecherche(""); setIdentification(null); setDerniereVenteCredit(false);
+    setDerniereVente(null); setRecuOuvert(false); setRechercheBoutique("");
+    setPhotosLibres([]); setScanPhotoOuvert(false);
   };
 
   return (
@@ -1135,6 +1316,7 @@ function VueVendeur({ produits, ventes, creerVente, categories = [], credits = [
         <Button variant={onglet === "vendre" ? "default" : "outline"} className={onglet === "vendre" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("vendre")}>📷 Vendre</Button>
         <Button variant={onglet === "marche" ? "default" : "outline"} className={onglet === "marche" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("marche")}>🏪 Marché ({produits.length})</Button>
         <Button variant={onglet === "ventes" ? "default" : "outline"} className={onglet === "ventes" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("ventes")}>📋 Ventes ({ventes.length})</Button>
+        <Button variant={onglet === "mesventes" ? "default" : "outline"} className={onglet === "mesventes" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("mesventes")}>📜 Mes ventes</Button>
         <Button variant={onglet === "historique" ? "default" : "outline"} className={onglet === "historique" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("historique")}>📊 Historique Global</Button>
         <Button variant={onglet === "credits" ? "default" : "outline"} className={onglet === "credits" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("credits")}>💳 Crédits ({(credits || []).filter(c => c.statut !== "payé").length})</Button>
       </div>
@@ -1227,13 +1409,23 @@ function VueVendeur({ produits, ventes, creerVente, categories = [], credits = [
                   <p className="text-sm text-muted-foreground">{derniereVenteCredit
                     ? "La marchandise est sortie et la commande est dans l'historique en « Crédit 🔴 ». La secrétaire encaisse les versements jusqu'à ce que tout soit payé."
                     : "La secrétaire confirmera le paiement dès réception de l'argent."}</p>
+                  {derniereVente && (
+                    <Button variant="outline" onClick={() => setRecuOuvert(o => !o)}>🧾 {recuOuvert ? "Fermer le reçu" : "Voir / imprimer le reçu"}</Button>
+                  )}
                   <Button onClick={reinitialiser}>📷 Nouvelle vente</Button>
+                  {derniereVente && recuOuvert && (
+                    <RecuVente vente={derniereVente} entreprise={entreprise} onFermer={() => setRecuOuvert(false)} />
+                  )}
                 </div>
               ) : (
                 <div className="space-y-4">
                   <div className="flex flex-wrap gap-2 justify-center">
-                    <Button variant={mode === "image" ? "default" : "outline"} className={mode === "image" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setMode("image")}>📷 Par image</Button>
+                    <Button variant={mode === "ocr" ? "default" : "outline"} className={mode === "ocr" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setMode("ocr")}>🔍 OCR scan automatique</Button>
                     <Button variant={mode === "code" ? "default" : "outline"} className={mode === "code" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setMode("code")}>⌨️ Par code</Button>
+                    <Button variant={mode === "boutique" ? "default" : "outline"} className={mode === "boutique" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setMode("boutique")}>🏪 Boutique</Button>
+                    {ventePhoto && (
+                    <Button variant={mode === "photo" ? "default" : "outline"} className={mode === "photo" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setMode("photo")}>📷 Vente par photo</Button>
+                    )}
                   </div>
 
                   {mode === "code" && (
@@ -1255,20 +1447,46 @@ function VueVendeur({ produits, ventes, creerVente, categories = [], credits = [
                     </div>
                   )}
 
-                  {mode === "image" && (
+                  {(mode === "ocr" || mode === "boutique") && (
                   <>
+                  {mode === "boutique" && (
+                    <div className="border rounded-md p-3 space-y-2">
+                      <Label>🏪 Boutique — sélectionner les marchandises vendues</Label>
+                      <p className="text-xs text-muted-foreground">Entrez dans la boutique : tapez le nom, la marque ou le code de la marchandise, ajoutez-la au panier, mettez son prix, et validez la vente.</p>
+                      <Input autoFocus placeholder="🔍 Rechercher une marchandise (nom, marque, code…)" value={rechercheBoutique} onChange={e => setRechercheBoutique(e.target.value)} />
+                      {resultatsBoutique.length > 0 && (
+                        <div className="space-y-1 max-h-64 overflow-auto">
+                          {resultatsBoutique.map(p => (
+                            <button key={p.id} onClick={() => ajouterDepuisBoutique(p)}
+                              className="w-full text-left border rounded-md p-2 hover:bg-zinc-100 flex justify-between items-center">
+                              <span className="text-sm font-medium"><Badge variant="outline" className="mr-2 font-mono">{p.code}</Badge>{p.nom}</span>
+                              <span className="text-xs">{(p.prix || 0).toLocaleString("fr-FR")} FCFA — Stock : {p.stock ?? 0}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      {rechercheBoutique && resultatsBoutique.length === 0 && (
+                        <p className="text-xs text-muted-foreground">Aucune marchandise disponible trouvée.</p>
+                      )}
+                      <p className="text-xs text-muted-foreground">Chaque marchandise sélectionnée arrive dans le panier ci-dessous. La machine calcule automatiquement le total.</p>
+                    </div>
+                  )}
+                  {mode === "ocr" && (
                   <div className="text-center space-y-2">
                     <div className="text-4xl">🔍</div>
-                    <div className="font-semibold text-lg">Scanner la marchandise</div>
+                    <div className="font-semibold text-lg">OCR scan automatique</div>
                     <p className="text-sm text-muted-foreground">
-                      Appuyez sur le scanner et pointez la caméra sur l'objet : la photo est prise <b>automatiquement</b> et l'article est recherché tout de suite dans vos marchandises.
+                      Pointez la caméra sur la pièce : la capture est <b>automatique</b> et le texte écrit dessus est lu par <b>OCR</b>.
+                      Dès que la marchandise est reconnue, elle sort de la boutique <b>avec son prix</b> : sélectionnez-la puis envoyez la vente à la secrétaire, qui encaisse l'argent et valide la commande.
+                      Pas d'import de photo : tout est automatique.
                     </p>
                     <Button size="lg" className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-6 text-lg" onClick={() => setScanOuvert(true)}>
-                      🔍 Scanner un article
+                      🔍 OCR scan automatique
                     </Button>
                   </div>
+                  )}
 
-                  {scanOuvert && (
+                  {mode === "ocr" && scanOuvert && (
                     <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-3 overflow-auto">
                       <ModeRech onCaptureAuto={scannerCapture} onFermer={() => setScanOuvert(false)} />
                     </div>
@@ -1277,7 +1495,7 @@ function VueVendeur({ produits, ventes, creerVente, categories = [], credits = [
                   {enAnalyse && (
                     <div className="text-center space-y-1 border rounded-md p-4 bg-zinc-50">
                       <div className="text-2xl animate-pulse">🔎</div>
-                      <div className="text-sm font-medium">Analyse des photos…</div>
+                      <div className="text-sm font-medium">Lecture du texte par l'OCR Mistral…</div>
                     </div>
                   )}
 
@@ -1303,6 +1521,21 @@ function VueVendeur({ produits, ventes, creerVente, categories = [], credits = [
                                     {ph.article.prix > 0 ? ph.article.prix.toLocaleString("fr-FR") + " FCFA" : "Prix à définir"}
                                   </div>
                                 </div>
+                              ) : ph.candidats && ph.candidats.length ? (
+                                <div className="flex-1 text-xs space-y-1 bg-blue-50 border border-blue-200 rounded-md p-2">
+                                  <div>🔍 L'OCR a lu la pièce — sélectionnez la marchandise correspondante :</div>
+                                  {ph.candidats.map(m => (
+                                    <button key={m.p.id} onClick={() => identifier(i, m.p)}
+                                      className="w-full text-left border rounded p-1.5 hover:bg-blue-100 flex justify-between items-center gap-2">
+                                      <span className="font-medium text-sm">
+                                        <Badge variant="outline" className="mr-1 font-mono">{m.p.code}</Badge>{m.p.nom}
+                                      </span>
+                                      <span className="text-[11px] font-bold text-green-700 whitespace-nowrap">
+                                        {(m.p.prix || 0).toLocaleString("fr-FR")} FCFA
+                                      </span>
+                                    </button>
+                                  ))}
+                                </div>
                               ) : (
                                 <div className="flex-1 text-xs space-y-1 bg-amber-50 border border-amber-200 rounded-md p-2">
                                   <div>❓ Non reconnu — tapez le mot écrit sur la pièce (ex : « Papa ») :</div>
@@ -1314,13 +1547,24 @@ function VueVendeur({ produits, ventes, creerVente, categories = [], credits = [
                             </div>
 
                             {ph.article && (
-                              <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-1">
-                                  <Button size="sm" variant="outline" onClick={() => changerQte(i, -1)}>−</Button>
-                                  <span className="w-8 text-center font-semibold">{ph.qte}</span>
-                                  <Button size="sm" variant="outline" onClick={() => changerQte(i, 1)}>+</Button>
+                              <div className="space-y-2">
+                                <div className="flex items-center justify-between">
+                                  <div className="flex items-center gap-1">
+                                    <Button size="sm" variant="outline" onClick={() => changerQte(i, -1)}>−</Button>
+                                    <span className="w-8 text-center font-semibold">{ph.qte}</span>
+                                    <Button size="sm" variant="outline" onClick={() => changerQte(i, 1)}>+</Button>
+                                  </div>
+                                  <span className="font-bold text-sm">{(prixEff(ph) * ph.qte).toLocaleString("fr-FR")} FCFA</span>
                                 </div>
-                                <span className="font-bold text-sm">{(ph.article.prix * ph.qte).toLocaleString("fr-FR")} FCFA</span>
+                                <div className="flex items-center gap-2">
+                                  <Label className="text-[11px] whitespace-nowrap">Prix de vente</Label>
+                                  <Input type="number" className="h-8 text-xs" placeholder={String(ph.article.prix || 0)}
+                                    value={ph.prixVente ?? ""} onChange={e => changerPrixVente(i, e.target.value)} />
+                                  <span className="text-[11px] text-zinc-500">FCFA</span>
+                                  {Number(ph.prixVente) > 0 && Number(ph.prixVente) !== ph.article.prix && (
+                                    <span className="text-[11px] text-blue-700 font-semibold">prix modifié</span>
+                                  )}
+                                </div>
                               </div>
                             )}
 
@@ -1329,10 +1573,12 @@ function VueVendeur({ produits, ventes, creerVente, categories = [], credits = [
                         ))}
                       </div>
 
+                      {mode === "ocr" && (
                       <Button variant="outline" className="w-full border-dashed py-6"
                         onClick={() => setScanOuvert(true)}>
                         🔍 Scanner un autre article
                       </Button>
+                      )}
 
                       <div className="border rounded-md p-3 bg-amber-50 space-y-3">
                         <div className="flex justify-between items-center text-sm font-medium text-amber-800">
@@ -1346,15 +1592,23 @@ function VueVendeur({ produits, ventes, creerVente, categories = [], credits = [
                         {photos.some(ph => !ph.article) && (
                           <p className="text-xs text-red-600">⚠️ Identifiez toutes les photos avant d'envoyer.</p>
                         )}
-                        {identifies.some(ph => !(ph.article.prix > 0)) && (
-                          <p className="text-xs text-red-600">⚠️ Un ou plusieurs articles n'ont pas de prix (0 FCFA). L'admin doit fixer le prix dans l'inventaire avant la vente.</p>
+                        {identifies.some(ph => !(prixEff(ph) > 0)) && (
+                          <p className="text-xs text-red-600">⚠️ Un ou plusieurs articles n'ont pas de prix (0 FCFA). Mettez le prix de vente, ou l'admin doit fixer le prix dans l'inventaire.</p>
                         )}
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                          <Input placeholder="Nom du client" value={client.nom} onChange={e => setClient({ ...client, nom: e.target.value })} />
-                          <Input placeholder="Téléphone" value={client.tel} onChange={e => setClient({ ...client, tel: e.target.value })} />
-                          <Button disabled={identifies.length === 0 || photos.some(ph => !ph.article) || identifies.some(ph => !(ph.article.prix > 0))}
-                            onClick={envoyer}>{creditActif ? "💳 Envoyer la vente à crédit" : "➡️ Envoyer à la secrétaire"}</Button>
-                        </div>
+                        {/* Vente directe : pas de nom ni de numéro de client. Vente à crédit : nom et numéro OBLIGATOIRES. */}
+                        {creditActif && (
+                          <div className="space-y-2">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                              <Input placeholder="Nom du client (obligatoire pour le crédit)" value={client.nom} onChange={e => setClient({ ...client, nom: e.target.value })} />
+                              <Input placeholder="Numéro du client (obligatoire)" value={client.tel} onChange={e => setClient({ ...client, tel: e.target.value })} />
+                            </div>
+                            {(!client.nom.trim() || !client.tel.trim()) && (
+                              <p className="text-xs text-red-600">⚠️ Vente à crédit : le nom et le numéro du client sont obligatoires.</p>
+                            )}
+                          </div>
+                        )}
+                        <Button className="w-full" disabled={identifies.length === 0 || photos.some(ph => !ph.article) || identifies.some(ph => !(prixEff(ph) > 0)) || (creditActif && (!client.nom.trim() || !client.tel.trim()))}
+                          onClick={envoyer}>{creditActif ? "💳 Envoyer la vente à crédit" : "➡️ Envoyer à la secrétaire"}</Button>
 
                         {/* Vente à crédit : la marchandise sort, le client paie après, au fur et à mesure ou tout d'un coup */}
                         <div className="border-t pt-3 space-y-2">
@@ -1379,6 +1633,56 @@ function VueVendeur({ produits, ventes, creerVente, categories = [], credits = [
                   )}
                   </>
                   )}
+                  {mode === "photo" && (
+                    <div className="space-y-4">
+                      <div className="border rounded-md p-3 space-y-2">
+                        <Label>📷 Vente par photo — article non enregistré</Label>
+                        <p className="text-xs text-muted-foreground">
+                          L'article n'est pas dans la boutique ? Prenez sa photo avec le scanner, mettez son prix, et validez : la vente s'enregistre,
+                          et dans la liste des ventes chaque article apparaît avec sa photo alignée une à une, avec le montant de tout ce qui est sorti.
+                        </p>
+                        <Button size="lg" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-6 text-lg" onClick={() => setScanPhotoOuvert(true)}>
+                          📷 Prendre la photo de l'article
+                        </Button>
+                      </div>
+
+                      {scanPhotoOuvert && (
+                        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-3 overflow-auto">
+                          <ModeRech onCaptureAuto={scannerCaptureLibre} onFermer={() => setScanPhotoOuvert(false)} />
+                        </div>
+                      )}
+
+                      {photosLibres.length > 0 && (
+                        <div className="border rounded-md p-3 bg-blue-50 space-y-3">
+                          <div className="font-medium text-sm">📷 Articles de la vente par photo</div>
+                          <div className="space-y-2">
+                            {photosLibres.map((ph, i) => (
+                              <div key={i} className="border rounded-md p-2 bg-white flex items-start gap-2">
+                                <img src={ph.src} alt="" className="w-14 h-14 rounded-md object-contain border bg-zinc-100" />
+                                <div className="flex-1 space-y-1">
+                                  <Input className="h-8 text-xs" placeholder="Nom de l'article (optionnel)" value={ph.nom} onChange={e => changerNomLibre(i, e.target.value)} />
+                                  <div className="flex items-center gap-2">
+                                    <Input type="number" className="h-8 text-xs" placeholder="Prix de vente (FCFA)" value={ph.prix} onChange={e => changerPrixLibre(i, e.target.value)} />
+                                    <span className="text-[11px] text-zinc-500">FCFA</span>
+                                  </div>
+                                </div>
+                                <Button size="sm" variant="ghost" onClick={() => supprimerPhotoLibre(i)}>✕</Button>
+                              </div>
+                            ))}
+                          </div>
+                          <div className="flex justify-between font-bold text-lg">
+                            <span>Total ({photosLibres.length} article{photosLibres.length > 1 ? "s" : ""})</span>
+                            <span>{totalPhoto.toLocaleString("fr-FR")} FCFA</span>
+                          </div>
+                          {photosLibres.some(ph => !(Number(ph.prix) > 0)) && (
+                            <p className="text-xs text-red-600">⚠️ Mettez le prix de chaque article avant de valider.</p>
+                          )}
+                          {/* Vente directe par photo : pas de nom ni de numéro de client */}
+                          <Button className="w-full" disabled={photosLibres.length === 0 || photosLibres.some(ph => !(Number(ph.prix) > 0))} onClick={validerVentePhoto}>✅ Valider la vente</Button>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </CardContent>
@@ -1397,18 +1701,21 @@ function VueVendeur({ produits, ventes, creerVente, categories = [], credits = [
             </CardContent></Card>
             <Card className="bg-white"><CardContent className="p-3">
               <div className="text-xs text-muted-foreground">En attente de paiement</div>
-              <div className="text-xl font-bold text-red-600">{ventes.filter(v => v.statut !== "payée" && v.statut !== "annulée").length}</div>
+              <div className="text-xl font-bold text-red-600">{ventes.filter(v => v.statut !== "payée").length}</div>
             </CardContent></Card>
           </div>
+          <FiltreCalendrier valeur={jourVentes} onChange={setJourVentes} label="Ventes de la boutique : voir par jour" />
           <div className="flex flex-wrap gap-2 mb-4">
             <Button variant={filtreVentes === "toutes" ? "default" : "outline"} className={filtreVentes === "toutes" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setFiltreVentes("toutes")}>Toutes</Button>
             <Button variant={filtreVentes === "payée" ? "default" : "outline"} className={filtreVentes === "payée" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setFiltreVentes("payée")}>Payées</Button>
             <Button variant={filtreVentes === "attente" ? "default" : "outline"} className={filtreVentes === "attente" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setFiltreVentes("attente")}>En attente / Crédits</Button>
           </div>
-          {ventes.length === 0 ? <p className="text-muted-foreground">Aucune vente enregistrée pour le moment.</p> :
-            (filtreVentes === "toutes" ? ventes : ventes.filter(v => filtreVentes === "payée" ? v.statut === "payée" : (v.statut !== "payée" && v.statut !== "annulée")))
-              .map(v => <LigneVente key={v.id} v={v} onAnnuler={annulerVente} />)}
+          {ventesJour.length === 0 ? <p className="text-muted-foreground">{jourVentes ? `Aucune vente le ${isoVersJour(jourVentes)}.` : "Aucune vente enregistrée pour le moment."}</p> :
+            (filtreVentes === "toutes" ? ventesJour : ventesJour.filter(v => filtreVentes === "payée" ? v.statut === "payée" : v.statut !== "payée"))
+              .map(v => <LigneVente key={v.id} v={v} />)}
         </div>
+      ) : onglet === "mesventes" ? (
+        <MonHistorique ventes={ventesToutes} moi={moi} />
       ) : onglet === "historique" ? (
         <HistoriqueGlobal ventes={ventes} />
       ) : null}
@@ -1580,7 +1887,6 @@ function TableauPieces({ produits, ventes }) {
 // ---------- Gestion des crédits / dettes (vendeur & secrétaire) ----------
 function GestionCredits({ credits, ajouterCredit, ajouterVersement, validerCredit, modeVendeur }) {
   const [vue, setVue] = useState("recevoir"); // "recevoir" : ils nous doivent | "payer" : on leur doit
-  const [partie, setPartie] = useState("enregistrer"); // "enregistrer" : formulaire + tableau | "encours" : uniquement les crédits en cours, sans création
   const [filtre, setFiltre] = useState("encours"); // "encours" | "payes"
   const [ticket, setTicket] = useState(null); // crédit en cours d'impression
   const [listeImpression, setListeImpression] = useState(null); // impression de toute la liste (en cours ou payés)
@@ -1590,7 +1896,7 @@ function GestionCredits({ credits, ajouterCredit, ajouterVersement, validerCredi
   const resteDe = (c) => Math.max(0, (c.montant || 0) - (c.versements || []).reduce((s, v) => s + (v.montant || 0), 0));
   const enCours = credits.filter(c => (c.type || "recevoir") === vue && c.statut !== "payé");
   const termines = credits.filter(c => (c.type || "recevoir") === vue && c.statut === "payé");
-  const affichePayes = partie === "enregistrer" && filtre === "payes";
+  const affichePayes = filtre === "payes";
   const liste = affichePayes ? termines : enCours;
   const totalRestant = enCours.reduce((s, c) => s + resteDe(c), 0);
   const nbRecette = credits.filter(c => c.type === "recevoir" && c.statut !== "payé").length;
@@ -1619,44 +1925,22 @@ function GestionCredits({ credits, ajouterCredit, ajouterVersement, validerCredi
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-4">
-      {/* Séparation en deux parties : d'un côté l'enregistrement et le tableau, de l'autre uniquement les crédits en cours */}
-      <div className="flex flex-wrap gap-2 mb-4">
-        <Button variant={partie === "enregistrer" ? "default" : "outline"} className={partie === "enregistrer" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setPartie("enregistrer")}>📝 Enregistrer / gérer les crédits</Button>
-        <Button variant={partie === "encours" ? "default" : "outline"} className={partie === "encours" ? "ring-2 ring-red-600 ring-offset-1" : ""} onClick={() => setPartie("encours")}>🔴 Crédits en cours ({enCours.length})</Button>
-      </div>
-
       {/* Onglets : argent qu'on nous doit / argent qu'on doit */}
       <div className="flex flex-wrap gap-2 mb-4">
         <Button variant={vue === "recevoir" ? "default" : "outline"} className={vue === "recevoir" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => { setVue("recevoir"); setFiltre("encours"); }}>💳 Ils nous doivent ({nbRecette})</Button>
         <Button variant={vue === "payer" ? "default" : "outline"} className={vue === "payer" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => { setVue("payer"); setFiltre("encours"); }}>🏦 On leur doit ({nbDepense})</Button>
       </div>
 
-      {/* Sous-onglets (uniquement dans la partie enregistrement) : crédits en cours / crédits validés */}
-      {partie === "enregistrer" && (
-      <div className="flex flex-wrap gap-2 mb-4 ml-1 pl-3 border-l-4 border-zinc-300">
-        <Button variant={filtre === "encours" ? "default" : "outline"} className={filtre === "encours" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setFiltre("encours")}>🔴 Crédits en cours ({enCours.length})</Button>
-        <Button variant={filtre === "payes" ? "default" : "outline"} className={filtre === "payes" ? "ring-2 ring-green-600 ring-offset-1" : ""} onClick={() => setFiltre("payes")}>✅ Crédits validés ({termines.length})</Button>
-      </div>
-      )}
-
-      {/* Résumé */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
-        <Card className="bg-white"><CardContent className="p-3">
-          <div className="text-xs text-muted-foreground">{vue === "recevoir" ? "Argent à récupérer" : "Argent à verser"}</div>
-          <div className="text-xl font-bold text-red-600">{totalRestant.toLocaleString("fr-FR")} FCFA</div>
-        </CardContent></Card>
-        <Card className="bg-white"><CardContent className="p-3">
-          <div className="text-xs text-muted-foreground">Crédits en cours</div>
-          <div className="text-xl font-bold text-amber-600">{enCours.length}</div>
-        </CardContent></Card>
-        <Card className="bg-white"><CardContent className="p-3">
-          <div className="text-xs text-muted-foreground">Personnes ayant fini de payer ✅</div>
-          <div className="text-xl font-bold text-green-600">{termines.length}</div>
-        </CardContent></Card>
-      </div>
-
-      {/* Formulaire d'enregistrement (uniquement dans la partie « Enregistrer » ; caché pour le vendeur : lui, il vend à crédit depuis la vente) */}
-      {partie === "enregistrer" && !modeVendeur && (
+      {/* 📝 ENREGISTRER UN CRÉDIT — dès qu'on appuie sur le bouton Crédits, on arrive
+          dans cette partie. Elle contient : le formulaire d'enregistrement, puis les
+          deux listes : 🔴 crédit en cours et ✅ crédit validé.
+          Même organisation pour l'autre onglet : quand le magasin doit à une personne. */}
+      <div className="mt-4 pt-3 border-t">
+        <div className="font-semibold text-base mb-3">
+          {vue === "recevoir" ? "📝 Enregistrer un crédit" : "📝 Enregistrer une dette"}
+        </div>
+      {/* Formulaire d'enregistrement (caché pour le vendeur : lui, il vend à crédit depuis la vente) */}
+      {!modeVendeur && (
       <Card className="bg-white mb-4"><CardContent className="p-4 space-y-2">
         <div className="font-semibold text-sm">
           {vue === "recevoir"
@@ -1674,6 +1958,31 @@ function GestionCredits({ credits, ajouterCredit, ajouterVersement, validerCredi
         )}
       </CardContent></Card>
       )}
+
+        {/* Dans « Enregistrer un crédit » : crédit en cours / crédit validé */}
+        <div className="flex flex-wrap gap-2 mb-4 ml-1 pl-3 border-l-4 border-zinc-300">
+          <Button variant={filtre === "encours" ? "default" : "outline"} className={filtre === "encours" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setFiltre("encours")}>🔴 Crédit en cours ({enCours.length})</Button>
+          <Button variant={filtre === "payes" ? "default" : "outline"} className={filtre === "payes" ? "ring-2 ring-green-600 ring-offset-1" : ""} onClick={() => setFiltre("payes")}>✅ Crédit validé ({termines.length})</Button>
+        </div>
+      </div>
+
+      {/* Résumé */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+        <Card className="bg-white"><CardContent className="p-3">
+          <div className="text-xs text-muted-foreground">{vue === "recevoir" ? "Argent à récupérer" : "Argent à verser"}</div>
+          <div className="text-xl font-bold text-red-600">{totalRestant.toLocaleString("fr-FR")} FCFA</div>
+        </CardContent></Card>
+        <Card className="bg-white"><CardContent className="p-3">
+          <div className="text-xs text-muted-foreground">Crédits en cours</div>
+          <div className="text-xl font-bold text-amber-600">{enCours.length}</div>
+        </CardContent></Card>
+        <Card className="bg-white"><CardContent className="p-3">
+          <div className="text-xs text-muted-foreground">Personnes ayant fini de payer ✅</div>
+          <div className="text-xl font-bold text-green-600">{termines.length}</div>
+        </CardContent></Card>
+      </div>
+
+
 
       {/* Gros bouton pour imprimer toute la liste affichée (crédits en cours ou crédits validés) */}
       {liste.length > 0 && (
@@ -1840,16 +2149,30 @@ function GestionCredits({ credits, ajouterCredit, ajouterVersement, validerCredi
   );
 }
 
-function VueSecretaire({ ventes, confirmerPaiement, annulerVente = () => {}, majPrixLigne, modePrix, entreprise, credits, ajouterCredit, ajouterVersement, validerCredit }) {
-  const [ongletSec, setOngletSec] = useState("paiements"); // "paiements" | "credits"
+function VueSecretaire({ ventes, ventesToutes = [], moi = null, confirmerPaiement, majPrixLigne, modePrix, entreprise, credits, ajouterCredit, ajouterVersement, validerCredit }) {
+  const [ongletSec, setOngletSec] = useState("paiements"); // "paiements" | "credits" | "caisse"
+  const [jour, setJour] = useState(""); // 📅 calendrier : voir les ventes / encaissements d'un jour précis
   const [filtre, setFiltre] = useState("toutes");
   const [questionRecu, setQuestionRecu] = useState(null); // après paiement : propose l'impression du reçu
   const [recuA4, setRecuA4] = useState(null); // reçu affiché en feuille A4
-  const liste = ventes.filter(v => v.statut !== "crédit" && (filtre === "toutes" ? true : v.statut === filtre)); // les ventes à crédit sont gérées uniquement dans l'onglet Crédits
+  const liste = ventes.filter(v => (!jour || jourDe(v) === isoVersJour(jour)) && v.statut !== "crédit" && (filtre === "toutes" ? true : v.statut === filtre)); // 📅 calendrier + les ventes à crédit sont gérées uniquement dans l'onglet Crédits
   const totalCalcule = (v) => v.items.reduce((s, it) => s + (it.prixLigne ?? (it.p ? it.p.prix : it.prix)) * (it.qte || 1), 0);
   const totalPaye = ventes.filter(v => v.statut === "payée").reduce((s, v) => s + totalCalcule(v), 0);
   const totalAttente = ventes.filter(v => v.statut === "en attente").reduce((s, v) => s + totalCalcule(v), 0);
   const saisie = modePrix === "secretaire";
+
+  // 💰 Caisse de la secrétaire : tout ce qu'ELLE a encaissé (ventes payées + versements de crédits)
+  const monNom = (moi?.nom || "").trim();
+  const ventesEncaissees = ventesToutes.filter(v => v.statut === "payée" && monNom && (v.encaissePar || "").trim() === monNom
+    && (!jour || jourDe({ date: v.datePaiement || v.date }) === isoVersJour(jour)));
+  const totalVentesEncaissees = ventesEncaissees.reduce((s, v) => s + (v.total || totalCalcule(v)), 0);
+  const mesVersements = [];
+  (credits || []).forEach(c => (c.versements || []).forEach(ver => {
+    if (monNom && (ver.par || "").trim() === monNom && (!jour || jourDe({ date: ver.date }) === isoVersJour(jour)))
+      mesVersements.push({ ...ver, creditNom: c.nom, creditTel: c.tel });
+  }));
+  const totalVersements = mesVersements.reduce((s, v) => s + (v.montant || 0), 0);
+  const totalCaisse = totalVentesEncaissees + totalVersements;
 
   const confirmerEtProposer = (id) => {
     confirmerPaiement(id);
@@ -1862,6 +2185,8 @@ function VueSecretaire({ ventes, confirmerPaiement, annulerVente = () => {}, maj
       {/* Espace secrétaire : paiements des ventes ou gestion des crédits */}
       <div className="flex flex-wrap gap-2 mb-4">
         <Button variant={ongletSec === "paiements" ? "default" : "outline"} className={ongletSec === "paiements" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOngletSec("paiements")}>🧾 Paiements des ventes</Button>
+        <Button variant={ongletSec === "caisse" ? "default" : "outline"} className={ongletSec === "caisse" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOngletSec("caisse")}>💰 Ma caisse</Button>
+        <Button variant={ongletSec === "mesventes" ? "default" : "outline"} className={ongletSec === "mesventes" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOngletSec("mesventes")}>📜 Mes ventes</Button>
         <Button variant={ongletSec === "credits" ? "default" : "outline"} className={ongletSec === "credits" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOngletSec("credits")}>💳 Crédits / Dettes ({(credits || []).filter(c => c.statut !== "payé").length})</Button>
       </div>
 
@@ -1872,7 +2197,53 @@ function VueSecretaire({ ventes, confirmerPaiement, annulerVente = () => {}, maj
           💳 Espace Crédits ({(credits || []).filter(c => c.statut !== "payé").length} en cours)
         </Button>
       )}
-      {ongletSec === "credits" ? (
+      {ongletSec === "caisse" ? (
+        <div className="space-y-4">
+          <FiltreCalendrier valeur={jour} onChange={setJour} label="Ma caisse : voir les encaissements par jour" />
+          {/* 💰 Statistiques de la caisse : l'argent encaissé par la secrétaire pour mettre dans la caisse */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <Card className="bg-white"><CardContent className="p-4">
+              <div className="text-sm text-muted-foreground">💰 Total dans ma caisse</div>
+              <div className="text-2xl font-bold text-green-600">{totalCaisse.toLocaleString("fr-FR")} FCFA</div>
+              <div className="text-xs text-muted-foreground">Tout ce que j'ai encaissé : ventes + versements de crédits</div>
+            </CardContent></Card>
+            <Card className="bg-white"><CardContent className="p-4">
+              <div className="text-sm text-muted-foreground">🧾 Ventes encaissées</div>
+              <div className="text-2xl font-bold">{totalVentesEncaissees.toLocaleString("fr-FR")} FCFA</div>
+              <div className="text-xs text-muted-foreground">{ventesEncaissees.length} vente{ventesEncaissees.length > 1 ? "s" : ""} payée{ventesEncaissees.length > 1 ? "s" : ""} que j'ai encaissée{ventesEncaissees.length > 1 ? "s" : ""}</div>
+            </CardContent></Card>
+            <Card className="bg-white"><CardContent className="p-4">
+              <div className="text-sm text-muted-foreground">💳 Versements de crédits encaissés</div>
+              <div className="text-2xl font-bold">{totalVersements.toLocaleString("fr-FR")} FCFA</div>
+              <div className="text-xs text-muted-foreground">{mesVersements.length} versement{mesVersements.length > 1 ? "s" : ""} que j'ai encaissé{mesVersements.length > 1 ? "s" : ""}</div>
+            </CardContent></Card>
+          </div>
+
+          {/* 📚 Historique de tous mes encaissements */}
+          <div className="font-semibold">📚 Historique de ma caisse</div>
+          {(ventesEncaissees.length + mesVersements.length) === 0 ? (
+            <p className="text-muted-foreground">Aucun encaissement enregistré pour le moment. Les paiements que vous confirmez et les versements que vous encaissez arrivent ici automatiquement, avec leur montant.</p>
+          ) : (
+            <div className="space-y-2">
+              {[
+                ...ventesEncaissees.map(v => ({ kind: "vente", date: v.datePaiement || v.date || "", montant: v.total || totalCalcule(v), label: `Vente #${v.id} — ${v.client || "Client"}` })),
+                ...mesVersements.map(ver => ({ kind: "versement", date: ver.date || "", montant: ver.montant || 0, label: `Versement de crédit — ${ver.creditNom || "client"}` })),
+              ].sort((a, b) => String(b.date).localeCompare(String(a.date))).map((e, i) => (
+                <Card key={i} className="bg-white"><CardContent className="p-2 flex items-center justify-between gap-2">
+                  <div className="text-sm">
+                    <div className="font-medium">{e.kind === "vente" ? "🧾 " : "💳 "}{e.label}</div>
+                    <div className="text-xs text-muted-foreground">{e.date}</div>
+                  </div>
+                  <span className="font-bold text-sm text-green-700 whitespace-nowrap">+{e.montant.toLocaleString("fr-FR")} FCFA</span>
+                </CardContent></Card>
+              ))}
+            </div>
+          )}
+          <p className="text-xs text-muted-foreground">ℹ️ Chaque paiement confirmé et chaque versement de crédit que vous encaissez est enregistré ici avec son montant : c'est l'argent à remettre dans la caisse.</p>
+        </div>
+      ) : ongletSec === "mesventes" ? (
+        <MonHistorique ventes={ventesToutes} moi={moi} />
+      ) : ongletSec === "credits" ? (
         <GestionCredits credits={credits || []} ajouterCredit={ajouterCredit} ajouterVersement={ajouterVersement} validerCredit={validerCredit} />
       ) : (
       <>
@@ -1886,8 +2257,9 @@ function VueSecretaire({ ventes, confirmerPaiement, annulerVente = () => {}, maj
           <div className="text-2xl font-bold text-red-600">{totalAttente.toLocaleString("fr-FR")} FCFA</div>
         </CardContent></Card>
       </div>
+      <FiltreCalendrier valeur={jour} onChange={setJour} label="Paiements des ventes : voir par jour" />
       <div className="flex flex-wrap gap-2 mb-4">
-        <Button variant={filtre === "toutes" ? "default" : "outline"} className={filtre === "toutes" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setFiltre("toutes")}>Toutes ({ventes.filter(v => v.statut !== "crédit").length})</Button>
+        <Button variant={filtre === "toutes" ? "default" : "outline"} className={filtre === "toutes" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setFiltre("toutes")}>Toutes ({liste.length})</Button>
         <Button variant={filtre === "attente" ? "default" : "outline"} className={filtre === "attente" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setFiltre("attente")}>En attente ({ventes.filter(v => v.statut === "en attente").length})</Button>
         <Button variant={filtre === "payée" ? "default" : "outline"} className={filtre === "payée" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setFiltre("payée")}>Payées ({ventes.filter(v => v.statut === "payée").length})</Button>
       </div>
@@ -1899,7 +2271,7 @@ function VueSecretaire({ ventes, confirmerPaiement, annulerVente = () => {}, maj
       )}
       {liste.length === 0 ? <p className="text-muted-foreground">Aucune vente dans cette catégorie.</p> : liste.map(v => (
         <div key={v.id}>
-          <LigneVente v={v} onConfirmer={confirmerEtProposer} onAnnuler={annulerVente}
+          <LigneVente v={v} onConfirmer={confirmerEtProposer}
             saisiePrix={saisie} onSaisirPrix={majPrixLigne} />
           {/* v65 : bouton pour réimprimer le reçu de CETTE commande seulement */}
           <div className="px-3 pb-2 flex justify-end">
@@ -1935,14 +2307,14 @@ function VueSecretaire({ ventes, confirmerPaiement, annulerVente = () => {}, maj
 
 // Vue combinée : une personne qui est vendeur ET secrétaire en même temps
 // Contenu du menu développeur : code + création/suppression des comptes administrateurs
-function ContenuMenuDev({ codeOk, setCodeOk, codeSaisi, setCodeSaisi, nouvelAdmin, setNouvelAdmin, comptes, setComptes, fermer, CODE_DEV, dureePublicite = 1, onChangerDuree = () => {}, produits = [], boutiquesMasquees = [], basculerVisibiliteBoutique = () => {} }) {
+function ContenuMenuDev({ codeOk, setCodeOk, codeSaisi, setCodeSaisi, nouvelAdmin, setNouvelAdmin, comptes, setComptes, fermer, CODE_DEV, dureePublicite = 1, onChangerDuree = () => {}, basculerBlocageCompte = () => {}, supprimerCompte = () => {}, produits = [], boutiquesMasquees = [], basculerVisibiliteBoutique = () => {} }) {
   const [erreur, setErreur] = useState("");
   const [pinGenere, setPinGenere] = useState(null); // { nom, pin }
   const reinitialiserPinAdmin = (c) => {
     const nouveau = String(Math.floor(1000 + Math.random() * 9000));
     setComptes(prev => prev.map(x => x.id === c.id ? { ...x, pin: nouveau } : x));
-    setPinGenere({ nom: c.nom, pin: nouveau });
     try { synchroniserCompteSupabase({ ...c, pin: nouveau }); } catch {}
+    setPinGenere({ nom: c.nom, pin: nouveau });
   };
   // Blocage à distance : le changement part aussitôt vers le serveur (Supabase)
   const bloquerCompteADistance = (c) => {
@@ -1950,21 +2322,21 @@ function ContenuMenuDev({ codeOk, setCodeOk, codeSaisi, setCodeSaisi, nouvelAdmi
     setComptes(prev => prev.map(x => x.id === c.id ? { ...x, bloque } : x));
     try { synchroniserCompteSupabase({ ...c, bloque }); } catch {}
   };
-
-  // Chaque magasin (boutique) avec son administrateur : le développeur contrôle la visibilité
-  const boutiquesDev = useMemo(() => {
-    const map = new Map();
+  // 🏪 Liste des magasins : chaque boutique avec le nom de son administrateur (👑)
+  const boutiquesDev = (() => {
+    const vus = new Set();
+    const l = [];
     (produits || []).forEach(p => {
       const nom = p.boutique || "MotoPièces Principal";
-      if (!map.has(nom)) {
-        const telEquipe = (p.equipe || "").trim();
-        const admin = (comptes || []).find(c => c.role === "admin" && (c.tel || "").trim() === telEquipe);
-        map.set(nom, { nom, adminNom: (admin && admin.nom) || "", nbArticles: 0 });
-      }
-      map.get(nom).nbArticles++;
+      const equipe = (p.equipe || "").trim();
+      const cle = nom + "|" + equipe;
+      if (vus.has(cle)) return;
+      vus.add(cle);
+      const admin = ((comptes || []).find(c => c.role === "admin" && (c.tel || "").trim() === equipe) || {}).nom || "";
+      l.push({ nom, equipe, admin });
     });
-    return Array.from(map.values());
-  }, [produits, comptes]);
+    return l;
+  })();
   if (!codeOk) {
     return (
       <div className="grid gap-1.5">
@@ -2031,11 +2403,11 @@ function ContenuMenuDev({ codeOk, setCodeOk, codeSaisi, setCodeSaisi, nouvelAdmi
                     onClick={() => reinitialiserPinAdmin(c)}>🔑 Réinitialiser PIN</Button>
                   <Button size="sm" variant="outline"
                     className={c.bloque ? "border-green-300 text-green-700 hover:bg-green-50" : "border-amber-300 text-amber-700 hover:bg-amber-50"}
-                    onClick={() => basculerBlocageCompte(c, setComptes)}>
+                    onClick={() => basculerBlocageCompte(c)}>
                     {c.bloque ? "🔓 Débloquer" : "🔒 Bloquer"}
                   </Button>
                   <BoutonSupprimer label="🗑️ Supprimer"
-                    onSupprimer={() => retirerCompte(c, setComptes)} />
+                    onSupprimer={() => supprimerCompte(c)} />
                 </div>
               </div>
             </div>
@@ -2050,6 +2422,38 @@ function ContenuMenuDev({ codeOk, setCodeOk, codeSaisi, setCodeSaisi, nouvelAdmi
           )}
         </div>
       )}
+
+      {/* 🏪 Magasins — visibilité des marchandises (déplacé ici depuis l'espace administrateur) */}
+      <div className="pt-3 mt-2 border-t">
+        <Label>🏪 Magasins — visibilité des marchandises</Label>
+        <p className="text-[11px] text-muted-foreground mt-1">
+          Masquez ou réaffichez les marchandises d'un magasin pour les clients. Maintenez le bouton <strong>5 secondes</strong> pour changer la visibilité.
+        </p>
+        {boutiquesDev.length === 0 && (
+          <p className="text-muted-foreground text-sm mt-2">Aucune marchandise enregistrée pour le moment.</p>
+        )}
+        {boutiquesDev.map(b => {
+          const estMasquee = boutiquesMasquees.includes(b.nom);
+          return (
+            <div key={b.nom + "|" + b.equipe} className="mt-2 p-2 border rounded-lg flex items-center justify-between gap-2 bg-zinc-50">
+              <div className="text-sm">
+                <span className="font-medium">🏪 {b.nom}</span>
+                {" "}👑 {b.admin || "—"}
+                <div className="mt-1">
+                  {estMasquee
+                    ? <Badge className="bg-red-600 text-white text-[10px]">Privée 🙈</Badge>
+                    : <Badge className="bg-green-600 text-white text-[10px]">Visible 👁️</Badge>}
+                </div>
+              </div>
+              <BoutonSupprimer
+                label={estMasquee ? "👁️ Réafficher (maintenir 5s)" : "🙈 Masquer (maintenir 5s)"}
+                duree={5000}
+                boutonClass={estMasquee ? "bg-green-600 hover:bg-green-700 text-white text-xs font-semibold" : "bg-red-600 hover:bg-red-700 text-white text-xs font-semibold"}
+                onSupprimer={() => basculerVisibiliteBoutique(b.nom)} />
+            </div>
+          );
+        })}
+      </div>
 
       {/* TOUS les comptes : le développeur voit tout le monde et peut bloquer n'importe qui à distance */}
       <div className="pt-3 mt-2 border-t">
@@ -2071,35 +2475,11 @@ function ContenuMenuDev({ codeOk, setCodeOk, codeSaisi, setCodeSaisi, nouvelAdmi
           <p className="text-muted-foreground text-sm mt-2">Aucun compte inscrit pour le moment.</p>
         )}
       </div>
-
-      {/* Magasins : masquer / réafficher les marchandises pour les clients — réservé au développeur */}
-      <div className="pt-3 mt-2 border-t">
-        <Label>🏪 Magasins — visibilité des marchandises ({boutiquesDev.length})</Label>
-        <p className="text-[11px] text-muted-foreground mt-1">Maintenir le bouton 5 secondes pour masquer ou réafficher un magasin. Un magasin masqué devient privé : les clients ne voient plus ses marchandises.</p>
-        {boutiquesDev.map(b => {
-          const estMasquee = boutiquesMasquees.includes(b.nom);
-          return (
-            <div key={b.nom} className={`mt-2 flex items-center justify-between gap-2 border rounded-lg p-2 ${estMasquee ? "bg-red-50 border-red-200" : "bg-zinc-50 border-zinc-200"}`}>
-              <span className="text-sm font-medium">
-                🏪 {b.nom}{b.adminNom ? <span className="text-muted-foreground"> — 👑 {b.adminNom}</span> : ""}
-                {estMasquee
-                  ? <Badge className="bg-red-600 text-white text-[10px] ml-1">🙈 Privé</Badge>
-                  : <Badge className="bg-green-600 text-white text-[10px] ml-1">👁️ Visible</Badge>}
-                <span className="block text-[11px] font-normal text-muted-foreground">{b.nbArticles} marchandise{b.nbArticles > 1 ? "s" : ""}</span>
-              </span>
-              <BoutonSupprimer label={estMasquee ? "👁️ Réafficher (5 s)" : "🙈 Masquer (5 s)"} duree={5000}
-                boutonClass={"h-9 text-xs px-3 shrink-0 text-white " + (estMasquee ? "bg-green-600 hover:bg-green-700" : "bg-red-600 hover:bg-red-700")}
-                onSupprimer={() => basculerVisibiliteBoutique(b.nom)} />
-            </div>
-          );
-        })}
-        {boutiquesDev.length === 0 && <p className="text-muted-foreground text-sm mt-2">Aucun magasin pour le moment.</p>}
-      </div>
     </div>
   );
 }
 
-function VueVendeurSecretaire({ produits, marques, ventes, creerVente, confirmerPaiement, annulerVente = () => {}, majPrixLigne, modePrix, entreprise, credits, ajouterCredit, ajouterVersement, validerCredit, categories, cases }) {
+function VueVendeurSecretaire({ produits, marques, ventes, ventesToutes = [], moi = null, creerVente, confirmerPaiement, majPrixLigne, modePrix, entreprise, credits, ajouterCredit, ajouterVersement, validerCredit, categories, cases, ventePhoto = false }) {
   const [vue, setVue] = useState("vendre");
   return (
     <div>
@@ -2122,10 +2502,10 @@ function VueVendeurSecretaire({ produits, marques, ventes, creerVente, confirmer
         <GestionCredits credits={credits || []} ajouterCredit={ajouterCredit} ajouterVersement={ajouterVersement} validerCredit={validerCredit} />
       )}
       {vue === "vendre"
-        ? <VueVendeur produits={produits} ventes={ventes} creerVente={creerVente}
-            categories={categories} credits={credits} cases={cases} annulerVente={annulerVente} />
+        ? <VueVendeur produits={produits} ventes={ventes} ventesToutes={ventesToutes} moi={moi} creerVente={creerVente}
+            categories={categories} credits={credits} cases={cases} entreprise={entreprise} ventePhoto={ventePhoto} />
         : vue === "secretaire"
-          ? <VueSecretaire ventes={ventes} confirmerPaiement={confirmerPaiement} annulerVente={annulerVente} majPrixLigne={majPrixLigne} modePrix={modePrix} entreprise={entreprise}
+          ? <VueSecretaire ventes={ventes} ventesToutes={ventesToutes} moi={moi} confirmerPaiement={confirmerPaiement} majPrixLigne={majPrixLigne} modePrix={modePrix} entreprise={entreprise}
               credits={credits} ajouterCredit={ajouterCredit} ajouterVersement={ajouterVersement} validerCredit={validerCredit} />
           : null}
     </div>
@@ -2133,17 +2513,23 @@ function VueVendeurSecretaire({ produits, marques, ventes, creerVente, confirmer
 }
 
 function VueAdmin({
-  produits, setProduits, marques, setMarques, ventes, genererMarque, annulerVente = () => {},
+  produits, setProduits, marques, setMarques, ventes, genererMarque,
   photosCategories, setPhotosCategories, photosMarques, setPhotosMarques,
   modePrix, setModePrix, categories, setCategories, comptes, setComptes,
   entreprise, setEntreprise, boutiquesMasquees = [], basculerVisibiliteBoutique = () => {},
   transfertsStock = [], effectuerTransfertStock = () => {}, validerTransfertStock = () => {},
+  ventePhotoActive = false, setVentePhotoActive = () => {},
   credits = [], ajouterCredit, ajouterVersement, validerCredit,
   cases = [], setCases = () => {},
   publicites = [], setPublicites = () => {},
-  chefEquipe = ""
+  chefEquipe = "",
+  annulerVente = () => {},
+  basculerBlocageCompte = () => {},
+  supprimerCompte = () => {}
 }) {
   const [onglet, setOnglet] = useState("stats");
+  const [jourVentesAdmin, setJourVentesAdmin] = useState(""); // 📅 calendrier : ventes d'un jour précis
+  const ventesJourAdmin = jourVentesAdmin ? ventes.filter(v => jourDe(v) === isoVersJour(jourVentesAdmin)) : ventes;
   const [recherche, setRecherche] = useState("");
   const [cat, setCat] = useState("toutes");
   const [marque, setMarque] = useState("toutes");
@@ -2198,7 +2584,6 @@ function VueAdmin({
     const cle = String(Math.floor(100000 + Math.random() * 900000));
     setComptes(prev => prev.map(x => x.id === c.id ? { ...x, cle } : x));
     setCleAffichee({ nom: c.nom, tel: c.tel, cle });
-    try { synchroniserCompteSupabase({ ...c, cle }); } catch {}
   };
 
   const creerCompte = () => {
@@ -2351,6 +2736,13 @@ function VueAdmin({
           <SelectContent className="bg-white text-zinc-900 border border-zinc-200 shadow-lg z-[200]">
             <SelectItem value="admin">👑 Prix : Admin</SelectItem>
             <SelectItem value="secretaire">👩‍💼 Prix : Secrétaire</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select value={ventePhotoActive ? "oui" : "non"} onValueChange={v => setVentePhotoActive(v === "oui")}>
+          <SelectTrigger className="w-[210px]"><SelectValue placeholder="Vente par photo ?" /></SelectTrigger>
+          <SelectContent className="bg-white text-zinc-900 border border-zinc-200 shadow-lg z-[200]">
+            <SelectItem value="oui">📷 Photo vendeur : Activée</SelectItem>
+            <SelectItem value="non">📷 Photo vendeur : Désactivée</SelectItem>
           </SelectContent>
         </Select>
         <Button variant={onglet === "ventes" ? "default" : "outline"} className={onglet === "ventes" ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setOnglet("ventes")}>🧾 Ventes ({ventes.length})</Button>
@@ -2822,11 +3214,11 @@ function VueAdmin({
                       onClick={() => genererCle(c)}>🔑 Clé</Button>
                     <Button size="sm" variant="outline"
                       className={c.bloque ? "border-green-300 text-green-700 hover:bg-green-50" : "border-amber-300 text-amber-700 hover:bg-amber-50"}
-                      onClick={() => basculerBlocageCompte(c, setComptes)}>
+                      onClick={() => basculerBlocageCompte(c)}>
                       {c.bloque ? "🔓 Débloquer" : "🔒 Bloquer"}
                     </Button>
                     <BoutonSupprimer label="🗑️ Supprimer"
-                      onSupprimer={() => retirerCompte(c, setComptes)} />
+                      onSupprimer={() => supprimerCompte(c)} />
                   </div>
                 )}
               </CardContent>
@@ -2852,11 +3244,11 @@ function VueAdmin({
                   <div className="flex items-center gap-2">
                     <Button size="sm" variant="outline"
                       className={c.bloque ? "border-green-300 text-green-700 hover:bg-green-50" : "border-amber-300 text-amber-700 hover:bg-amber-50"}
-                      onClick={() => basculerBlocageCompte(c, setComptes)}>
+                      onClick={() => basculerBlocageCompte(c)}>
                       {c.bloque ? "🔓 Débloquer" : "🔒 Bloquer"}
                     </Button>
                     <BoutonSupprimer label="🗑️ Supprimer"
-                      onSupprimer={() => retirerCompte(c, setComptes)} />
+                      onSupprimer={() => supprimerCompte(c)} />
                   </div>
                 </CardContent>
               </Card>
@@ -2981,7 +3373,8 @@ function VueAdmin({
 
       {onglet === "ventes" && (
         <div className="max-w-6xl mx-auto px-4 py-4">
-          {ventes.length === 0 ? <p className="text-muted-foreground">Aucune vente.</p> : ventes.map(v => (
+          <FiltreCalendrier valeur={jourVentesAdmin} onChange={setJourVentesAdmin} label="Ventes : voir par jour" />
+          {ventesJourAdmin.length === 0 ? <p className="text-muted-foreground">{jourVentesAdmin ? `Aucune vente le ${isoVersJour(jourVentesAdmin)}.` : "Aucune vente."}</p> : ventesJourAdmin.map(v => (
             <div key={v.id}>
               <LigneVente v={v} onAnnuler={annulerVente} />
               <div className="px-3 pb-2 flex justify-end">
@@ -4375,7 +4768,7 @@ function MessagerieEquipe({ role, userActif, comptes }) {
             {/* v69 : échange client ↔ boutique (secrétaire / administrateur) */}
             {(role === "client" ? mesBoutiques : mesClients).map(c => (
               <Button key={c.tel} variant={canal === (c.tel || "").trim() ? "default" : "outline"} className={canal === (c.tel || "").trim() ? "ring-2 ring-purple-600 ring-offset-1" : ""} onClick={() => setCanal((c.tel || "").trim())}>
-                {role === "client" ? (c.role === "secretaire" ? "👩‍💼" : c.role === "vendeur" || c.role === "vendeur-secretaire" ? "🧑‍🔧" : "👑") : "🛍️"} {c.nom}
+                {role === "client" ? (c.role === "secretaire" ? "👩‍💼" : "🏪") : "🛍️"} {c.nom}
               </Button>
             ))}
           </div>
@@ -4870,6 +5263,11 @@ export default function App() {
     return { nom: "MotoPièces", tel: "+225 05 55 44 89 45", materiel: "Pièces de moto" };
   });
   const [modePrix, setModePrix] = useState("admin");
+  // 📷 Option « Vente par photo » du vendeur : activée UNIQUEMENT par l'administrateur
+  const [ventePhotoActive, setVentePhotoActive] = useState(() => {
+    try { return localStorage.getItem("motopieces_vente_photo") === "1"; } catch { return false; }
+  });
+  useEffect(() => { try { localStorage.setItem("motopieces_vente_photo", ventePhotoActive ? "1" : "0"); } catch {} }, [ventePhotoActive]);
   const [nextVente, setNextVente] = useState(() => {
     try { const s = localStorage.getItem("motopieces_next_vente"); return s ? Number(s) : 1; } catch { return 1; }
   });
@@ -5059,30 +5457,52 @@ export default function App() {
   const cleProduits = (role === "admin")
     ? ((userActif?.tel || "").trim())
     : ((userActif?.equipe || "").trim());
-  // Chaque administrateur gère UNIQUEMENT ses marchandises : correspondance stricte avec sa clé
   const estArticleDeMaCle = (p) => (p.equipe || "").trim() === cleProduits;
 
-  // v72 : l'admin ne peut modifier que SES articles. Ce setter filtre avant/après :
-  // les marchandises des autres administrateurs ne sont jamais touchées.
-  const setProduitsAdmin = (maj) => setProduits(prev => {
-    const maCle = (role === "admin" ? userActif?.tel : (userActif?.equipe || "")).trim();
-    const miens = prev.filter(p => (p.equipe || "").trim() === maCle);
-    const autres = prev.filter(p => (p.equipe || "").trim() !== maCle);
-    const nouveaux = typeof maj === "function" ? maj(miens) : maj;
-    const liste = (Array.isArray(nouveaux) ? nouveaux : []).map(p => ({ ...p, equipe: ((p.equipe || "")).trim() || maCle }));
-    return [...autres, ...liste];
+  // v70 — ISOLATION PAR ADMINISTRATEUR (renforcée) : chaque admin voit et modifie
+  // UNIQUEMENT les marchandises qu'il a lui-même enregistrées (sa clé = son téléphone).
+  // Le setter ci-dessous est protégé : l'espace admin ne peut jamais toucher les
+  // marchandises d'un autre administrateur.
+  const setProduitsAdmin = (valeur) => setProduits(prev => {
+    const miens = prev.filter(p => (p.equipe || "").trim() === cleProduits);
+    const prochains = (typeof valeur === "function") ? valeur(miens) : valeur;
+    const autres = prev.filter(p => (p.equipe || "").trim() !== cleProduits);
+    return [...autres, ...prochains.filter(p => (p.equipe || "").trim() === cleProduits)];
   });
 
-  // PURGE IMMÉDIATE : dès qu'un membre du personnel se connecte, on retire de l'écran
-  // toutes les marchandises qui n'appartiennent pas à son équipe (celles du « site public »
-  // chargées avant la connexion). Ses propres marchandises reviennent juste après, du serveur.
+  // PURGE IMMÉDIATE : dès la connexion d'un membre du personnel, les marchandises
+  // des autres boutiques (chargées avant la connexion, en mode public) disparaissent.
   useEffect(() => {
-    if (!userActif || !role || role === "client") return;
-    const maCle = (role === "admin" ? (userActif?.tel || "") : (userActif?.equipe || "")).trim();
-    if (!maCle) return;
-    setProduits(prev => prev.filter(p => (p.equipe || "").trim() === maCle));
+    if (!role || role === "client" || !cleProduits) return;
+    setProduits(prev => prev.filter(p => (p.equipe || "").trim() === cleProduits));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [role, userActif?.tel, userActif?.equipe]);
+  }, [role, cleProduits]);
+
+  // 🚫 Annulation de commande : ADMINISTRATEUR uniquement. Une commande déjà
+  // validée (payée ou à crédit) n'est jamais annulée : l'information reste.
+  const annulerVente = (id) => {
+    if (role !== "admin") return;
+    setVentes(prev => prev.map(v => {
+      if (v.id !== id) return v;
+      if (v.statut === "payée" || v.statut === "crédit" || v.statut === "annulée") return v;
+      const annulee = { ...v, statut: "annulée" };
+      try { majVenteSupabase(annulee); } catch {}
+      return annulee;
+    }));
+  };
+
+  // Blocage / déblocage d'un compte : le changement part aussitôt vers le serveur.
+  const basculerBlocageCompte = (c) => {
+    const bloque = !c.bloque;
+    setComptes(prev => prev.map(x => x.id === c.id ? { ...x, bloque } : x));
+    try { synchroniserCompteSupabase({ ...c, bloque }); } catch {}
+  };
+
+  // Suppression d'un compte : enlevé du téléphone ET du serveur.
+  const supprimerCompte = (c) => {
+    setComptes(prev => prev.filter(x => x.id !== c.id));
+    try { supprimerCompteSupabase(c); } catch {}
+  };
 
   // Chargement automatique des articles depuis la base de données dès la connexion :
   // si le téléphone change ou est perdu, les articles reviennent tout seuls.
@@ -5112,15 +5532,13 @@ export default function App() {
         } else if (cleProduits) {
           const liste = await chargerProduitsSupabase(cleProduits);
           if (annule) return;
-          // Aucun article enregistré sur le serveur : on garde UNIQUEMENT mes articles locaux
           if (!Array.isArray(liste) || liste.length === 0) {
-            setProduits(prev => prev.filter(p => estArticleDeMaCle(p)));
+            // PURGE : même si le serveur ne renvoie rien, on ne garde QUE nos articles.
+            setProduits(prev => prev.filter(p => (p.equipe || "").trim() === cleProduits));
             return;
           }
           setProduits(prev => {
             const idsServeur = new Set(liste.map(p => p.id));
-            // On ne garde que SES propres articles locaux : les marchandises des autres
-            // administrateurs ne doivent jamais rester visibles dans son espace.
             const locauxGardes = prev.filter(p => estArticleDeMaCle(p) && !idsServeur.has(p.id));
             return [...locauxGardes, ...liste.map(p => ({ ...p, equipe: (p.equipe || cleProduits) }))];
           });
@@ -5135,12 +5553,12 @@ export default function App() {
   // s'affichent automatiquement, comme un vrai site de vente en ligne.
   const [majPublique, setMajPublique] = useState(0);
   useEffect(() => {
+    // Réservé aux visiteurs et aux clients : un membre du personnel (vendeur,
+    // secrétaire, administrateur) ne charge JAMAIS les marchandises des autres.
+    if (role && role !== "client") return;
     let annule = false;
     (async () => {
       try {
-        // Seuls les visiteurs et les clients voient les marchandises de toutes les boutiques.
-        // Un administrateur (ou son équipe) ne charge QUE ses propres marchandises.
-        if (role && role !== "client") return;
         const liste = await chargerTousProduitsSupabase();
         if (annule || !Array.isArray(liste) || liste.length === 0) return;
         setProduits(prev => {
@@ -5247,6 +5665,7 @@ export default function App() {
     if (Array.isArray(r.boutiquesMasquees)) setBoutiquesMasquees(r.boutiquesMasquees);
     if (Array.isArray(r.transfertsStock)) setTransfertsStock(r.transfertsStock);
     if (r.modePrix) setModePrix(r.modePrix);
+    if (typeof r.ventePhotoActive === "boolean") setVentePhotoActive(r.ventePhotoActive);
   };
 
   // Chargement à la connexion et à chaque changement envoyé par le serveur
@@ -5301,7 +5720,7 @@ export default function App() {
   // Sauvegarde automatique : seuls l'administrateur et son équipe écrivent (le client ne fait que lire)
   useEffect(() => {
     if (!userActif || role === "client" || !cleProduits || !reglagesPretsRef.current) return;
-    const contenu = { marques, categories, photosCategories, photosMarques, cases, entreprise, credits, boutiquesMasquees, transfertsStock, modePrix };
+    const contenu = { marques, categories, photosCategories, photosMarques, cases, entreprise, credits, boutiquesMasquees, transfertsStock, modePrix, ventePhotoActive };
     const texte = JSON.stringify(contenu);
     if (texte === dernierEnvoiRef.current) return;
     const minuteur = setTimeout(async () => {
@@ -5311,7 +5730,7 @@ export default function App() {
     }, 800);
     return () => clearTimeout(minuteur);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [marques, categories, photosCategories, photosMarques, cases, entreprise, credits, boutiquesMasquees, transfertsStock, modePrix]);
+  }, [marques, categories, photosCategories, photosMarques, cases, entreprise, credits, boutiquesMasquees, transfertsStock, modePrix, ventePhotoActive]);
 
   const basculerVisibiliteBoutique = (nomBoutique) => {
     setBoutiquesMasquees(prev =>
@@ -5439,6 +5858,9 @@ export default function App() {
       id: nextVente,
       items: itemsVente,
       total: totalVenteCalcule,
+      // 👤 Personne qui a réalisé la vente (pour son historique personnel).
+      // Une commande passée par un client sur le site n'est attribuée à personne.
+      vendeurNom: ["vendeur", "secretaire", "vendeur-secretaire", "admin"].includes(role) ? (userActif?.nom || "") : "",
       vendeur: nomBoutique,
       boutique: nomBoutique,
       statut: v.credit ? "crédit" : "en attente",
@@ -5465,19 +5887,7 @@ export default function App() {
       const q = ligne.qte || 1;
       return { ...p, stock: Math.max(0, p.stock - q) };
     }));
-  };
-
-  // Annulation d'une commande (vendeur / administrateur) : le client voit « Annulée » dans ses commandes
-  const annulerVente = async (id) => {
-    let venteAnnulee = null;
-    setVentes(prev => prev.map(v => {
-      if (v.id !== id) return v;
-      venteAnnulee = { ...v, statut: "annulée" };
-      return venteAnnulee;
-    }));
-    if (venteAnnulee?.supabase_id) {
-      try { await majVenteSupabase({ ...venteAnnulee, statut: "annulée" }); } catch (e) { console.warn("Annulation en ligne:", e); }
-    }
+    return nouvelleVente;
   };
 
   const confirmerPaiement = async (id) => {
@@ -5485,7 +5895,10 @@ export default function App() {
     setVentes(prev => prev.map(v => {
       if (v.id !== id) return v;
       const total = v.items.reduce((s, it) => s + (it.prixLigne ?? (it.p ? it.p.prix : it.prix)) * (it.qte || 1), 0);
-      venteValidee = { ...v, statut: "payée", total };
+      const maintenantPaye = new Date();
+      venteValidee = { ...v, statut: "payée", total,
+        encaissePar: userActif?.nom || "—", // 💰 qui a encaissé l'argent (pour la caisse de la secrétaire)
+        datePaiement: maintenantPaye.toLocaleDateString("fr-FR") + " à " + maintenantPaye.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }) };
       return venteValidee;
     }));
 
@@ -5602,7 +6015,6 @@ export default function App() {
     if (!c.cle || c.cle !== oubliCle.trim()) { setErreurLogin("Clé de réinitialisation incorrecte. Demandez-la à l'administrateur."); return; }
     if (oubliPin.length < 4 || oubliPin !== oubliPin2) { setErreurLogin("Les deux codes PIN doivent être identiques (4 chiffres)."); return; }
     setComptes(prev => prev.map(x => x.id === c.id ? { ...x, pin: oubliPin, cle: null } : x));
-    try { synchroniserCompteSupabase({ ...c, pin: oubliPin, cle: null }); } catch {}
     setSuccesMsg("Code PIN modifié avec succès ! Connectez-vous avec votre nouveau PIN.");
     setOubli(false); setOubliEtape(1); setOubliTel(""); setOubliCle(""); setOubliPin(""); setOubliPin2(""); setErreurLogin("");
   };
@@ -5841,12 +6253,14 @@ export default function App() {
           <ContenuMenuDev codeOk={codeOk} setCodeOk={setCodeOk} codeSaisi={codeSaisi} setCodeSaisi={setCodeSaisi}
             nouvelAdmin={nouvelAdmin} setNouvelAdmin={setNouvelAdmin}
             comptes={comptes} setComptes={setComptes}
-            fermer={() => { setMenuDev(false); setCodeOk(false); setCodeSaisi(""); }}
-            CODE_DEV={CODE_DEV}
-            dureePublicite={dureePublicite} onChangerDuree={changerDureePublicite}
             produits={produits}
             boutiquesMasquees={boutiquesMasquees}
-            basculerVisibiliteBoutique={basculerVisibiliteBoutique} />
+            basculerVisibiliteBoutique={basculerVisibiliteBoutique}
+            basculerBlocageCompte={basculerBlocageCompte}
+            supprimerCompte={supprimerCompte}
+            fermer={() => { setMenuDev(false); setCodeOk(false); setCodeSaisi(""); }}
+            CODE_DEV={CODE_DEV}
+            dureePublicite={dureePublicite} onChangerDuree={changerDureePublicite} />
         </DialogContent>
       </Dialog>
 
@@ -5863,6 +6277,7 @@ export default function App() {
             produits={produits.filter(p => !boutiquesMasquees.includes(p.boutique || "MotoPièces Principal"))}
             marques={marques}
             creerVente={creerVente}
+            ventes={ventes}
             photosCategories={photosCategories}
             photosMarques={photosMarques}
             categories={categories}
@@ -5870,21 +6285,20 @@ export default function App() {
             userActif={userActif}
             comptes={comptes}
             entreprise={entreprise}
-            ventes={ventes}
           />
         </div>
       )}
 
       {/* Vues Métier réservées au personnel de l'entreprise */}
-      {role === "vendeur" && <VueVendeur produits={produits} ventes={ventes} creerVente={creerVente}
-        categories={categories} credits={credits} cases={cases} annulerVente={annulerVente} />}
-      {role === "secretaire" && <VueSecretaire ventes={ventes} confirmerPaiement={confirmerPaiement} annulerVente={annulerVente} majPrixLigne={majPrixLigne} modePrix={modePrix} entreprise={entreprise}
+      {role === "vendeur" && <VueVendeur produits={produits} ventes={ventes.filter(v => v.statut !== "annulée")} ventesToutes={ventes} moi={userActif} creerVente={creerVente}
+        categories={categories} credits={credits} cases={cases} ventePhoto={ventePhotoActive} />}
+      {role === "secretaire" && <VueSecretaire ventes={ventes.filter(v => v.statut !== "annulée")} ventesToutes={ventes} moi={userActif} confirmerPaiement={confirmerPaiement} majPrixLigne={majPrixLigne} modePrix={modePrix} entreprise={entreprise}
         credits={credits} ajouterCredit={ajouterCredit} ajouterVersement={ajouterVersement} validerCredit={validerCredit} />}
       {role === "vendeur-secretaire" && (
-        <VueVendeurSecretaire produits={produits} marques={marques} ventes={ventes} creerVente={creerVente}
-          confirmerPaiement={confirmerPaiement} annulerVente={annulerVente} majPrixLigne={majPrixLigne} modePrix={modePrix} entreprise={entreprise}
+        <VueVendeurSecretaire produits={produits} marques={marques} ventes={ventes.filter(v => v.statut !== "annulée")} ventesToutes={ventes} moi={userActif} creerVente={creerVente}
+          confirmerPaiement={confirmerPaiement} majPrixLigne={majPrixLigne} modePrix={modePrix} entreprise={entreprise}
           credits={credits} ajouterCredit={ajouterCredit} ajouterVersement={ajouterVersement} validerCredit={validerCredit}
-          categories={categories} cases={cases} />
+          categories={categories} cases={cases} ventePhoto={ventePhotoActive} />
       )}
       {role === "admin" && (
         <VueAdmin produits={produits.filter(p => (p.equipe || "").trim() === ((userActif?.tel || "").trim()))} setProduits={setProduitsAdmin} marques={marques} setMarques={setMarques}
@@ -5905,7 +6319,10 @@ export default function App() {
           ajouterVersement={ajouterVersement}
           validerCredit={validerCredit}
           cases={cases} setCases={setCases}
-          chefEquipe={userActif?.tel} />
+          chefEquipe={userActif?.tel}
+          annulerVente={annulerVente}
+          basculerBlocageCompte={basculerBlocageCompte}
+          supprimerCompte={supprimerCompte} />
       )}
 
       {/* Talkie-walkie vocal : visible uniquement pour l'administrateur et les vendeurs */}

@@ -3,6 +3,8 @@ import { chargerVentesSupabase } from "@/lib/supabase";
 
 export default function HistoriqueGlobal({ ventes: ventesProps = [] }) {
   const [ventes, setVentes] = useState([]);
+  const [jour, setJour] = useState(""); // 📅 calendrier : voir les ventes d'un jour précis
+  const isoVersJour = (iso) => iso ? iso.split("-").reverse().join("/") : ""; // "2026-11-13" → "13/11/2026"
 
   useEffect(() => {
     async function chargerVentesCompletes() {
@@ -43,6 +45,13 @@ export default function HistoriqueGlobal({ ventes: ventesProps = [] }) {
     return acc;
   }, {});
 
+  // 📅 Calendrier : le jour choisi, ou toutes les dates (de la plus récente à la plus ancienne)
+  const joursAffiches = jour
+    ? Object.keys(ventesParJour).filter(d => d === isoVersJour(jour))
+    : Object.keys(ventesParJour).sort((a, b) => b.localeCompare(a));
+  const totalDuJour = (date) => (ventesParJour[date] || []).reduce((s, v) =>
+    s + (Number(v.total) || (v.items || []).reduce((x, it) => x + ((it.prixLigne ?? it.prix ?? it.p?.prix ?? 0) * (it.qte || 1)), 0)), 0);
+
   return (
     <div className="p-4 max-w-5xl mx-auto">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-6">
@@ -52,16 +61,32 @@ export default function HistoriqueGlobal({ ventes: ventesProps = [] }) {
         </span>
       </div>
 
-      {Object.keys(ventesParJour).length === 0 ? (
+      {/* 📅 Sélecteur de calendrier : je choisis la date et le compte de cette date s'affiche */}
+      <div className="flex flex-wrap items-center gap-2 mb-6 bg-white border border-gray-200 rounded-lg p-3 shadow-sm">
+        <span className="text-sm font-semibold text-gray-800">📅 Voir les ventes d'un jour :</span>
+        <input type="date" value={jour} onChange={e => setJour(e.target.value)}
+          className="h-9 rounded-md border border-gray-300 px-3 bg-white text-sm" />
+        {jour ? (
+          <>
+            <span className="text-sm font-semibold text-blue-700">Ventes du {isoVersJour(jour)} — {totalDuJour(isoVersJour(jour)).toLocaleString("fr-FR")} FCFA</span>
+            <button onClick={() => setJour("")}
+              className="h-9 px-3 rounded-md border border-gray-300 bg-white text-sm hover:bg-gray-100">✕ Toutes les dates</button>
+          </>
+        ) : (
+          <span className="text-xs text-gray-500">Choisissez une date pour voir uniquement les ventes de ce jour-là, avec leur compte.</span>
+        )}
+      </div>
+
+      {joursAffiches.length === 0 ? (
         <div className="bg-white p-6 rounded-lg shadow text-center text-gray-500">
-          Aucun historique enregistré pour le moment.
+          {jour ? `Aucune vente le ${isoVersJour(jour)}.` : "Aucun historique enregistré pour le moment."}
         </div>
       ) : (
-        Object.keys(ventesParJour).map((date) => (
+        joursAffiches.map((date) => (
           <div key={date} className="mb-6 bg-white shadow-md rounded-lg p-4 border border-gray-200">
-            {/* En-tête de la date */}
+            {/* En-tête de la date : la date et le COMPTE des ventes de cette date (nombre + total) */}
             <h3 className="text-lg font-semibold text-blue-600 mb-4 border-b pb-2 flex items-center">
-              📅 Date : {date} <span className="ml-auto text-xs font-normal text-gray-500">({ventesParJour[date].length} transaction(s))</span>
+              📅 Date : {date} <span className="ml-auto text-xs font-normal text-gray-500">({ventesParJour[date].length} transaction(s) — {totalDuJour(date).toLocaleString("fr-FR")} FCFA)</span>
             </h3>
 
             <div className="space-y-4">
