@@ -2516,7 +2516,7 @@ function VueAdmin({
   produits, setProduits, marques, setMarques, ventes, genererMarque,
   photosCategories, setPhotosCategories, photosMarques, setPhotosMarques,
   modePrix, setModePrix, categories, setCategories, comptes, setComptes,
-  entreprise, setEntreprise, boutiquesMasquees = [], basculerVisibiliteBoutique = () => {},
+  entreprise, setEntreprise, modifierEntreprise = setEntreprise, boutiquesMasquees = [], basculerVisibiliteBoutique = () => {},
   transfertsStock = [], effectuerTransfertStock = () => {}, validerTransfertStock = () => {},
   ventePhotoActive = false, setVentePhotoActive = () => {},
   credits = [], ajouterCredit, ajouterVersement, validerCredit,
@@ -2529,6 +2529,16 @@ function VueAdmin({
 }) {
   const [onglet, setOnglet] = useState("stats");
   const [jourVentesAdmin, setJourVentesAdmin] = useState(""); // 📅 calendrier : ventes d'un jour précis
+
+  // 📷 Photo / logo du magasin : l'admin choisit une image, elle s'enregistre avec les réglages
+  const chargerPhotoMagasin = (e) => {
+    const fichier = (e.target.files || [])[0];
+    if (!fichier) return;
+    const r = new FileReader();
+    r.onload = () => modifierEntreprise({ ...entreprise, photo: r.result });
+    r.readAsDataURL(fichier);
+    e.target.value = "";
+  };
   const ventesJourAdmin = jourVentesAdmin ? ventes.filter(v => jourDe(v) === isoVersJour(jourVentesAdmin)) : ventes;
   const [recherche, setRecherche] = useState("");
   const [cat, setCat] = useState("toutes");
@@ -3130,17 +3140,33 @@ function VueAdmin({
             <CardContent className="p-4">
               <div className="font-semibold mb-3">🏪 Mon magasin</div>
               <div className="grid gap-2">
+                {/* 📷 Photo / logo du magasin */}
+                <Label>📷 Photo / logo du magasin</Label>
+                <input type="file" accept="image/*" className="hidden" id="photo-magasin-input" onChange={chargerPhotoMagasin} />
+                <div className="flex flex-wrap items-center gap-3">
+                  {entreprise.photo
+                    ? <img src={entreprise.photo} alt="Photo du magasin" className="w-16 h-16 rounded-lg object-cover border" />
+                    : <div className="w-16 h-16 rounded-lg bg-zinc-100 border flex items-center justify-center text-2xl">🏪</div>}
+                  <div className="flex gap-2">
+                    <Button size="sm" variant="outline" onClick={() => { const el = document.getElementById("photo-magasin-input"); if (el) el.click(); }}>
+                      📷 {entreprise.photo ? "Changer la photo" : "Ajouter une photo"}
+                    </Button>
+                    {entreprise.photo && (
+                      <Button size="sm" variant="outline" onClick={() => modifierEntreprise({ ...entreprise, photo: "" })}>✕ Retirer</Button>
+                    )}
+                  </div>
+                </div>
                 <Label>Nom du magasin / entreprise</Label>
-                <Input value={entreprise.nom} onChange={e => setEntreprise({ ...entreprise, nom: e.target.value })} placeholder="Ex : MotoPièces" />
+                <Input value={entreprise.nom} onChange={e => modifierEntreprise({ ...entreprise, nom: e.target.value })} placeholder="Ex : MotoPièces" />
                 <Label className="pt-2">Numéro de contact</Label>
-                <Input value={entreprise.tel} onChange={e => setEntreprise({ ...entreprise, tel: e.target.value })} placeholder="+225 07 00 00 00 00" />
+                <Input value={entreprise.tel} onChange={e => modifierEntreprise({ ...entreprise, tel: e.target.value })} placeholder="+225 07 00 00 00 00" />
                 <Label className="pt-2">Type de matériel vendu</Label>
-                <Input value={entreprise.materiel} onChange={e => setEntreprise({ ...entreprise, materiel: e.target.value })} placeholder="Ex : Pièces de moto, Pièces auto, Téléphones…" />
+                <Input value={entreprise.materiel} onChange={e => modifierEntreprise({ ...entreprise, materiel: e.target.value })} placeholder="Ex : Pièces de moto, Pièces auto, Téléphones…" />
                 <div className="flex flex-wrap gap-1.5 mt-1">
                   {["🏍️ Pièces de moto", "🚗 Pièces auto", "📱 Téléphones", "⚡ Matériel électronique", "🛠️ Outillage", "👕 Vêtements"].map(m => (
                     <button key={m}
                       className={`text-xs border rounded-full px-2.5 py-1 transition-colors ${entreprise.materiel === m ? "bg-blue-600 text-white border-blue-600" : "bg-zinc-100 text-zinc-700 hover:bg-zinc-200"}`}
-                      onClick={() => setEntreprise({ ...entreprise, materiel: m })}>{m}</button>
+                      onClick={() => modifierEntreprise({ ...entreprise, materiel: m })}>{m}</button>
                   ))}
                 </div>
               </div>
@@ -5649,6 +5675,11 @@ export default function App() {
   // et mis à jour en direct sur tous les téléphones.
   // ====================================================================
   const reglagesPretsRef = useRef(false);      // true une fois les réglages du serveur chargés (évite d'écraser le serveur avec du vide)
+  const derniereModifEntrepriseRef = useRef(0); // 🕒 dernière saisie locale dans « Mon magasin » : le serveur ne peut pas l'écraser tout de suite
+  const modifierEntreprise = (nouvelle) => {
+    derniereModifEntrepriseRef.current = Date.now();
+    setEntreprise(nouvelle);
+  };
   const dernierEnvoiRef = useRef("");          // dernier contenu envoyé/reçu : évite les boucles d'envoi
   const [majReglages, setMajReglages] = useState(0);
 
@@ -5660,7 +5691,10 @@ export default function App() {
     if (r.photosCategories && typeof r.photosCategories === "object") setPhotosCategories(r.photosCategories);
     if (r.photosMarques && typeof r.photosMarques === "object") setPhotosMarques(r.photosMarques);
     if (Array.isArray(r.cases)) setCases(r.cases);
-    if (r.entreprise && typeof r.entreprise === "object") setEntreprise(prev => ({ ...prev, ...r.entreprise }));
+    // Correctif « le nom s'efface pendant la saisie » : si l'admin vient de modifier le magasin (moins de 8 secondes),
+    // on ne laisse PAS le serveur écraser sa saisie en cours.
+    if (r.entreprise && typeof r.entreprise === "object"
+      && Date.now() - derniereModifEntrepriseRef.current > 8000) setEntreprise(prev => ({ ...prev, ...r.entreprise }));
     if (Array.isArray(r.credits)) setCredits(r.credits);
     if (Array.isArray(r.boutiquesMasquees)) setBoutiquesMasquees(r.boutiquesMasquees);
     if (Array.isArray(r.transfertsStock)) setTransfertsStock(r.transfertsStock);
@@ -6069,13 +6103,13 @@ export default function App() {
 
             {/* Logo & Titre MotoPièces (option développeur visible uniquement côté client / non connecté) */}
             {(!role || role === "client") && (
-              <BoutonSupprimer label={<><IconeMoto /> <span className="text-lg sm:text-xl font-extrabold tracking-wide">{entreprise.nom || "MotoPièces"}</span><span className="block text-[10px] font-normal text-white/60 leading-tight">🛍️ {entreprise.materiel} — 📞 {entreprise.tel}</span></>} duree={10000}
+              <BoutonSupprimer label={<>{entreprise.photo ? <img src={entreprise.photo} alt="" className="h-7 w-7 rounded object-cover border border-white/40" /> : <IconeMoto />} <span className="text-lg sm:text-xl font-extrabold tracking-wide">{entreprise.nom || "MotoPièces"}</span><span className="block text-[10px] font-normal text-white/60 leading-tight">🛍️ {entreprise.materiel} — 📞 {entreprise.tel}</span></>} duree={10000}
                 boutonClass="text-white hover:bg-white/10 text-left rounded p-1"
                 onSupprimer={() => setMenuDev(true)} />
             )}
             {role && role !== "client" && (
               <div className="text-white flex items-center text-left rounded p-1">
-                <IconeMoto /> <span className="text-lg sm:text-xl font-extrabold tracking-wide">{entreprise.nom || "MotoPièces"}</span>
+                {entreprise.photo ? <img src={entreprise.photo} alt="" className="h-7 w-7 rounded object-cover" /> : <IconeMoto />} <span className="text-lg sm:text-xl font-extrabold tracking-wide">{entreprise.nom || "MotoPièces"}</span>
                 <span className="block text-[10px] font-normal text-white/60 leading-tight">🛍️ {entreprise.materiel} — 📞 {entreprise.tel}</span>
               </div>
             )}
@@ -6307,7 +6341,7 @@ export default function App() {
           photosMarques={photosMarques} setPhotosMarques={setPhotosMarques}
           modePrix={modePrix} setModePrix={setModePrix} categories={categories} setCategories={setCategories}
           comptes={comptes} setComptes={setComptes}
-          entreprise={entreprise} setEntreprise={setEntreprise}
+          entreprise={entreprise} setEntreprise={setEntreprise} modifierEntreprise={modifierEntreprise}
           boutiquesMasquees={boutiquesMasquees}
           publicites={publicites} setPublicites={setPublicites}
           basculerVisibiliteBoutique={basculerVisibiliteBoutique}
