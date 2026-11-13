@@ -304,7 +304,7 @@ const IconeMoto = () => (
 );
 
 // Bouton sécurisé : maintenir appuyé (délai en ms) pour déclencher l'action
-function BoutonSupprimer({ onSupprimer, label = "🗑️ Supprimer", duree = 5000, boutonClass = "" }) {
+function BoutonSupprimer({ onSupprimer, label = "🗑️ Supprimer", duree = 5000, boutonClass = "", variant = "ghost", taille = "sm" }) {
   const [progress, setProgress] = useState(0);
   const timerRef = useRef(null);
 
@@ -340,7 +340,7 @@ function BoutonSupprimer({ onSupprimer, label = "🗑️ Supprimer", duree = 500
 
   return (
     <div className="relative inline-block w-full">
-      <Button className={boutonClass} size="sm" variant="ghost"
+      <Button className={boutonClass} size={taille} variant={variant}
         style={{ touchAction: "none" }}
         onPointerDown={demarrer}
         onPointerUp={annuler}
@@ -359,7 +359,7 @@ function BoutonSupprimer({ onSupprimer, label = "🗑️ Supprimer", duree = 500
 
 // ---------- Composants communs ----------
 
-function Produit({ p, onAjout, onRetirer, admin, onEditer, categories, qteDansPanier, onNegocierPrix, elementTalkie, comptes = [], userActif = null }) {
+function Produit({ p, onAjout, onRetirer, admin, onEditer, categories, qteDansPanier, onNegocierPrix, elementTalkie, comptes = [], userActif = null, infosBoutiques = {} }) {
   const [flash, setFlash] = useState(false);
   const [flashMoins, setFlashMoins] = useState(false);
   const [openDetail, setOpenDetail] = useState(false);
@@ -389,6 +389,8 @@ function Produit({ p, onAjout, onRetirer, admin, onEditer, categories, qteDansPa
   const vendeursBoutique = (comptes || []).filter(c =>
     ["vendeur", "vendeur-secretaire", "secretaire"].includes(c.role) && (c.tel || "").trim() &&
     ((c.equipe || "").trim() === (proprietaire?.tel || telProprio || "").trim()));
+  // ℹ️ Infos individuelles du magasin de cet article (nom, contact, matériel)
+  const infoMagasin = (infosBoutiques || {})[telProprio] || null;
   const ecrireViaChat = (tel) => {
     setOpenDetail(false);
     setTimeout(() => {
@@ -487,6 +489,24 @@ function Produit({ p, onAjout, onRetirer, admin, onEditer, categories, qteDansPa
                 </div>
                 <Badge className="bg-blue-600 text-white text-xs">Achat Direct</Badge>
               </div>
+              {/* ℹ️ Infos individuelles du magasin : visibles uniquement ici, dans les détails */}
+              {infoMagasin && (infoMagasin.materiel || infoMagasin.tel || infoMagasin.photo) && (
+                <div className="flex items-center gap-2 bg-white rounded-md border p-2">
+                  {infoMagasin.photo
+                    ? <img src={infoMagasin.photo} alt="" className="w-10 h-10 rounded object-cover border" />
+                    : <span className="w-10 h-10 rounded bg-blue-100 flex items-center justify-center text-lg">🏪</span>}
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-semibold truncate">🏪 {infoMagasin.nom || nomBoutique}</div>
+                    <div className="text-[11px] text-zinc-500">
+                      {infoMagasin.materiel ? `Spécialité : ${infoMagasin.materiel}` : "Magasin de pièces"}{infoMagasin.tel ? ` · 📞 ${infoMagasin.tel}` : ""}
+                    </div>
+                  </div>
+                  {infoMagasin.tel && (
+                    <a href={"tel:" + String(infoMagasin.tel).replace(/[^\d+]/g, "")}
+                      className="h-9 px-3 inline-flex items-center rounded-md bg-green-600 text-white text-xs font-bold shrink-0">📞</a>
+                  )}
+                </div>
+              )}
               {proprietaire && (
                 <div className="flex items-center gap-2 bg-white rounded-md border p-2">
                   {proprietaire.photo
@@ -762,7 +782,7 @@ function MesCommandes({ ventes = [], userActif }) {
 
 // ---------- Vue Client ----------
 
-function VueClient({ produits, marques, creerVente, ventes = [], photosCategories, photosMarques, categories, onNegocierPrix, userActif, comptes, entreprise }) {
+function VueClient({ produits, marques, creerVente, ventes = [], photosCategories, photosMarques, categories, onNegocierPrix, userActif, comptes, entreprise, infosBoutiques = {} }) {
   const [recherche, setRecherche] = useState("");
   const [cat, setCat] = useState("toutes");
   const [marque, setMarque] = useState("toutes");
@@ -846,21 +866,58 @@ function VueClient({ produits, marques, creerVente, ventes = [], photosCategorie
   };
 
   const [ocrEffectue, setOcrEffectue] = useState(false);
-  // 🧿 Recherche par image : l'article ne sort QUE si la photo scannée est
-  // IDENTIQUE à la photo enregistrée d'un article. Tant que l'image n'est pas
-  // identique, aucun article ne sort.
+  // 🔍 Recherche par image (OCR corrigé) : 3 étapes dans l'ordre —
+  // 1. photo IDENTIQUE → l'article sort directement
+  // 2. OCR : le texte lu sur la pièce correspond fortement (score ≥ 50) → l'article sort
+  // 3. photo RESSEMBLANTE (même pièce photographiée autrement) → l'article sort
+  // Si rien n'est trouvé : aucun article ne sort.
   const chercherParImage = async (src) => {
     setPhotoRecherche(null);
     setResultatsImage([]);
     setOcrEffectue(false);
     try {
+      // 1. Photo identique : reconnaissance immédiate
       const articleIdentique = await trouverPhotoIdentique(src, produits);
       if (articleIdentique) {
         setPhotoRecherche(src);
         setResultatsImage([articleIdentique]);
+        setOcrEffectue(true);
+        return;
       }
-      // Pas d'image identique → aucun article ne sort
     } catch (e) { console.warn("Comparaison image client:", e); }
+
+    // 2. OCR : lecture du texte écrit sur la pièce (code, marque, référence)
+    try {
+      const resOCR = await extraireTexteImage(src);
+      if (resOCR && resOCR.success) {
+        const matchs = faireCorrespondreOCR(resOCR.text, resOCR.references, produits);
+        const forts = matchs.filter(m => m.score >= 50);
+        if (forts.length) {
+          setPhotoRecherche(src);
+          setResultatsImage(forts.map(m => m.p));
+          setOcrEffectue(true);
+          return;
+        }
+      }
+    } catch (e) { console.warn("Analyse OCR client:", e); }
+
+    // 3. Ressemblance visuelle : la même pièce prise sous un autre angle
+    try {
+      const sig = await sigImage(src);
+      const dists = await Promise.all(produits.filter(p => p.photo).map(async p => ({
+        p, d: distanceSig(sig, await sigImage(p.photo))
+      })));
+      dists.sort((a, b) => a.d - b.d);
+      const proches = dists.filter(x => x.d < 0.22).slice(0, 3);
+      if (proches.length) {
+        setPhotoRecherche(src);
+        setResultatsImage(proches.map(x => x.p));
+        setOcrEffectue(true);
+        return;
+      }
+    } catch (e) { console.warn("Ressemblance image client:", e); }
+
+    // Rien trouvé : aucun article ne sort
     setOcrEffectue(true);
   };
 
@@ -934,7 +991,7 @@ function VueClient({ produits, marques, creerVente, ventes = [], photosCategorie
       <main className="max-w-[1400px] mx-auto px-3 sm:px-6 lg:px-8 pb-24">
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2 sm:gap-4">
           {liste.map(p => <Produit key={p.id} p={p} onAjout={ajouter} onRetirer={retirer} categories={categories}
-            comptes={comptes} userActif={userActif}
+            comptes={comptes} userActif={userActif} infosBoutiques={infosBoutiques}
             qteDansPanier={panier.find(i => i.p.id === p.id)?.qte || 0}
             onNegocierPrix={onNegocierPrix}
             elementTalkie={userActif ? <TalkieClientArticle article={p} userActif={userActif} comptes={comptes} /> : null} />)}
@@ -982,8 +1039,8 @@ function VueClient({ produits, marques, creerVente, ventes = [], photosCategorie
           />
 
           <p className="text-[11px] text-zinc-400 mt-2 text-center leading-relaxed">
-            🧿 <b>Photo identique</b> : pointez la caméra sur la pièce, la capture se fait toute seule.
-            L'article ne sort QUE si la photo scannée est identique à la photo enregistrée de l'article.
+            🔍 <b>Reconnaissance automatique</b> : pointez la caméra sur la pièce, la capture se fait toute seule.
+            L'article sort si sa photo est identique OU si le texte lu (code, référence) correspond à l'article.
           </p>
 
           {chargementPhoto && (
@@ -1011,7 +1068,7 @@ function VueClient({ produits, marques, creerVente, ventes = [], photosCategorie
               </button>
             ))}
             {ocrEffectue && resultatsImage.length === 0 && !chargementPhoto && (
-              <p className="text-xs text-zinc-400 p-2 text-center">🧿 Photo non identique à un article enregistré : aucun article ne sort. Scannez la même photo que celle de l'article, ou essayez la recherche par nom.</p>
+              <p className="text-xs text-zinc-400 p-2 text-center">Aucun article reconnu : ni la photo, ni le texte lu sur la pièce ne correspondent à un article enregistré. Rapprochez la caméra du code/référence écrit sur la pièce, ou essayez la recherche par nom.</p>
             )}
           </div>
         </div>
@@ -1197,8 +1254,7 @@ function VueVendeur({ produits, ventes, creerVente, ventesToutes = [], moi = nul
     const candidats = produits;
     if (!candidats.length) return;
 
-    // 🧿 ÉTAPE 1 : comparer la photo scannée avec les photos enregistrées.
-    // Un article ne sort que si une photo est identique.
+    // 🔍 ÉTAPE 1 : photo IDENTIQUE → l'article est reconnu directement
     try {
       const identique = await trouverPhotoIdentique(src, candidats);
       if (identique) {
@@ -1208,23 +1264,39 @@ function VueVendeur({ produits, ventes, creerVente, ventesToutes = [], moi = nul
       }
     } catch (errId) { console.warn("Comparaison photo identique:", errId); }
 
-    // Pas de photo identique : AUCUN article ne sort automatiquement.
-    // L'OCR sert seulement à proposer des suggestions que le vendeur choisira
-    // lui-même (l'article n'est jamais validé tout seul).
+    // 🔍 ÉTAPE 2 : OCR — le texte lu correspond fortement (score ≥ 50) → reconnu
+    let suggestions = [];
     try {
       const resOCR = await extraireTexteImage(src);
       if (resOCR && resOCR.success) {
         const matchs = faireCorrespondreOCR(resOCR.text, resOCR.references, candidats);
-        if (matchs.length) {
+        if (matchs.length && matchs[0].score >= 50) {
           setPhotos(prev => prev.map((ph, j) => j === index
-            ? { ...ph, candidats: matchs.slice(0, 3), reconnu: false } : ph));
+            ? { ...ph, article: matchs[0].p, reconnu: true, candidats: matchs.slice(0, 3) } : ph));
           return;
         }
+        if (matchs.length) suggestions = matchs.slice(0, 3);
       }
     } catch (eOCR) { console.warn("Analyse OCR:", eOCR); }
 
-    // Aucune image identique, aucune suggestion : la photo reste non reconnue
-    setPhotos(prev => prev.map((ph, j) => j === index ? { ...ph, reconnu: false } : ph));
+    // 🔍 ÉTAPE 3 : photo RESSEMBLANTE (même pièce, autre angle) → reconnue
+    try {
+      const sig = await sigImage(src);
+      const dists = await Promise.all(candidats.filter(p => p.photo).map(async p => ({
+        p, d: distanceSig(sig, await sigImage(p.photo))
+      })));
+      dists.sort((x, y) => x.d - y.d);
+      if (dists[0] && dists[0].d < 0.22) {
+        setPhotos(prev => prev.map((ph, j) => j === index
+          ? { ...ph, article: dists[0].p, reconnu: true } : ph));
+        return;
+      }
+    } catch (errRes) { console.warn("Ressemblance photo:", errRes); }
+
+    // Rien de sûr : pas de reconnaissance automatique, seulement des suggestions
+    // que le vendeur choisira lui-même.
+    setPhotos(prev => prev.map((ph, j) => j === index
+      ? { ...ph, reconnu: false, candidats: suggestions } : ph));
   };
 
   // Articles identifiables manuellement : uniquement ceux qui ont une photo enregistrée
@@ -1647,14 +1719,20 @@ function VueVendeur({ produits, ventes, creerVente, ventesToutes = [], moi = nul
                         <Button className="w-full" disabled={identifies.length === 0 || photos.some(ph => !ph.article) || identifies.some(ph => !(prixEff(ph) > 0)) || (creditActif && (!client.nom.trim() || !client.tel.trim()))}
                           onClick={envoyer}>{creditActif ? "💳 Envoyer la vente à crédit" : "➡️ Envoyer à la secrétaire"}</Button>
 
-                        {/* Vente à crédit : la marchandise sort, le client paie après, au fur et à mesure ou tout d'un coup */}
+                          {/* 💳 Vente à crédit : pour ACTIVER, il faut MAINTENIR le bouton 2 secondes
+                              (évite toute activation par erreur). Pour désactiver : un simple appui suffit. */}
                         <div className="border-t pt-3 space-y-2">
-                          <Button size="lg" className={creditActif
-                            ? "w-full py-6 text-lg bg-amber-600 hover:bg-amber-700 text-white font-bold ring-2 ring-amber-600"
-                            : "w-full py-6 text-lg bg-zinc-200 hover:bg-amber-100 text-zinc-800 font-bold border-2 border-dashed border-amber-400"}
-                            onClick={() => setCreditActif(a => !a)}>
-                            {creditActif ? "✅ Vente à crédit ACTIVÉE — le client paiera après" : "💳 Vente à crédit (le client paie après)"}
+                          {creditActif ? (
+                          <Button size="lg" className="w-full py-6 text-lg bg-amber-600 hover:bg-amber-700 text-white font-bold ring-2 ring-amber-600"
+                            onClick={() => setCreditActif(false)}>
+                            ✅ Vente à crédit ACTIVÉE — appuyez pour désactiver
                           </Button>
+                          ) : (
+                          <BoutonSupprimer variant="outline" taille="lg" duree={2000}
+                            boutonClass="w-full py-6 h-auto text-lg bg-zinc-200 hover:bg-amber-100 text-zinc-800 font-bold border-2 border-dashed border-amber-400"
+                            onSupprimer={() => setCreditActif(true)}
+                            label="💳 Vente à crédit — maintenir 2 s pour activer" />
+                          )}
                           {creditActif && (
                             <>
                               <Input type="number" placeholder="Acompte payé tout de suite (FCFA) — laisser vide si le client ne paie rien encore"
@@ -2344,7 +2422,7 @@ function VueSecretaire({ ventes, ventesToutes = [], moi = null, confirmerPaiemen
 
 // Vue combinée : une personne qui est vendeur ET secrétaire en même temps
 // Contenu du menu développeur : code + création/suppression des comptes administrateurs
-function ContenuMenuDev({ codeOk, setCodeOk, codeSaisi, setCodeSaisi, nouvelAdmin, setNouvelAdmin, comptes, setComptes, fermer, CODE_DEV, dureePublicite = 1, onChangerDuree = () => {}, basculerBlocageCompte = () => {}, supprimerCompte = () => {}, produits = [], boutiquesMasquees = [], basculerVisibiliteBoutique = () => {} }) {
+function ContenuMenuDev({ codeOk, setCodeOk, codeSaisi, setCodeSaisi, nouvelAdmin, setNouvelAdmin, comptes, setComptes, fermer, CODE_DEV, dureePublicite = 1, onChangerDuree = () => {}, basculerBlocageCompte = () => {}, supprimerCompte = () => {}, produits = [], boutiquesMasquees = [], basculerVisibiliteBoutique = () => {}, titreSite = "", onChangerTitre = () => {} }) {
   const [erreur, setErreur] = useState("");
   const [pinGenere, setPinGenere] = useState(null); // { nom, pin }
   const reinitialiserPinAdmin = (c) => {
@@ -2391,6 +2469,21 @@ function ContenuMenuDev({ codeOk, setCodeOk, codeSaisi, setCodeSaisi, nouvelAdmi
 
       {/* v68 : la durée des publicités est décidée uniquement par le développeur.
           Par défaut une publicité dure 24 heures ; c'est ici qu'on peut la faire durer plus longtemps. */}
+      {/* 🏍️ Titre de la barre du haut : réservé au DÉVELOPPEUR uniquement.
+          Personne d'autre ne peut modifier ce titre. */}
+      <div className="pt-1 pb-2 border-b">
+        <Label>🏍️ Titre de la barre du haut</Label>
+        <p className="text-[11px] text-muted-foreground mt-1">C'est le nom affiché tout en haut, dans la barre noire, pour tout le monde. Toi seul (développeur) peux le modifier.</p>
+        <div className="flex items-center gap-2 mt-2">
+          <input type="text" value={titreSite}
+            onChange={e => onChangerTitre(e.target.value)}
+            placeholder="Ex : MotoPièces"
+            className="flex-1 border border-zinc-300 rounded px-2 py-1 text-base" />
+          <button type="button" onClick={() => onChangerTitre("")}
+            className="text-xs border rounded px-2 py-1 hover:bg-zinc-100">Réinitialiser</button>
+        </div>
+      </div>
+
       <div className="pt-1 pb-2 border-b">
         <Label>⏱️ Durée des publicités (jours)</Label>
         <p className="text-[11px] text-muted-foreground mt-1">Par défaut, une publicité dure 24 heures puis disparaît. Si tu veux que les publicités durent plus longtemps, change le nombre de jours ici. Ce réglage vaut pour tout le monde.</p>
@@ -5176,6 +5269,16 @@ export default function App() {
   const [publicites, setPublicites] = useState(() => {
     try { const s = localStorage.getItem("motopieces_publicites"); return s ? JSON.parse(s) : []; } catch { return []; }
   });
+  // 🏍️ Titre de la barre du haut : modifiable UNIQUEMENT par le développeur (menu développeur).
+  // Personne d'autre ne peut changer ce titre.
+  const [titreSite, setTitreSite] = useState(() => {
+    try { return localStorage.getItem("motopieces_titre_site") || ""; } catch { return ""; }
+  });
+  const changerTitreSite = (t) => {
+    const v = String(t || "").trim().slice(0, 40);
+    setTitreSite(v);
+    try { localStorage.setItem("motopieces_titre_site", v); } catch (e) {}
+  };
   // v67/v68 — durée des publicités en jours : décidée uniquement par le développeur (défaut : 1 jour = 24 heures)
   const [dureePublicite, setDureePublicite] = useState(() => {
     try { return parseInt(localStorage.getItem("motopieces_duree_pub")) || 1; } catch { return 1; }
@@ -5719,6 +5822,7 @@ export default function App() {
   };
   const dernierEnvoiRef = useRef("");          // dernier contenu envoyé/reçu : évite les boucles d'envoi
   const [majReglages, setMajReglages] = useState(0);
+  const [infosBoutiques, setInfosBoutiques] = useState({}); // ℹ️ Infos individuelles de chaque magasin (nom, contact, matériel), par numéro d'admin
 
   const appliquerReglages = (r) => {
     if (!r || typeof r !== "object") return;
@@ -5737,6 +5841,8 @@ export default function App() {
     if (Array.isArray(r.transfertsStock)) setTransfertsStock(r.transfertsStock);
     if (r.modePrix) setModePrix(r.modePrix);
     if (typeof r.ventePhotoActive === "boolean") setVentePhotoActive(r.ventePhotoActive);
+    // 🏍️ Titre du site : modifié uniquement par le développeur, synchronisé sur tous les téléphones
+    if (typeof r.titreSite === "string" && r.titreSite.trim()) { setTitreSite(r.titreSite.trim()); try { localStorage.setItem("motopieces_titre_site", r.titreSite.trim()); } catch (e) {} }
   };
 
   // Chargement à la connexion et à chaque changement envoyé par le serveur
@@ -5750,8 +5856,18 @@ export default function App() {
           const toutes = await chargerTousReglagesSupabase();
           if (annule) return;
           const fusion = { marques: [], categories: [], photosCategories: {}, photosMarques: {}, boutiquesMasquees: [] };
+          // ℹ️ Chaque magasin a SES infos individuelles (nom, contact, matériel) :
+          // on les garde par numéro d'admin pour les afficher uniquement dans les détails du magasin.
+          const infosMagasins = {};
+          (toutes || []).forEach(l => {
+            if (l && l.equipe && l.contenu && l.contenu.entreprise && typeof l.contenu.entreprise === "object") {
+              infosMagasins[String(l.equipe).trim()] = l.contenu.entreprise;
+            }
+          });
+          setInfosBoutiques(infosMagasins);
           (toutes || []).forEach(l => {
             const r = l.contenu || {};
+            if (!fusion.titreSite && typeof r.titreSite === "string" && r.titreSite.trim()) fusion.titreSite = r.titreSite.trim();
             (r.marques || []).forEach(m => { if (!fusion.marques.includes(m)) fusion.marques.push(m); });
             (r.categories || []).forEach(c => { if (!fusion.categories.some(x => x.id === c.id)) fusion.categories.push(c); });
             Object.assign(fusion.photosCategories, r.photosCategories || {});
@@ -5791,7 +5907,7 @@ export default function App() {
   // Sauvegarde automatique : seuls l'administrateur et son équipe écrivent (le client ne fait que lire)
   useEffect(() => {
     if (!userActif || role === "client" || !cleProduits || !reglagesPretsRef.current) return;
-    const contenu = { marques, categories, photosCategories, photosMarques, cases, entreprise, credits, boutiquesMasquees, transfertsStock, modePrix, ventePhotoActive };
+    const contenu = { marques, categories, photosCategories, photosMarques, cases, entreprise, credits, boutiquesMasquees, transfertsStock, modePrix, ventePhotoActive, titreSite };
     const texte = JSON.stringify(contenu);
     if (texte === dernierEnvoiRef.current) return;
     const minuteur = setTimeout(async () => {
@@ -5801,7 +5917,7 @@ export default function App() {
     }, 800);
     return () => clearTimeout(minuteur);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [marques, categories, photosCategories, photosMarques, cases, entreprise, credits, boutiquesMasquees, transfertsStock, modePrix, ventePhotoActive]);
+  }, [marques, categories, photosCategories, photosMarques, cases, entreprise, credits, boutiquesMasquees, transfertsStock, modePrix, ventePhotoActive, titreSite]);
 
   const basculerVisibiliteBoutique = (nomBoutique) => {
     setBoutiquesMasquees(prev =>
@@ -6138,16 +6254,17 @@ export default function App() {
               </Button>
             )}
 
-            {/* Logo & Titre MotoPièces (option développeur visible uniquement côté client / non connecté) */}
+            {/* Barre du haut : titre GÉNÉRAL uniquement. Les noms, contacts et spécialités
+                des magasins individuels ne s'affichent JAMAIS ici : ils s'affichent seulement
+                dans les détails du magasin (quand un client regarde un article). */}
             {(!role || role === "client") && (
-              <BoutonSupprimer label={<>{entreprise.photo ? <img src={entreprise.photo} alt="" className="h-7 w-7 rounded object-cover border border-white/40" /> : <IconeMoto />} <span className="text-lg sm:text-xl font-extrabold tracking-wide">{entreprise.nom || "MotoPièces"}</span><span className="block text-[10px] font-normal text-white/60 leading-tight">🛍️ {entreprise.materiel} — 📞 {entreprise.tel}</span></>} duree={10000}
+              <BoutonSupprimer label={<><IconeMoto /> <span className="text-lg sm:text-xl font-extrabold tracking-wide">{titreSite || "MotoPièces"}</span></>} duree={10000}
                 boutonClass="text-white hover:bg-white/10 text-left rounded p-1"
                 onSupprimer={() => setMenuDev(true)} />
             )}
             {role && role !== "client" && (
               <div className="text-white flex items-center text-left rounded p-1">
-                {entreprise.photo ? <img src={entreprise.photo} alt="" className="h-7 w-7 rounded object-cover" /> : <IconeMoto />} <span className="text-lg sm:text-xl font-extrabold tracking-wide">{entreprise.nom || "MotoPièces"}</span>
-                <span className="block text-[10px] font-normal text-white/60 leading-tight">🛍️ {entreprise.materiel} — 📞 {entreprise.tel}</span>
+                <IconeMoto /> <span className="text-lg sm:text-xl font-extrabold tracking-wide">{titreSite || "MotoPièces"}</span>
               </div>
             )}
             {role && <Badge variant="secondary" className="hidden sm:inline-flex">{r.emoji} {r.titre}</Badge>}
@@ -6331,7 +6448,8 @@ export default function App() {
             supprimerCompte={supprimerCompte}
             fermer={() => { setMenuDev(false); setCodeOk(false); setCodeSaisi(""); }}
             CODE_DEV={CODE_DEV}
-            dureePublicite={dureePublicite} onChangerDuree={changerDureePublicite} />
+            dureePublicite={dureePublicite} onChangerDuree={changerDureePublicite}
+            titreSite={titreSite} onChangerTitre={changerTitreSite} />
         </DialogContent>
       </Dialog>
 
@@ -6356,6 +6474,7 @@ export default function App() {
             userActif={userActif}
             comptes={comptes}
             entreprise={entreprise}
+            infosBoutiques={infosBoutiques}
           />
         </div>
       )}
