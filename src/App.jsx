@@ -1119,7 +1119,7 @@ function MonHistorique({ ventes = [], moi }) {
   const [filtre, setFiltre] = useState("toutes");
   const [jour, setJour] = useState(""); // 📅 calendrier : voir mes ventes d'un jour précis
   const monNom = (moi?.nom || "").trim();
-  const mesVentes = (ventes || []).filter(v => !(v.vendeurNom || "").trim() || (v.vendeurNom || "").trim() === monNom);
+  const mesVentes = (ventes || []).filter(v => (v.vendeurNom || "").trim() === monNom);
   const totalDe = (v) => (v.items || []).reduce((s, it) => s + (it.prixLigne ?? (it.p ? it.p.prix : it.prix)) * (it.qte || 1), 0);
   // 📅 On garde d'abord les ventes du jour choisi (ou toutes), puis le filtre de statut
   const mesVentesJour = jour ? mesVentes.filter(v => jourDe(v) === isoVersJour(jour)) : mesVentes;
@@ -3727,6 +3727,15 @@ function TalkieWalkie({ role, userActif, comptes }) {
   const fluxRef = useRef(null);
   const audioRef = useRef(null);
   const enEmissionRef = useRef(false);
+  // Voie de secours « petits morceaux de voix » : marche même quand la liaison directe est bloquée par le réseau
+  const segRef = useRef({ actif: false, rec: null, timer: null, seq: 0 });
+  const fileVoixRef = useRef([]);        // morceaux de voix reçus, en attente d'être joués
+  const lectureVoixRef = useRef(false);  // un morceau est en train d'être joué
+  const audioSegRef = useRef(null);
+  const finDemandeeRef = useRef(false);  // l'émetteur a relâché : on termine ce qui reste puis on coupe
+  const dernierEmetteurRef = useRef("");
+  const liveDeRef = useRef({});          // émetteurs dont la liaison directe fonctionne (pas besoin des morceaux)
+  const ctxBipRef = useRef(null);
   const [niveau, setNiveau] = useState(0); // 0 à 1 : force de la voix (pour les barres animées)
   const analyseurRef = useRef(null);
   const boucleAnimRef = useRef(null);
@@ -3769,6 +3778,81 @@ function TalkieWalkie({ role, userActif, comptes }) {
     setNomQuiParle("");
   };
 
+  // ===== Voie « petits morceaux de voix » =====
+  const versBase64 = (blob) => new Promise((res) => {
+    const r = new FileReader();
+    r.onload = () => res(String(r.result).split(",")[1] || "");
+    r.onerror = () => res("");
+    r.readAsDataURL(blob);
+  });
+
+  // Petit bip de talkie-walkie : début et fin de parole
+  const bip = (freq = 880, ms = 90) => {
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      const ctx = ctxBipRef.current || (ctxBipRef.current = new AC());
+      if (ctx.state === "suspended") ctx.resume().catch(() => {});
+      const osc = ctx.createOscillator(); const gain = ctx.createGain();
+      osc.type = "sine"; osc.frequency.value = freq; gain.gain.value = 0.12;
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.start(); osc.stop(ctx.currentTime + ms / 1000);
+    } catch {}
+  };
+
+  // Joue les morceaux reçus les uns après les autres ; quand c'est fini et que l'émetteur a relâché : bip + coupure
+  const jouerSuite = () => {
+    if (lectureVoixRef.current) return;
+    const suivant = fileVoixRef.current.shift();
+    if (!suivant) {
+      if (finDemandeeRef.current) { finDemandeeRef.current = false; bip(600, 110); couperReception(dernierEmetteurRef.current); }
+      return;
+    }
+    lectureVoixRef.current = true;
+    const a2 = audioSegRef.current || (audioSegRef.current = new Audio());
+    const suite = () => { lectureVoixRef.current = false; jouerSuite(); };
+    a2.onended = suite; a2.onerror = suite;
+    a2.src = "data:" + String(suivant.mime || "audio/webm").split(";")[0] + ";base64," + suivant.data;
+    a2.play().catch(suite);
+  };
+
+  // Émission : toutes les 1,2 seconde, un morceau de voix part par le serveur (pendant qu'on maintient le bouton)
+  const demarrerSegments = (flux, cibles) => {
+    try {
+      if (typeof MediaRecorder === "undefined") return;
+      const mime = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find(t => MediaRecorder.isTypeSupported(t)) || "";
+      const S = segRef.current;
+      S.actif = true; S.seq = 0;
+      const session = Date.now();
+      const lancer = () => {
+        if (!S.actif) return;
+        let rec;
+        try { rec = mime ? new MediaRecorder(flux, { mimeType: mime, audioBitsPerSecond: 24000 }) : new MediaRecorder(flux); } catch { return; }
+        const morceaux = [];
+        rec.ondataavailable = (e) => { if (e.data && e.data.size > 0) morceaux.push(e.data); };
+        rec.onstop = async () => {
+          const dernier = !S.actif && S.rec === rec;
+          try {
+            const blob = new Blob(morceaux, { type: rec.mimeType || mime || "audio/webm" });
+            const data = blob.size > 300 ? await versBase64(blob) : "";
+            if (data) signaler({ type: "voix", vers: "groupe", cibles, data, mime: blob.type, seq: S.seq++, session });
+          } catch {}
+          if (dernier) signaler({ type: "fin", vers: "groupe" });   // « fin » arrive APRÈS le dernier morceau
+        };
+        S.rec = rec;
+        rec.start();
+        S.timer = setTimeout(() => { try { if (rec.state !== "inactive") rec.stop(); } catch {} lancer(); }, 1200);
+      };
+      lancer();
+    } catch (e) { console.warn("Talkie : morceaux de voix indisponibles", e); }
+  };
+  const arreterSegments = () => {
+    const S = segRef.current;
+    S.actif = false;
+    clearTimeout(S.timer);
+    try { if (S.rec && S.rec.state !== "inactive") S.rec.stop(); } catch {}
+  };
+
   // Quelqu'un maintient son bouton : on l'écoute en direct
   const ecouterOffre = async (p) => {
     if (typeof RTCPeerConnection === "undefined") return;
@@ -3782,6 +3866,9 @@ function TalkieWalkie({ role, userActif, comptes }) {
           if (!audio) return;
           audio.srcObject = e.streams[0];
           audio.play().catch(() => {});
+          liveDeRef.current[p.de] = true;                       // la liaison directe marche : on arrête les morceaux
+          fileVoixRef.current = []; lectureVoixRef.current = false;
+          try { audioSegRef.current && audioSegRef.current.pause(); } catch {}
           setEnReception(true);
           setNomQuiParle(p.nomDe || p.de);
           try { navigator.vibrate && navigator.vibrate(200); } catch {}
@@ -3804,6 +3891,19 @@ function TalkieWalkie({ role, userActif, comptes }) {
   const traiterSignal = (p) => {
     if (!p || p.de === monTel) return;
     if (p.type !== "fin" && p.vers !== "groupe" && p.vers !== monTel) return;
+    if (p.type === "voix") {
+      if (Array.isArray(p.cibles) && !p.cibles.includes(monTel)) return;   // ce morceau n'est pas pour moi
+      if (liveDeRef.current[p.de] || !p.data) return;                        // la liaison directe marche déjà pour cet émetteur
+      const premier = !lectureVoixRef.current && fileVoixRef.current.length === 0;
+      dernierEmetteurRef.current = p.de;
+      finDemandeeRef.current = false;
+      if (premier) { bip(880, 90); try { navigator.vibrate && navigator.vibrate(200); } catch {} }
+      setEnReception(true);
+      setNomQuiParle(p.nomDe || p.de);
+      fileVoixRef.current.push({ data: p.data, mime: p.mime });
+      jouerSuite();
+      return;
+    }
     if (p.type === "offre") { ecouterOffre(p); return; }
     if (p.type === "reponse") {
       const pc = pcsRef.current[p.de];
@@ -3828,7 +3928,12 @@ function TalkieWalkie({ role, userActif, comptes }) {
       return;
     }
     if (p.type === "pret") { try { if (pretsRef.current) pretsRef.current[p.de] = true; } catch {} return; }
-    if (p.type === "fin") couperReception(p.de);
+    if (p.type === "fin") {
+      delete liveDeRef.current[p.de];
+      // des morceaux restent à jouer : on les termine, puis la coupure se fait toute seule (bip de fin)
+      if (lectureVoixRef.current || fileVoixRef.current.length > 0) { finDemandeeRef.current = true; return; }
+      couperReception(p.de);
+    }
   };
 
   // Ouverture du talkie : on rejoint le canal et on annonce sa présence
@@ -3935,10 +4040,10 @@ function TalkieWalkie({ role, userActif, comptes }) {
   // Maintenir le bouton : le micro s'ouvre et la voix part EN DIRECT chez les autres
   const demarrer = async () => {
     if (enEmissionRef.current) return;
+    bip(1000, 70);   // bip « tu es en direct » (avant que le micro s'ouvre, pour qu'il ne soit pas enregistré)
     setInfo("");
     try {
       if (!navigator.mediaDevices?.getUserMedia) { setInfo("❌ Le micro n'est pas disponible sur cet appareil."); return; }
-      if (typeof RTCPeerConnection === "undefined") { setInfo("❌ Ce navigateur ne supporte pas le talkie en direct."); return; }
       if (!canalRef.current) { setInfo("⚠️ Connexion en cours… attends une seconde et réessaie."); return; }
       enEmissionRef.current = true;
       const flux = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
@@ -3976,7 +4081,9 @@ function TalkieWalkie({ role, userActif, comptes }) {
         setInfo("👤 Personne n'écoute pour le moment" + (destinataire === "equipe" ? " : personne de ton équipe n'a encore ouvert l'application." : destinataire === "admins" ? " : aucun admin n'a ouvert l'application." : " : cette personne n'a pas ouvert l'application."));
         return;
       }
-      for (const tel of cibles) {
+      // Voie de secours : la voix part aussi par petits morceaux via le serveur (marche sur tous les réseaux)
+      demarrerSegments(flux, cibles);
+      for (const tel of (typeof RTCPeerConnection === "undefined" ? [] : cibles)) {
         // Connexion déjà chaude d'avant ? On envoie le son DEDANS tout de suite : ZÉRO attente.
         const ancien = pcsRef.current[tel];
         const piste = flux.getAudioTracks()[0] || flux.getTracks()[0];
@@ -4013,7 +4120,12 @@ function TalkieWalkie({ role, userActif, comptes }) {
   const arreter = () => {
     if (!enEmissionRef.current) return;
     enEmissionRef.current = false;
-    signaler({ type: "fin", vers: "groupe" });
+    const avecMorceaux = !!segRef.current.actif;
+    arreterSegments();
+    // Avec les morceaux, « fin » part juste après le dernier morceau (et une 2e fois par sécurité) ; sinon tout de suite
+    if (avecMorceaux) setTimeout(() => signaler({ type: "fin", vers: "groupe" }), 1500);
+    else signaler({ type: "fin", vers: "groupe" });
+    bip(600, 90);
     // On GARDE les connexions chaudes : le prochain appui partira instantanément, sans attendre
     Object.values(pcsRef.current).forEach(pc => { try { pc.getSenders()[0]?.replaceTrack(null); } catch {} });
     try { fluxRef.current?.getTracks().forEach(t => t.stop()); } catch {}
@@ -4595,6 +4707,11 @@ function MessagerieEquipe({ role, userActif, comptes }) {
 
   // ===== Style WhatsApp : écran (liste / discussion), recherche, non-lus, photo plein écran =====
   const [vue, setVue] = useState("liste"); // "liste" = toutes les discussions | "chat" = une discussion ouverte
+  const [dureeVocal, setDureeVocal] = useState(0);   // chronomètre du vocal en cours (0:01, 0:02…)
+  const [glisse, setGlisse] = useState(0);           // glissement du doigt vers la gauche (= annuler)
+  const annulerVocalRef = useRef(false);
+  const debutVocalRef = useRef(0);
+  const departXRef = useRef(0);
   const [recherche, setRecherche] = useState("");
   const [photoPleine, setPhotoPleine] = useState(null);
   const messagesRef = useRef([]);
@@ -4873,15 +4990,32 @@ function MessagerieEquipe({ role, userActif, comptes }) {
       recorder.onstop = async () => {
         flux.getTracks().forEach(t => t.stop());
         setEnVocal(false);
+        setGlisse(0);
+        // Glissé vers la gauche = vocal annulé, rien n'est envoyé (comme WhatsApp)
+        if (annulerVocalRef.current) {
+          annulerVocalRef.current = false;
+          setInfo("🗑️ Vocal annulé");
+          setTimeout(() => setInfo(""), 1500);
+          return;
+        }
+        // Trop court (moins d'une seconde) : on demande de maintenir le micro
+        if (Date.now() - debutVocalRef.current < 800) {
+          setInfo("Maintiens le micro pour enregistrer un vocal.");
+          setTimeout(() => setInfo(""), 2000);
+          return;
+        }
         const blob = new Blob(chunksRef.current, { type: recorder.mimeType || "audio/webm" });
         if (blob.size < 300) { setInfo("Rien n'a été entendu. Maintiens le micro et parle."); return; }
         const b64 = await lireBase64(blob);
         envoyer("audio", b64);
       };
+      annulerVocalRef.current = false;
+      debutVocalRef.current = Date.now();
       recorder.start();
       mediaRecorderRef.current = recorder;
       setEnVocal(true);
-      arretAutoRef.current = setTimeout(() => { try { recorder.stop(); } catch {} }, 30000);
+      try { navigator.vibrate && navigator.vibrate(30); } catch {}
+      arretAutoRef.current = setTimeout(() => { try { recorder.stop(); } catch {} }, 60000);
     } catch (e) {
       enVocalRef.current = false;
       setEnVocal(false);
@@ -4962,6 +5096,14 @@ function MessagerieEquipe({ role, userActif, comptes }) {
   };
 
   const messagesDuCanal = messages.filter(m => m.destinataire === idDuCanal(canal));
+
+  // Chronomètre du vocal pendant qu'on maintient le micro
+  useEffect(() => {
+    if (!enVocal) { setDureeVocal(0); return; }
+    const t0 = Date.now();
+    const t = setInterval(() => setDureeVocal(Math.floor((Date.now() - t0) / 1000)), 250);
+    return () => clearInterval(t);
+  }, [enVocal]);
 
   // ---------- Style WhatsApp : discussions, non-lus, jours, avatars ----------
   useEffect(() => { messagesRef.current = messages; }, [messages]);
@@ -5293,35 +5435,54 @@ function MessagerieEquipe({ role, userActif, comptes }) {
                 <input ref={inputPhotoCamRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={choisirPhoto} />
                 <input ref={inputFichierImportRef} type="file" accept="image/*,video/*" className="hidden" onChange={importerFichier} />
                 <div className="flex items-end gap-2">
-                  <div className="flex-1 flex items-center bg-white rounded-full px-3 min-h-[44px]">
-                    <input
-                      className="flex-1 min-w-0 bg-transparent outline-none text-[15px] py-2"
-                      placeholder="Message"
-                      value={texte}
-                      onChange={e => setTexte(e.target.value)}
-                      onKeyDown={e => { if (e.key === "Enter") { envoyer("texte", texte); setTexte(""); } }}
-                    />
-                    <button className="text-xl px-1.5 text-zinc-500" onClick={() => inputFichierImportRef.current?.click()} aria-label="Joindre une photo ou une vidéo">📎</button>
-                    <button className="text-xl px-1.5 text-zinc-500" onClick={() => inputPhotoCamRef.current?.click()} aria-label="Prendre une photo">📷</button>
-                  </div>
-                  {texte.trim()
+                  {enVocal ? (
+                    <div className="flex-1 flex items-center bg-white rounded-full px-4 min-h-[44px] gap-3 select-none overflow-hidden">
+                      <span className="w-3 h-3 rounded-full bg-red-600 animate-pulse shrink-0" />
+                      <span className="font-mono text-sm text-zinc-800 shrink-0">{formaterDuree(dureeVocal)}</span>
+                      <span
+                        className={"flex-1 text-center text-sm whitespace-nowrap " + (glisse < -40 ? "text-red-600 font-semibold" : "text-zinc-500")}
+                        style={{ transform: "translateX(" + Math.max(-90, Math.min(0, glisse)) + "px)", opacity: Math.max(0.25, 1 + glisse / 120) }}>
+                        {glisse < -40 ? "Relâche pour annuler" : "◀ Glisse pour annuler"}
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="flex-1 flex items-center bg-white rounded-full px-3 min-h-[44px]">
+                      <input
+                        className="flex-1 min-w-0 bg-transparent outline-none text-[15px] py-2"
+                        placeholder="Message"
+                        value={texte}
+                        onChange={e => setTexte(e.target.value)}
+                        onKeyDown={e => { if (e.key === "Enter") { envoyer("texte", texte); setTexte(""); } }}
+                      />
+                      <button className="text-xl px-1.5 text-zinc-500" onClick={() => inputFichierImportRef.current?.click()} aria-label="Joindre une photo ou une vidéo">📎</button>
+                      <button className="text-xl px-1.5 text-zinc-500" onClick={() => inputPhotoCamRef.current?.click()} aria-label="Prendre une photo">📷</button>
+                    </div>
+                  )}
+                  {texte.trim() && !enVocal
                     ? <button className="w-11 h-11 rounded-full bg-[#00a884] hover:bg-[#008f6f] text-white text-lg shrink-0" title="Envoyer"
                         onClick={() => { envoyer("texte", texte); setTexte(""); }}>➤</button>
                     : <button
-                        className={"w-11 h-11 rounded-full text-white text-lg select-none shrink-0 " + (enVocal ? "bg-red-600 animate-pulse" : "bg-[#00a884] hover:bg-[#008f6f]")}
-                        style={{ touchAction: "none" }}
-                        title="Maintiens pour parler, relâche pour envoyer"
+                        className={"w-11 h-11 rounded-full text-white text-lg select-none shrink-0 " + (enVocal ? "bg-red-600" : "bg-[#00a884] hover:bg-[#008f6f]")}
+                        style={{ touchAction: "none", transform: enVocal ? "scale(1.45)" : "none", transition: "transform .15s" }}
+                        title="Maintiens pour parler, relâche pour envoyer, glisse à gauche pour annuler"
                         onPointerDown={(e) => {
                           e.preventDefault();
                           try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
+                          departXRef.current = e.clientX;
+                          setGlisse(0);
                           demarrerVocal();
                         }}
+                        onPointerMove={(e) => {
+                          if (!enVocalRef.current) return;
+                          const dx = e.clientX - departXRef.current;
+                          setGlisse(dx);
+                          if (dx < -90) { annulerVocalRef.current = true; arreterVocal(); }
+                        }}
                         onPointerUp={arreterVocal}
-                        onPointerCancel={arreterVocal}
-                        onPointerLeave={arreterVocal}
+                        onPointerCancel={() => { annulerVocalRef.current = true; arreterVocal(); }}
                         onLostPointerCapture={arreterVocal}
                         onContextMenu={(e) => e.preventDefault()}>
-                        {enVocal ? "⏺" : "🎤"}
+                        🎤
                       </button>}
                 </div>
                 {info && <p className="text-xs mt-1 px-2 text-zinc-700">{info}</p>}
@@ -5819,7 +5980,7 @@ export default function App() {
     }
 
     chargerComptesSupabase();
-    chargerVentesEnLigne();
+    // (les ventes sont chargées plus bas, équipe par équipe, une fois l'utilisateur connecté)
 
     // TEMPS RÉEL : dès qu'un compte ou une vente change sur le serveur, tous les téléphones se mettent à jour
     let minuteurComptes = null, minuteurVentes = null;
@@ -5827,16 +5988,11 @@ export default function App() {
       clearTimeout(minuteurComptes);
       minuteurComptes = setTimeout(rafraichirComptes, 400);
     });
-    const canalVentes = abonnerVentesTempsReel(() => {
-      clearTimeout(minuteurVentes);
-      minuteurVentes = setTimeout(rafraichirVentes, 600);
-    });
     // Filet de sécurité : si la connexion en direct coupe, on rafraîchit toutes les 30 secondes
-    const filet = setInterval(() => { rafraichirComptes(); rafraichirVentes(); }, 30000);
+    const filet = setInterval(() => { rafraichirComptes(); }, 30000);
     return () => {
       clearTimeout(minuteurComptes); clearTimeout(minuteurVentes); clearInterval(filet);
       try { if (canalComptes) supabase.removeChannel(canalComptes); } catch (e) {}
-      try { if (canalVentes) supabase.removeChannel(canalVentes); } catch (e) {}
     };
   }, []);
 
@@ -5921,6 +6077,57 @@ export default function App() {
     ? ((userActif?.tel || "").trim())
     : ((userActif?.equipe || "").trim());
   const estArticleDeMaCle = (p) => (p.equipe || "").trim() === cleProduits;
+
+  // ---------- v73 : CHAQUE ADMINISTRATEUR A SES VENTES À PART ----------
+  // Une vente appartient à une équipe (= le téléphone de l'administrateur). Le personnel ne voit que les ventes de SON équipe.
+  const equipeDeVente = (v) => {
+    if (v.equipe) return String(v.equipe).trim();
+    // anciennes ventes sans étiquette : on retrouve l'équipe par la personne qui l'a faite, puis par les articles
+    const parVendeur = (comptes || []).find(c => c.nom && (c.nom === v.vendeurNom || c.nom === v.vendeur));
+    if (parVendeur) return (parVendeur.role === "admin" ? (parVendeur.tel || "") : (parVendeur.equipe || "")).trim();
+    const it = (v.items || []).find(x => (x.p && x.p.equipe) || x.equipe);
+    if (it) return String((it.p && it.p.equipe) || it.equipe).trim();
+    // un seul administrateur dans l'application : ses anciennes ventes sont forcément les siennes
+    const admins = (comptes || []).filter(c => c.role === "admin" && (c.tel || "").trim());
+    return admins.length === 1 ? (admins[0].tel || "").trim() : "";
+  };
+  const ventesEquipe = (role === "client") ? ventes
+    : (ventes || []).filter(v => { const e = equipeDeVente(v); return e !== "" && e === cleProduits; });
+
+  // Chargement des ventes en ligne : une équipe ne charge QUE ses ventes, un client QUE ses commandes (mise à jour en direct)
+  useEffect(() => {
+    if (!userActif) return;
+    const equipe = role === "client" ? null : (cleProduits || null);
+    const telClient = role === "client" ? ((userActif.tel || "").trim() || null) : null;
+    if (role !== "client" && !equipe) return;
+    let annule = false; let minuteur = null;
+    const charger = async () => {
+      try {
+        const enLigne = await chargerVentesSupabase(equipe, telClient);
+        if (annule) return;
+        const valides = (enLigne || []).filter(x => (x.items || []).length > 0 && (x.statut === "payée" ? Number(x.total) > 0 : true));
+        if (valides.length === 0) return;
+        setVentes(prev => {
+          const parServeur = new Map(valides.map(x => [String(x.id), x]));
+          const dejaVus = new Set();
+          const misAJour = (prev || []).map(v => {
+            const idSrv = String(v.supabase_id || v.id);
+            const x = parServeur.get(idSrv);
+            if (!x) return v;
+            dejaVus.add(idSrv);
+            return { ...v, ...x, id: v.id, supabase_id: x.id, equipe: x.equipe || v.equipe || "", vendeurNom: x.vendeurNom || v.vendeurNom || "" };
+          });
+          const nouvelles = valides.filter(x => !dejaVus.has(String(x.id)) && !misAJour.some(v => String(v.id) === String(x.id)));
+          return nouvelles.length ? [...nouvelles, ...misAJour] : misAJour;
+        });
+      } catch (e) { console.warn("Chargement des ventes de l'équipe:", e); }
+    };
+    charger();
+    const canal = abonnerVentesTempsReel(() => { clearTimeout(minuteur); minuteur = setTimeout(charger, 600); });
+    const filet = setInterval(charger, 30000);
+    return () => { annule = true; clearTimeout(minuteur); clearInterval(filet); try { if (canal) supabase.removeChannel(canal); } catch (e) {} };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userActif?.tel, role, cleProduits]);
 
   // v70 — ISOLATION PAR ADMINISTRATEUR (renforcée) : chaque admin voit et modifie
   // UNIQUEMENT les marchandises qu'il a lui-même enregistrées (sa clé = son téléphone).
@@ -6347,6 +6554,8 @@ export default function App() {
       vendeurNom: ["vendeur", "secretaire", "vendeur-secretaire", "admin"].includes(role) ? (userActif?.nom || "") : "",
       vendeur: nomBoutique,
       boutique: nomBoutique,
+      // 🏪 Équipe propriétaire de la vente (téléphone de l'administrateur) : sert à séparer les ventes de chaque administrateur
+      equipe: (role === "client" ? (premierProduit?.equipe || "") : (cleProduits || premierProduit?.equipe || "")).toString().trim(),
       statut: v.credit ? "crédit" : "en attente",
       creditId: idCreditLie, // lien inverse : quand la secrétaire confirme le paiement total, le crédit se solde aussi
       date: dateVente,
@@ -6779,19 +6988,19 @@ export default function App() {
       )}
 
       {/* Vues Métier réservées au personnel de l'entreprise */}
-      {role === "vendeur" && <VueVendeur produits={produits} ventes={ventes.filter(v => v.statut !== "annulée")} ventesToutes={ventes} moi={userActif} creerVente={creerVente}
+      {role === "vendeur" && <VueVendeur produits={produits} ventes={ventesEquipe.filter(v => v.statut !== "annulée")} ventesToutes={ventesEquipe} moi={userActif} creerVente={creerVente}
         categories={categories} credits={credits} cases={cases} ventePhoto={ventePhotoActive} />}
-      {role === "secretaire" && <VueSecretaire ventes={ventes.filter(v => v.statut !== "annulée")} ventesToutes={ventes} moi={userActif} confirmerPaiement={confirmerPaiement} majPrixLigne={majPrixLigne} modePrix={modePrix} entreprise={entreprise}
+      {role === "secretaire" && <VueSecretaire ventes={ventesEquipe.filter(v => v.statut !== "annulée")} ventesToutes={ventesEquipe} moi={userActif} confirmerPaiement={confirmerPaiement} majPrixLigne={majPrixLigne} modePrix={modePrix} entreprise={entreprise}
         credits={credits} ajouterCredit={ajouterCredit} ajouterVersement={ajouterVersement} validerCredit={validerCredit} />}
       {role === "vendeur-secretaire" && (
-        <VueVendeurSecretaire produits={produits} marques={marques} ventes={ventes.filter(v => v.statut !== "annulée")} ventesToutes={ventes} moi={userActif} creerVente={creerVente}
+        <VueVendeurSecretaire produits={produits} marques={marques} ventes={ventesEquipe.filter(v => v.statut !== "annulée")} ventesToutes={ventesEquipe} moi={userActif} creerVente={creerVente}
           confirmerPaiement={confirmerPaiement} majPrixLigne={majPrixLigne} modePrix={modePrix} entreprise={entreprise}
           credits={credits} ajouterCredit={ajouterCredit} ajouterVersement={ajouterVersement} validerCredit={validerCredit}
           categories={categories} cases={cases} ventePhoto={ventePhotoActive} />
       )}
       {role === "admin" && (
         <VueAdmin produits={produits.filter(p => (p.equipe || "").trim() === ((userActif?.tel || "").trim()))} setProduits={setProduitsAdmin} marques={marques} setMarques={setMarques}
-          ventes={ventes} genererMarque={genererMarque}
+          ventes={ventesEquipe} genererMarque={genererMarque}
           photosCategories={photosCategories} setPhotosCategories={setPhotosCategories}
           photosMarques={photosMarques} setPhotosMarques={setPhotosMarques}
           modePrix={modePrix} setModePrix={setModePrix} categories={categories} setCategories={setCategories}

@@ -130,20 +130,23 @@ export function abonnerComptesTempsReel(callback) {
 
 export async function enregistrerVenteSupabase(vente) {
   try {
-    const { data: saleData, error: saleError } = await supabase
-      .from("sales")
-      .insert([
-        {
-          vendeur_nom: vente.vendeur || "MotoPièces Principal",
-          client_nom: vente.client || "Client",
-          client_tel: vente.tel || "",
-          total: totalDeVente(vente),
-          statut: vente.statut || "payée",
-          date_vente: vente.date || new Date().toLocaleString("fr-FR"),
-        },
-      ])
-      .select()
-      .single();
+    const ligneVente = {
+      vendeur_nom: vente.vendeur || "MotoPièces Principal",
+      client_nom: vente.client || "Client",
+      client_tel: vente.tel || "",
+      total: totalDeVente(vente),
+      statut: vente.statut || "payée",
+      date_vente: vente.date || new Date().toLocaleString("fr-FR"),
+    };
+    // Chaque vente appartient à l'équipe d'un administrateur et garde le nom de la personne qui l'a faite
+    const avecEquipe = { ...ligneVente, equipe: (vente.equipe || "").trim() || null, vendeur_personne: (vente.vendeurNom || "").trim() || null };
+
+    let { data: saleData, error: saleError } = await supabase.from("sales").insert([avecEquipe]).select().single();
+    // Si le script SQL des ventes par administrateur n'a pas encore été exécuté, on enregistre quand même la vente
+    if (saleError && /equipe|vendeur_personne|column/i.test(saleError.message || "")) {
+      console.warn("Colonnes equipe / vendeur_personne absentes : exécute le script SQL-VENTES-PAR-ADMIN.");
+      ({ data: saleData, error: saleError } = await supabase.from("sales").insert([ligneVente]).select().single());
+    }
 
     if (saleError) {
       console.warn("Écriture Supabase sales:", saleError.message);
@@ -195,12 +198,24 @@ export async function majVenteSupabase(vente) {
   }
 }
 
-export async function chargerVentesSupabase() {
+/**
+ * Charge les ventes.
+ * - equipe : téléphone de l'administrateur → seulement les ventes de SON équipe (+ les anciennes ventes sans étiquette)
+ * - telClient : un client ne charge que SES commandes
+ */
+export async function chargerVentesSupabase(equipe = null, telClient = null) {
   try {
-    const { data: sales, error } = await supabase
-      .from("sales")
-      .select("*, sale_items (*)")
-      .order("created_at", { ascending: false });
+    const requete = (filtrer) => {
+      let q = supabase.from("sales").select("*, sale_items (*)").order("created_at", { ascending: false });
+      if (filtrer && telClient) q = q.eq("client_tel", telClient);
+      else if (filtrer && equipe) q = q.or('equipe.eq."' + String(equipe).replace(/"/g, "") + '",equipe.is.null');
+      return q;
+    };
+    let { data: sales, error } = await requete(true);
+    // Si la colonne « equipe » n'existe pas encore (script SQL pas encore exécuté), on charge sans filtre
+    if (error && /equipe|column/i.test(error.message || "")) {
+      ({ data: sales, error } = await requete(false));
+    }
 
     if (error) {
       console.warn("Chargement Supabase sales:", error.message);
@@ -211,6 +226,8 @@ export async function chargerVentesSupabase() {
       id: s.id,
       supabase_id: s.id,
       vendeur: s.vendeur_nom,
+      vendeurNom: s.vendeur_personne || "",
+      equipe: s.equipe || "",
       client: s.client_nom,
       tel: s.client_tel,
       total: Number(s.total) || 0,
