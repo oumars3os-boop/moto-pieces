@@ -4770,14 +4770,35 @@ function MessagerieEquipe({ role, userActif, comptes }) {
       // v66 : si l'envoi échoue (réseau faible), on réessaie tout seul une seconde fois
       let data = null, error = null;
       for (let essai = 0; essai < 2; essai++) {
-        const r = await supabase.from("messages").insert(msg).select("id").single();
+        // 1er essai : on récupère l'identifiant du message ; 2e essai : envoi simple (plus tolérant sur les droits)
+        const r = essai === 0
+          ? await supabase.from("messages").insert(msg).select("id").single()
+          : await supabase.from("messages").insert(msg);
         data = r.data; error = r.error;
         if (!error) break;
-        await new Promise(res => setTimeout(res, 2000));
+        console.warn("Envoi message refusé (essai " + (essai + 1) + "):", error.code, error.message);
+        if (essai === 0) await new Promise(res => setTimeout(res, 1500));
       }
       if (error) {
         finirBarre();
-        setInfo("⚠️ Envoi impossible : " + (error.message || "erreur") + ". Vérifie que la table « messages » a été créée dans Supabase.");
+        const brut = String(error.message || "erreur");
+        const code = String(error.code || "");
+        let cause = "Erreur Supabase : " + brut;
+        if (code === "PGRST205" || /could not find the table|relation .* does not exist/i.test(brut))
+          cause = "La table « messages » n'existe pas dans Supabase. Exécute le script REPARER-MESSAGERIE dans l'éditeur SQL de Supabase.";
+        else if (code === "PGRST204" || /could not find the .* column/i.test(brut))
+          cause = "Une colonne de la table « messages » manque dans Supabase. Exécute le script REPARER-MESSAGERIE.";
+        else if (code === "42501" || /row-level security|permission denied/i.test(brut))
+          cause = "Supabase refuse l'écriture (droits). Exécute le script REPARER-MESSAGERIE.";
+        else if (/null value in column/i.test(brut)) {
+          const col = (brut.match(/column "([^"]+)"/) || [])[1];
+          cause = "La table « messages » de Supabase exige encore la colonne « " + (col || "ancienne") + " » (reste d'une ancienne version). Exécute le script REPARER-MESSAGERIE.";
+        }
+        else if (/failed to fetch|network|load failed|timeout/i.test(brut))
+          cause = "Pas de connexion internet. Réessaie dans un instant.";
+        else if (/too large|413/i.test(brut))
+          cause = "Le fichier est trop lourd pour être envoyé.";
+        setInfo("⚠️ Message non envoyé. " + cause);
         return;
       }
       const local = { cle: msg.destinataire + "#" + (data?.id || Date.now()), id: data?.id || Date.now(), ...msg, moi: true };
