@@ -4593,6 +4593,15 @@ function MessagerieEquipe({ role, userActif, comptes }) {
   const monNom = userActif?.nom || "Moi";
   const estAdmin = role === "admin";
 
+  // ===== Style WhatsApp : écran (liste / discussion), recherche, non-lus, photo plein écran =====
+  const [vue, setVue] = useState("liste"); // "liste" = toutes les discussions | "chat" = une discussion ouverte
+  const [recherche, setRecherche] = useState("");
+  const [photoPleine, setPhotoPleine] = useState(null);
+  const messagesRef = useRef([]);
+  const chargerLu = (tel) => { try { const s = localStorage.getItem("motopieces_lu_" + tel); return s ? JSON.parse(s) : null; } catch { return null; } };
+  const [lu, setLu] = useState(() => chargerLu(monTel)); // dernier message lu par discussion (null = pas encore initialisé)
+  useEffect(() => { setLu(chargerLu(monTel)); }, [monTel]);
+
   // Mon équipe : uniquement les comptes créés par mon administrateur
   const cleEquipeDe = (c) => (c.role === "admin" ? (c.tel || "").trim() : (c.equipe || "defaut"));
   const maCle = estAdmin ? monTel : ((userActif?.equipe || "").trim() || "defaut");
@@ -4614,7 +4623,7 @@ function MessagerieEquipe({ role, userActif, comptes }) {
   useEffect(() => {
     const ouvrir = (e) => {
       const tel = (e?.detail?.tel || "").trim();
-      if (tel) setCanal(tel);
+      if (tel) { setCanal(tel); setVue("chat"); }
       setNonLus(0); setNotification(null); setOuvert(true);
     };
     window.addEventListener("motopieces:ouvrir-messagerie", ouvrir);
@@ -4763,6 +4772,7 @@ function MessagerieEquipe({ role, userActif, comptes }) {
       type,
       contenu: contenu || "",
       date: new Date().toISOString(),
+      telecharges: monTel + ",",   // j'ai déjà ce message : quand les autres l'auront, il sera effacé du serveur (= double coche ✓✓)
     };
     if (type !== "texte") demarrerBarre(type);
     else setEnvoi({ type, pct: 50, phase: "envoi" });
@@ -4771,9 +4781,10 @@ function MessagerieEquipe({ role, userActif, comptes }) {
       let data = null, error = null;
       for (let essai = 0; essai < 2; essai++) {
         // 1er essai : on récupère l'identifiant du message ; 2e essai : envoi simple (plus tolérant sur les droits)
+        const { telecharges: _tel, ...msgSansTel } = msg;
         const r = essai === 0
           ? await supabase.from("messages").insert(msg).select("id").single()
-          : await supabase.from("messages").insert(msg);
+          : await supabase.from("messages").insert(msgSansTel);
         data = r.data; error = r.error;
         if (!error) break;
         console.warn("Envoi message refusé (essai " + (essai + 1) + "):", error.code, error.message);
@@ -4952,6 +4963,124 @@ function MessagerieEquipe({ role, userActif, comptes }) {
 
   const messagesDuCanal = messages.filter(m => m.destinataire === idDuCanal(canal));
 
+  // ---------- Style WhatsApp : discussions, non-lus, jours, avatars ----------
+  useEffect(() => { messagesRef.current = messages; }, [messages]);
+
+  const libelleRole = (r) => ({ admin: "Administrateur", vendeur: "Vendeur", secretaire: "Secrétaire", "vendeur-secretaire": "Vendeur / Secrétaire", client: "Client" }[r] || "");
+  const convsBase = (() => {
+    const liste = [];
+    const ajouter = (cv) => { if (cv.key && !liste.some(x => x.key === cv.key)) liste.push(cv); };
+    if (role !== "client") ajouter({ key: "equipe", titre: "Mon équipe", groupe: true, icone: "👥", sous: (membresEquipe.length + 1) + " participants" });
+    if (estAdmin) ajouter({ key: "admins", titre: "Espace Admins", groupe: true, icone: "👑", sous: (lesAdmins.length + 1) + " administrateurs" });
+    const perso = (c) => ({ key: (c.tel || "").trim(), titre: c.nom || c.tel, groupe: false, photo: c.photo || null, sous: libelleRole(c.role) });
+    membresEquipe.forEach(c => ajouter(perso(c)));
+    if (estAdmin) lesAdmins.forEach(c => ajouter(perso(c)));
+    (role === "client" ? mesBoutiques : mesClients).forEach(c => ajouter(perso(c)));
+    return liste;
+  })();
+  const convs = convsBase.map(cv => {
+    const idc = idDuCanal(cv.key);
+    const ms = messages.filter(m => m.destinataire === idc);
+    const dernier = ms.length ? ms.reduce((x, y) => (new Date(y.date).getTime() >= new Date(x.date).getTime() ? y : x)) : null;
+    const nonLusConv = lu ? ms.filter(m => !(m.moi || m.de === monTel) && (Number(m.id) || 0) > ((lu[cv.key]) || 0)).length : 0;
+    return { ...cv, dernier, nonLus: nonLusConv };
+  }).sort((x, y) => (y.dernier ? new Date(y.dernier.date).getTime() : 0) - (x.dernier ? new Date(x.dernier.date).getTime() : 0)
+    || String(x.titre).localeCompare(String(y.titre)));
+  const convsFiltrees = convs.filter(cv => !recherche.trim() || String(cv.titre).toLowerCase().includes(recherche.trim().toLowerCase()));
+  const convActive = convsBase.find(c => c.key === canal)
+    || { key: canal, titre: titreDuCanal(canal).replace(/^\S+\s/, ""), groupe: canal === "equipe" || canal === "admins", sous: "" };
+
+  const couleursAvatar = ["#e17076", "#faa774", "#7bc862", "#6ec9cb", "#65aadd", "#a695e7", "#ee7aae"];
+  const couleurDe = (s) => { let h = 0; for (const ch of String(s || "")) h = (h * 31 + ch.charCodeAt(0)) >>> 0; return couleursAvatar[h % couleursAvatar.length]; };
+  const avatar = (cv, taille = 48) => (
+    <div className="rounded-full shrink-0 overflow-hidden flex items-center justify-center text-white font-bold"
+      style={{ width: taille, height: taille, background: cv.groupe ? "#00a884" : couleurDe(cv.key), fontSize: Math.round(taille * 0.42) }}>
+      {cv.photo ? <img src={cv.photo} alt="" className="w-full h-full object-cover" /> : (cv.icone || String(cv.titre || "?").trim().charAt(0).toUpperCase())}
+    </div>
+  );
+  const apercu = (m) => m.type === "photo" ? "📷 Photo" : m.type === "video" ? "🎬 Vidéo" : m.type === "audio" ? "🎤 Vocal" : (m.contenu || "");
+  const libelleJour = (iso) => {
+    const d = new Date(iso); if (isNaN(d.getTime())) return "";
+    const auj = new Date(); const hier = new Date(); hier.setDate(auj.getDate() - 1);
+    if (d.toDateString() === auj.toDateString()) return "Aujourd'hui";
+    if (d.toDateString() === hier.toDateString()) return "Hier";
+    return d.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" });
+  };
+  const libelleListe = (iso) => {
+    const d = new Date(iso); if (isNaN(d.getTime())) return "";
+    const auj = new Date(); const hier = new Date(); hier.setDate(auj.getDate() - 1);
+    if (d.toDateString() === auj.toDateString()) return heureDe({ date: iso });
+    if (d.toDateString() === hier.toDateString()) return "Hier";
+    return d.toLocaleDateString("fr-FR");
+  };
+  const fermer = () => { arreterLecture(); arreterVocal(); finirBarre(); setPhotoPleine(null); setOuvert(false); };
+  const retourListe = () => { arreterLecture(); arreterVocal(); setPhotoPleine(null); setVue("liste"); };
+  const ouvrirMessagerie = () => {
+    setNonLus(0); setNotification(null);
+    if (convsBase.length === 1) { setCanal(convsBase[0].key); setVue("chat"); } else { setVue("liste"); }
+    setOuvert(true);
+  };
+
+  // Premier lancement : les anciens messages déjà reçus comptent comme « lus » (pas de faux badges)
+  useEffect(() => {
+    if (!ouvert || !monTel || lu !== null) return;
+    idbTout().then(tout => {
+      const base = {};
+      convsBase.forEach(cv => {
+        const idc = idDuCanal(cv.key);
+        base[cv.key] = tout.filter(m => m.destinataire === idc && !(m.moi || m.de === monTel)).reduce((mx, m) => Math.max(mx, Number(m.id) || 0), 0);
+      });
+      try { localStorage.setItem("motopieces_lu_" + monTel, JSON.stringify(base)); } catch {}
+      setLu(prev => prev === null ? base : prev);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ouvert, monTel, lu]);
+
+  // Quand une discussion est ouverte, ses messages reçus sont « lus »
+  useEffect(() => {
+    if (!ouvert || vue !== "chat" || lu === null) return;
+    const maxId = messagesDuCanal.filter(m => !(m.moi || m.de === monTel)).reduce((mx, m) => Math.max(mx, Number(m.id) || 0), 0);
+    if (maxId > ((lu[canal]) || 0)) {
+      const suite = { ...lu, [canal]: maxId };
+      try { localStorage.setItem("motopieces_lu_" + monTel, JSON.stringify(suite)); } catch {}
+      setLu(suite);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ouvert, vue, canal, messages, lu]);
+
+  // Double coche ✓✓ : un de MES messages n'est plus sur le serveur = tout le monde l'a téléchargé
+  useEffect(() => {
+    if (!ouvert || !monTel) return;
+    let actif = true;
+    const verifierLivraison = async () => {
+      try {
+        const attente = messagesRef.current
+          .filter(m => (m.moi || m.de === monTel) && !m.livre && Number.isFinite(Number(m.id)) && Number(m.id) < 1e11)
+          .slice(-40);
+        if (attente.length === 0) return;
+        const { data, error } = await supabase.from("messages").select("id").in("id", attente.map(m => Number(m.id)));
+        if (!actif || error || !Array.isArray(data)) return;
+        const encore = new Set(data.map(r => Number(r.id)));
+        const livres = attente.filter(m => !encore.has(Number(m.id)));
+        if (livres.length === 0) return;
+        for (const m of livres) { try { await idbMettre({ ...m, livre: true }); } catch {} }
+        const ids = new Set(livres.map(m => Number(m.id)));
+        if (actif) setMessages(prev => prev.map(m => ((m.moi || m.de === monTel) && ids.has(Number(m.id))) ? { ...m, livre: true } : m));
+      } catch {}
+    };
+    verifierLivraison();
+    const t = setInterval(verifierLivraison, 6000);
+    return () => { actif = false; clearInterval(t); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ouvert, monTel]);
+
+  // En entrant dans une discussion, on descend directement au dernier message
+  useEffect(() => {
+    if (!ouvert || vue !== "chat") return;
+    const t = setTimeout(() => { try { finListeRef.current?.scrollIntoView({ behavior: "auto" }); } catch {} }, 60);
+    return () => clearTimeout(t);
+  }, [ouvert, vue, canal]);
+
   // v69 : le client ouvre la messagerie directement sur sa boutique (secrétaire / administrateur)
   useEffect(() => {
     if (role === "client" && canal === "equipe" && mesBoutiques.length > 0) {
@@ -4967,7 +5096,7 @@ function MessagerieEquipe({ role, userActif, comptes }) {
       {notification && !ouvert && (
         <button
           className="fixed top-2 left-1/2 -translate-x-1/2 z-[60] w-[92%] sm:w-auto max-w-md bg-green-600 hover:bg-green-700 text-white rounded-xl shadow-2xl px-4 py-3 flex items-center gap-3 animate-pulse"
-          onClick={() => { setNotification(null); setNonLus(0); setOuvert(true); }}>
+          onClick={ouvrirMessagerie}>
           <span className="text-2xl shrink-0">{notification.type === "photo" ? "📷" : notification.type === "video" ? "🎬" : notification.type === "audio" ? "🎤" : "💬"}</span>
           <span className="text-sm font-bold text-left">
             🔔 {notification.nom} t'a envoyé {notification.type === "photo" ? "une photo" : notification.type === "video" ? "une vidéo" : notification.type === "audio" ? "un vocal" : "un message"}
@@ -4980,7 +5109,7 @@ function MessagerieEquipe({ role, userActif, comptes }) {
       {!ouvert && (
         <button
           className="fixed bottom-6 left-4 z-50 w-16 h-16 rounded-full bg-green-600 hover:bg-green-700 text-white text-2xl shadow-2xl border-4 border-white active:scale-95 transition"
-          onClick={() => { setNonLus(0); setNotification(null); setOuvert(true); }}
+          onClick={ouvrirMessagerie}
           aria-label="Messagerie photos et vidéos">
           📷
           {nonLus > 0 && (
@@ -4991,139 +5120,215 @@ function MessagerieEquipe({ role, userActif, comptes }) {
         </button>
       )}
 
-      {/* Écran de discussion */}
+      {/* Photo en plein écran */}
+      {photoPleine && (
+        <div className="fixed inset-0 z-[70] bg-black/95 flex items-center justify-center" onClick={() => setPhotoPleine(null)}>
+          <img src={"data:image/jpeg;base64," + photoPleine} alt="" className="max-w-full max-h-full object-contain" />
+          <button className="absolute top-3 right-4 text-white text-3xl" aria-label="Fermer la photo">✕</button>
+        </div>
+      )}
+
+      {/* Messagerie style WhatsApp : liste des discussions, puis la discussion */}
       {ouvert && (
-        <Card className="fixed bottom-2 left-2 right-2 sm:right-auto sm:left-4 sm:w-[400px] z-50 h-[80vh] max-h-[640px] bg-white border shadow-2xl rounded-2xl flex flex-col overflow-hidden">
-          <div className="bg-green-700 text-white p-3 flex items-center justify-between">
-            <div className="font-bold">📷 {titreDuCanal(canal)}</div>
-            <button className="text-white/80 hover:text-white text-lg" onClick={() => { arreterVocal(); finirBarre(); setOuvert(false); }}>✕</button>
-          </div>
+        <div className="fixed inset-0 z-50 sm:inset-auto sm:bottom-4 sm:left-4 sm:w-[420px] sm:h-[min(88vh,740px)] sm:rounded-2xl sm:shadow-2xl bg-[#efeae2] flex flex-col overflow-hidden">
 
-          {/* Choix de la destination */}
-          <div className="p-2 border-b bg-zinc-50 flex flex-wrap gap-2">
-            {role !== "client" && (
-              <Button variant={canal === "equipe" ? "default" : "outline"} className={canal === "equipe" ? "ring-2 ring-green-600 ring-offset-1" : ""} onClick={() => setCanal("equipe")}>👥 Mon équipe ({membresEquipe.length})</Button>
-            )}
-            {estAdmin && (
-              <Button variant={canal === "admins" ? "default" : "outline"} className={canal === "admins" ? "ring-2 ring-amber-600 ring-offset-1" : ""} onClick={() => setCanal("admins")}>👑 Admins ({lesAdmins.length})</Button>
-            )}
-            {membresEquipe.map(c => (
-              <Button key={c.tel} variant={canal === c.tel ? "default" : "outline"} className={canal === c.tel ? "ring-2 ring-blue-600 ring-offset-1" : ""} onClick={() => setCanal((c.tel || "").trim())}>👤 {c.nom}</Button>
-            ))}
-            {estAdmin && lesAdmins.map(c => (
-              <Button key={c.tel} variant={canal === c.tel ? "default" : "outline"} className={canal === c.tel ? "ring-2 ring-amber-600 ring-offset-1" : ""} onClick={() => setCanal((c.tel || "").trim())}>👑 {c.nom}</Button>
-            ))}
-            {/* v69 : échange client ↔ boutique (secrétaire / administrateur) */}
-            {(role === "client" ? mesBoutiques : mesClients).map(c => (
-              <Button key={c.tel} variant={canal === (c.tel || "").trim() ? "default" : "outline"} className={canal === (c.tel || "").trim() ? "ring-2 ring-purple-600 ring-offset-1" : ""} onClick={() => setCanal((c.tel || "").trim())}>
-                {role === "client" ? (c.role === "secretaire" ? "👩‍💼" : "🏪") : "🛍️"} {c.nom}
-              </Button>
-            ))}
-          </div>
+          {/* ===== LISTE DES DISCUSSIONS ===== */}
+          {vue === "liste" && (
+            <>
+              <div className="bg-[#008069] text-white px-4 pt-3 pb-2 flex items-center justify-between">
+                <div className="text-xl font-bold">Messages</div>
+                <button className="text-white/90 text-xl px-2" onClick={fermer} aria-label="Fermer">✕</button>
+              </div>
+              <div className="bg-[#008069] px-3 pb-3">
+                <input
+                  className="w-full h-9 rounded-full bg-white/95 px-4 text-sm text-zinc-800 outline-none placeholder:text-zinc-500"
+                  placeholder="🔍 Rechercher une discussion"
+                  value={recherche}
+                  onChange={e => setRecherche(e.target.value)}
+                />
+              </div>
+              <div className="flex-1 overflow-y-auto bg-white">
+                {convsFiltrees.length === 0 && (
+                  <p className="p-6 text-center text-sm text-zinc-500">
+                    {convsBase.length === 0
+                      ? (role === "client" ? "Aucune boutique disponible pour le moment." : "Aucune discussion pour le moment.")
+                      : "Aucune discussion trouvée."}
+                  </p>
+                )}
+                {convsFiltrees.map(cv => (
+                  <button key={cv.key}
+                    className="w-full flex items-center gap-3 px-3 py-2.5 border-b border-zinc-100 text-left hover:bg-zinc-50 active:bg-zinc-100"
+                    onClick={() => { setCanal(cv.key); setVue("chat"); }}>
+                    {avatar(cv, 50)}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-baseline justify-between gap-2">
+                        <span className="font-semibold text-[15px] text-zinc-900 truncate">{cv.titre}</span>
+                        {cv.dernier && (
+                          <span className={"text-[11px] shrink-0 " + (cv.nonLus > 0 ? "text-[#00a884] font-semibold" : "text-zinc-500")}>
+                            {libelleListe(cv.dernier.date)}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[13px] text-zinc-500 truncate">
+                          {cv.dernier
+                            ? ((cv.dernier.moi || cv.dernier.de === monTel) ? "Toi : " : (cv.groupe ? (cv.dernier.nom || "") + " : " : "")) + apercu(cv.dernier)
+                            : (cv.sous || "Appuie pour écrire")}
+                        </span>
+                        {cv.nonLus > 0 && (
+                          <span className="bg-[#25d366] text-white text-[11px] font-bold rounded-full min-w-5 h-5 px-1.5 flex items-center justify-center shrink-0">
+                            {cv.nonLus}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </button>
+                ))}
+                <p className="text-[10px] text-zinc-400 text-center p-3">
+                  🔒 Les messages restent en ligne jusqu'à ce que chaque personne concernée les ait téléchargés sur son téléphone ; ensuite ils sont effacés du serveur. Même absent, chacun reçoit son message à sa prochaine connexion.
+                </p>
+              </div>
+            </>
+          )}
 
-          {/* Bulles de messages (stockées dans la mémoire du téléphone) */}
-          <div className="flex-1 overflow-auto p-3 space-y-2 bg-[#ece5dd]">
-            {messagesDuCanal.length === 0 && envoi === null && (
-              <p className="text-sm text-zinc-600 text-center">
-                {canal === "admins"
-                  ? "Espace privé entre administrateurs : envoyez une photo ou une vidéo pour demander qui a une pièce."
-                  : "Aucun message. Envoie une photo, une vidéo, un texte ou un vocal."}
-              </p>
-            )}
-            {messagesDuCanal.map((m, i) => {
-              const moi = m.de === monTel || m.moi;
-              const cleM = m.cle || String(m.id);
-              const enCoursDeLecture = lecture && lecture.cle === cleM;
-              return (
-                <div key={cleM} className={"flex " + (moi ? "justify-end" : "justify-start")}>
-                  <div className={"rounded-xl px-3 py-2 max-w-[80%] shadow-sm text-sm " + (moi ? "bg-[#d9fdd3] text-zinc-900" : "bg-white text-zinc-900")}>
-                    {!moi && <div className="text-xs font-bold text-green-800">{m.nom || m.de}</div>}
-                    {m.type === "texte" && <p className="whitespace-pre-wrap break-words">{m.contenu}</p>}
-                    {m.type === "photo" && <img src={"data:image/jpeg;base64," + m.contenu} alt="" className="rounded-lg max-w-full" />}
-                    {m.type === "video" && <video controls src={"data:video/mp4;base64," + m.contenu} className="rounded-lg max-w-full" />}
-                    {m.type === "audio" && (
-                      <div className="w-full">
-                        <button className="flex items-center gap-2 font-semibold text-green-800"
-                          onClick={() => (enCoursDeLecture ? arreterLecture() : ecouterVocal(m))}>
-                          {enCoursDeLecture ? "⏸️" : "▶️"} 🎤 Vocal
-                          {enCoursDeLecture && <span className="font-mono text-xs">{formaterDuree(lecture.courant)} / {formaterDuree(lecture.duree)}</span>}
-                        </button>
-                        {/* Tiret de progression : on voit le vocal avancer jusqu'à la fin */}
-                        <div className="w-full h-1.5 bg-zinc-200 rounded-full overflow-hidden mt-1">
-                          <div className="h-full bg-green-500 transition-all"
-                            style={{ width: (enCoursDeLecture && lecture.duree > 0 ? Math.min(100, (lecture.courant / lecture.duree) * 100) : 0) + "%" }} />
+          {/* ===== DISCUSSION ===== */}
+          {vue === "chat" && (
+            <>
+              <div className="bg-[#008069] text-white px-2 py-2 flex items-center gap-2">
+                <button className="text-2xl px-2 leading-none" onClick={retourListe} aria-label="Retour aux discussions">←</button>
+                {avatar(convActive, 38)}
+                <div className="min-w-0 flex-1">
+                  <div className="font-semibold truncate leading-tight">{convActive.titre}</div>
+                  <div className="text-[11px] text-white/80 truncate">{convActive.sous}</div>
+                </div>
+                <button className="text-white/90 text-xl px-2" onClick={fermer} aria-label="Fermer">✕</button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto px-3 py-2 space-y-1">
+                {messagesDuCanal.length === 0 && !envoi && (
+                  <div className="mx-auto mt-6 max-w-[85%] text-center text-xs bg-[#fff5c4] text-zinc-700 rounded-lg px-3 py-2 shadow-sm">
+                    {convActive.groupe
+                      ? "Aucun message. Écris au groupe, ou envoie une photo, une vidéo ou un vocal."
+                      : "Aucun message. Dis bonjour à " + convActive.titre + " 👋"}
+                  </div>
+                )}
+
+                {messagesDuCanal.map((m, i) => {
+                  const moi = m.de === monTel || m.moi;
+                  const cleM = m.cle || String(m.id);
+                  const enCoursDeLecture = lecture && lecture.cle === cleM;
+                  const nouveauJour = i === 0 || new Date(m.date).toDateString() !== new Date(messagesDuCanal[i - 1].date).toDateString();
+                  return (
+                    <div key={cleM}>
+                      {nouveauJour && (
+                        <div className="flex justify-center my-2">
+                          <span className="bg-white/90 text-zinc-600 text-[11px] px-3 py-1 rounded-lg shadow-sm capitalize">{libelleJour(m.date)}</span>
+                        </div>
+                      )}
+                      <div className={"flex " + (moi ? "justify-end" : "justify-start")}>
+                        <div className={"rounded-lg px-2.5 pt-1.5 pb-1 max-w-[82%] shadow-sm text-[14.5px] text-zinc-900 " + (moi ? "bg-[#d9fdd3] rounded-tr-none" : "bg-white rounded-tl-none")}>
+                          {!moi && convActive.groupe && (
+                            <div className="text-xs font-bold mb-0.5" style={{ color: couleurDe(m.de) }}>{m.nom || m.de}</div>
+                          )}
+                          {m.type === "texte" && <p className="whitespace-pre-wrap break-words">{m.contenu}</p>}
+                          {m.type === "photo" && (
+                            <img src={"data:image/jpeg;base64," + m.contenu} alt="" className="rounded-md max-w-full max-h-72 cursor-pointer"
+                              onClick={() => setPhotoPleine(m.contenu)} />
+                          )}
+                          {m.type === "video" && <video controls src={"data:video/mp4;base64," + m.contenu} className="rounded-md max-w-full" />}
+                          {m.type === "audio" && (
+                            <div className="flex items-center gap-2 min-w-[190px]">
+                              <button className="w-9 h-9 rounded-full bg-[#00a884] text-white flex items-center justify-center shrink-0"
+                                onClick={() => (enCoursDeLecture ? arreterLecture() : ecouterVocal(m))}
+                                aria-label={enCoursDeLecture ? "Pause" : "Écouter le vocal"}>
+                                {enCoursDeLecture ? "⏸" : "▶"}
+                              </button>
+                              <div className="flex-1">
+                                <div className="w-full h-1.5 bg-zinc-300 rounded-full overflow-hidden">
+                                  <div className="h-full bg-[#00a884] transition-all"
+                                    style={{ width: (enCoursDeLecture && lecture.duree > 0 ? Math.min(100, (lecture.courant / lecture.duree) * 100) : 0) + "%" }} />
+                                </div>
+                                <div className="text-[10.5px] text-zinc-500 mt-0.5 font-mono">
+                                  {enCoursDeLecture ? formaterDuree(lecture.courant) + " / " + formaterDuree(lecture.duree) : "🎤 Vocal"}
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                          <div className="flex items-center justify-between gap-3 mt-0.5">
+                            <BoutonSupprimer label="🗑️" boutonClass="text-[10px] h-5 px-1 opacity-60" onSupprimer={() => supprimerMessage(m)} />
+                            <div className="flex items-center gap-1 text-[10.5px] text-zinc-500">
+                              <span>{heureDe(m)}</span>
+                              {moi && <span className="text-[12px] leading-none" title={m.livre ? "Reçu par tout le monde" : "Envoyé"}>{m.livre ? "✓✓" : "✓"}</span>}
+                            </div>
+                          </div>
                         </div>
                       </div>
-                    )}
-                    <div className="flex items-center justify-between gap-2 mt-1">
-                      <BoutonSupprimer label="🗑️" boutonClass="text-[11px] h-6 px-1.5" onSupprimer={() => supprimerMessage(m)} />
-                      <div className="text-[10px] text-zinc-500">{heureDe(m)} ✓✓</div>
+                    </div>
+                  );
+                })}
+
+                {/* Message en cours d'envoi */}
+                {envoi && (
+                  <div className="flex justify-end">
+                    <div className="rounded-lg rounded-tr-none px-2.5 py-1.5 max-w-[82%] shadow-sm text-sm bg-[#d9fdd3]">
+                      <div className="font-semibold text-zinc-800">
+                        {envoi.type === "photo" ? "📷 Photo" : envoi.type === "video" ? "🎬 Vidéo" : envoi.type === "audio" ? "🎤 Vocal" : "💬 Message"}
+                      </div>
+                      <div className="w-full h-1.5 bg-zinc-300 rounded-full overflow-hidden my-1">
+                        <div className={"h-full " + (envoi.phase === "ok" ? "bg-[#00a884]" : "bg-[#00a884] transition-all")} style={{ width: envoi.pct + "%" }} />
+                      </div>
+                      <div className="text-[10.5px] text-zinc-600 text-right">
+                        {envoi.phase === "préparation" ? "⏳ Préparation… " + Math.round(envoi.pct) + "%"
+                          : envoi.phase === "envoi" ? "🕓 Envoi… " + Math.round(envoi.pct) + "%"
+                          : "✓ Envoyé"}
+                      </div>
                     </div>
                   </div>
-                </div>
-              );
-            })}
-
-            {/* Bulle d'envoi en cours : le signe montre que le message est EN TRAIN DE PARTIR */}
-            {envoi && (
-              <div className="flex justify-end">
-                <div className="rounded-xl px-3 py-2 max-w-[80%] shadow-sm text-sm bg-[#d9fdd3]">
-                  <div className="font-semibold text-zinc-800">
-                    {envoi.type === "photo" ? "📷 Photo" : envoi.type === "video" ? "🎬 Vidéo" : envoi.type === "audio" ? "🎤 Vocal" : "💬 Message"}
-                  </div>
-                  <div className="w-full h-2 bg-zinc-200 rounded-full overflow-hidden my-1">
-                    <div className={"h-full " + (envoi.phase === "ok" ? "bg-green-600" : "bg-green-500 transition-all")} style={{ width: envoi.pct + "%" }} />
-                  </div>
-                  <div className="text-[10px] text-zinc-600 text-right">
-                    {envoi.phase === "préparation" ? "⏳ Préparation… " + Math.round(envoi.pct) + "%"
-                      : envoi.phase === "envoi" ? "📤 Envoi en cours… " + Math.round(envoi.pct) + "%"
-                      : "✅ Envoyé ✓✓"}
-                  </div>
-                </div>
+                )}
+                <div ref={finListeRef} />
               </div>
-            )}
-            <div ref={finListeRef} />
-          </div>
 
-          {/* Barre d'envoi : caméra directe / importation, texte, vocal */}
-          <div className="p-2 border-t bg-white">
-            <div className="flex flex-wrap gap-1 mb-1">
-              <input ref={inputPhotoCamRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={choisirPhoto} />
-              <input ref={inputFichierImportRef} type="file" accept="image/*,video/*" className="hidden" onChange={importerFichier} />
-              <Button size="sm" variant="outline" className="border-green-300 text-green-700 hover:bg-green-50" onClick={() => inputPhotoCamRef.current?.click()}>📷 Appareil photo</Button>
-              <Button size="sm" variant="outline" onClick={() => inputFichierImportRef.current?.click()}>📥 Importer un fichier</Button>
-            </div>
-            <div className="flex items-center gap-1">
-              <Input
-                className="flex-1 min-w-[120px] h-10"
-                placeholder="Écris ton message…"
-                value={texte}
-                onChange={e => setTexte(e.target.value)}
-                onKeyDown={e => { if (e.key === "Enter") { envoyer("texte", texte); setTexte(""); } }}
-              />
-              {texte.trim()
-                ? <button className="w-10 h-10 rounded-full bg-green-600 hover:bg-green-700 text-white text-lg" title="Envoyer" onClick={() => { envoyer("texte", texte); setTexte(""); }}>➤</button>
-                : <button
-                    className={"w-10 h-10 rounded-full text-white text-lg select-none " + (enVocal ? "bg-red-600 animate-pulse" : "bg-green-600 hover:bg-green-700")}
-                    style={{ touchAction: "none" }}
-                    title="Maintiens pour parler, relâche pour envoyer"
-                    onPointerDown={(e) => {
-                      e.preventDefault();
-                      try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
-                      demarrerVocal();
-                    }}
-                    onPointerUp={arreterVocal}
-                    onPointerCancel={arreterVocal}
-                    onPointerLeave={arreterVocal}
-                    onLostPointerCapture={arreterVocal}
-                    onContextMenu={(e) => e.preventDefault()}>
-                    {enVocal ? "⏺" : "🎤"}
-                  </button>}
-            </div>
-            {info && <p className="text-xs mt-1 text-zinc-700">{info}</p>}
-            <p className="text-[10px] text-zinc-400 mt-1">📥 Les messages restent en ligne jusqu'à ce que chaque personne concernée les télécharge sur son téléphone ; ensuite ils sont effacés du serveur. Même absent au moment de l'envoi, chacun reçoit son message à sa prochaine connexion.</p>
-          </div>
-        </Card>
+              {/* Barre d'écriture */}
+              <div className="bg-[#f0f2f5] px-2 py-2">
+                <input ref={inputPhotoCamRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={choisirPhoto} />
+                <input ref={inputFichierImportRef} type="file" accept="image/*,video/*" className="hidden" onChange={importerFichier} />
+                <div className="flex items-end gap-2">
+                  <div className="flex-1 flex items-center bg-white rounded-full px-3 min-h-[44px]">
+                    <input
+                      className="flex-1 min-w-0 bg-transparent outline-none text-[15px] py-2"
+                      placeholder="Message"
+                      value={texte}
+                      onChange={e => setTexte(e.target.value)}
+                      onKeyDown={e => { if (e.key === "Enter") { envoyer("texte", texte); setTexte(""); } }}
+                    />
+                    <button className="text-xl px-1.5 text-zinc-500" onClick={() => inputFichierImportRef.current?.click()} aria-label="Joindre une photo ou une vidéo">📎</button>
+                    <button className="text-xl px-1.5 text-zinc-500" onClick={() => inputPhotoCamRef.current?.click()} aria-label="Prendre une photo">📷</button>
+                  </div>
+                  {texte.trim()
+                    ? <button className="w-11 h-11 rounded-full bg-[#00a884] hover:bg-[#008f6f] text-white text-lg shrink-0" title="Envoyer"
+                        onClick={() => { envoyer("texte", texte); setTexte(""); }}>➤</button>
+                    : <button
+                        className={"w-11 h-11 rounded-full text-white text-lg select-none shrink-0 " + (enVocal ? "bg-red-600 animate-pulse" : "bg-[#00a884] hover:bg-[#008f6f]")}
+                        style={{ touchAction: "none" }}
+                        title="Maintiens pour parler, relâche pour envoyer"
+                        onPointerDown={(e) => {
+                          e.preventDefault();
+                          try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
+                          demarrerVocal();
+                        }}
+                        onPointerUp={arreterVocal}
+                        onPointerCancel={arreterVocal}
+                        onPointerLeave={arreterVocal}
+                        onLostPointerCapture={arreterVocal}
+                        onContextMenu={(e) => e.preventDefault()}>
+                        {enVocal ? "⏺" : "🎤"}
+                      </button>}
+                </div>
+                {info && <p className="text-xs mt-1 px-2 text-zinc-700">{info}</p>}
+              </div>
+            </>
+          )}
+        </div>
       )}
     </div>
   );
