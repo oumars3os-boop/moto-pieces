@@ -10,6 +10,9 @@ const MISTRAL_API_KEY =
  * @returns {Promise<{ success: boolean, text: string }>} - Texte lu sur l'image
  */
 export async function lireImageMistralOCR(dataUrl) {
+  // Limite de temps : sans réponse au bout de 25 s, on passe au secours local
+  const controleur = typeof AbortController !== "undefined" ? new AbortController() : null;
+  const minuteur = controleur ? setTimeout(() => controleur.abort(), 25000) : null;
   try {
     const response = await fetch("https://api.mistral.ai/v1/ocr", {
       method: "POST",
@@ -18,9 +21,11 @@ export async function lireImageMistralOCR(dataUrl) {
         Accept: "application/json",
         Authorization: `Bearer ${MISTRAL_API_KEY}`,
       },
+      signal: controleur ? controleur.signal : undefined,
+      // CORRECTION : l'API Mistral attend le champ « document » (et non « image »).
       body: JSON.stringify({
         model: "mistral-ocr-latest",
-        image: {
+        document: {
           type: "image_url",
           image_url: dataUrl,
         },
@@ -30,7 +35,14 @@ export async function lireImageMistralOCR(dataUrl) {
     if (!response.ok) {
       const errJson = await response.json().catch(() => ({}));
       console.warn("Avertissement API OCR Mistral:", response.status, errJson);
-      return { success: false, text: "" };
+      return {
+        success: false,
+        text: "",
+        status: response.status,
+        message: response.status === 401 || response.status === 403
+          ? "Clé Mistral refusée (vérifie VITE_MISTRAL_API_KEY)"
+          : "Mistral OCR a répondu avec l'erreur " + response.status,
+      };
     }
 
     const data = await response.json();
@@ -38,13 +50,16 @@ export async function lireImageMistralOCR(dataUrl) {
     const texte = (data.pages || [])
       .map(p => p.markdown || "")
       .join(" ")
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")   // retire les balises d'images du markdown
       .replace(/\s+/g, " ")
       .trim();
 
-    return { success: texte.length > 0, text: texte };
+    return { success: texte.length > 0, text: texte, message: texte.length > 0 ? "" : "Aucun texte lisible sur la photo" };
   } catch (error) {
     console.warn("Erreur réseau lors de l'appel à l'API OCR Mistral:", error);
-    return { success: false, text: "" };
+    return { success: false, text: "", message: "Mistral OCR injoignable (réseau)" };
+  } finally {
+    if (minuteur) clearTimeout(minuteur);
   }
 }
 

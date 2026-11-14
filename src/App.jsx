@@ -651,7 +651,11 @@ function Panier({ items, onRetirer, onVider, boutonCommande }) {
   );
 }
 
-function LigneVente({ v, onConfirmer, onSaisirPrix, saisiePrix, onAnnuler }) {
+function LigneVente({ v, onConfirmer, onSaisirPrix, saisiePrix, onAnnuler, peutAnnuler = false }) {
+  // 🚫 Double verrou : le bouton d'annulation ne s'affiche QUE si la vue
+  // est celle de l'administrateur (peutAnnuler) ET qu'une fonction d'annulation
+  // est fournie. Aucune autre vue (vendeur, secrétaire, vendeur-secretaire,
+  // client) ne peut jamais l'afficher.
   const prixLigne = (it) => it.prixLigne ?? (it.p ? it.p.prix : it.prix);
   const qteLigne = (it) => it.qte || 1;
   const totalCalcule = v.items.reduce((s, it) => s + prixLigne(it) * qteLigne(it), 0);
@@ -719,7 +723,7 @@ function LigneVente({ v, onConfirmer, onSaisirPrix, saisiePrix, onAnnuler }) {
       {/* 🚫 Annulation de commande : réservée à l'ADMINISTRATEUR uniquement.
           Une commande déjà validée (payée ou à crédit) ne peut JAMAIS être annulée :
           l'information reste dans l'historique. */}
-      {onAnnuler && v.statut !== "payée" && v.statut !== "crédit" && v.statut !== "annulée" && (
+      {onAnnuler && peutAnnuler && v.statut !== "payée" && v.statut !== "crédit" && v.statut !== "annulée" && (
         <div className="px-3 pb-3">
           <BoutonSupprimer label="🚫 Annuler la commande (maintenir 1s)" duree={1000}
             boutonClass="w-full h-11 bg-red-600 hover:bg-red-700 text-white text-sm font-semibold"
@@ -1716,33 +1720,33 @@ function VueVendeur({ produits, ventes, creerVente, ventesToutes = [], moi = nul
                             )}
                           </div>
                         )}
-                        <Button className="w-full" disabled={identifies.length === 0 || photos.some(ph => !ph.article) || identifies.some(ph => !(prixEff(ph) > 0)) || (creditActif && (!client.nom.trim() || !client.tel.trim()))}
-                          onClick={envoyer}>{creditActif ? "💳 Envoyer la vente à crédit" : "➡️ Envoyer à la secrétaire"}</Button>
-
-                          {/* 💳 Vente à crédit : pour ACTIVER, il faut MAINTENIR le bouton 2 secondes
-                              (évite toute activation par erreur). Pour désactiver : un simple appui suffit. */}
-                        <div className="border-t pt-3 space-y-2">
+                        {/* 💳 Ligne unique : bouton Envoyer principal + option crédit COMPACTE à côté.
+                            Pour ACTIVER le crédit, maintenir le petit bouton 2 secondes (aucune erreur possible).
+                            Pour désactiver : un simple appui. */}
+                        <div className="flex items-stretch gap-2">
+                          <Button className="flex-1" disabled={identifies.length === 0 || photos.some(ph => !ph.article) || identifies.some(ph => !(prixEff(ph) > 0)) || (creditActif && (!client.nom.trim() || !client.tel.trim()))}
+                            onClick={envoyer}>{creditActif ? "💳 Envoyer à crédit" : "➡️ Envoyer"}</Button>
                           {creditActif ? (
-                          <Button size="lg" className="w-full py-6 text-lg bg-amber-600 hover:bg-amber-700 text-white font-bold ring-2 ring-amber-600"
+                          <Button size="sm" className="bg-amber-600 hover:bg-amber-700 text-white font-bold ring-2 ring-amber-600 whitespace-nowrap px-3"
                             onClick={() => setCreditActif(false)}>
-                            ✅ Vente à crédit ACTIVÉE — appuyez pour désactiver
+                            💳 Crédit ✅<span className="block text-[9px] font-normal">appuyer = désactiver</span>
                           </Button>
                           ) : (
-                          <BoutonSupprimer variant="outline" taille="lg" duree={2000}
-                            boutonClass="w-full py-6 h-auto text-lg bg-zinc-200 hover:bg-amber-100 text-zinc-800 font-bold border-2 border-dashed border-amber-400"
+                          <BoutonSupprimer variant="outline" taille="sm" duree={2000}
+                            boutonClass="bg-zinc-200 hover:bg-amber-100 text-zinc-800 font-bold border-2 border-dashed border-amber-400 whitespace-nowrap px-3"
                             onSupprimer={() => setCreditActif(true)}
-                            label="💳 Vente à crédit — maintenir 2 s pour activer" />
-                          )}
-                          {creditActif && (
-                            <>
-                              <Input type="number" placeholder="Acompte payé tout de suite (FCFA) — laisser vide si le client ne paie rien encore"
-                                value={acompte} onChange={e => setAcompte(e.target.value)} />
-                              <p className="text-xs text-amber-700">
-                                La marchandise sort tout de suite, la commande part dans l'historique en « Crédit 🔴 ». La secrétaire encaisse les versements ; dès que tout est payé, la commande passe en « Payée ✅ » automatiquement.
-                              </p>
-                            </>
+                            label="💳 Crédit" />
                           )}
                         </div>
+                        {creditActif && (
+                          <div className="space-y-2">
+                            <Input type="number" placeholder="Acompte payé tout de suite (FCFA) — laisser vide si le client ne paie rien encore"
+                              value={acompte} onChange={e => setAcompte(e.target.value)} />
+                            <p className="text-xs text-amber-700">
+                              La marchandise sort tout de suite, la commande part dans l'historique en « Crédit 🔴 ». La secrétaire encaisse les versements ; dès que tout est payé, la commande passe en « Payée ✅ » automatiquement.
+                            </p>
+                          </div>
+                        )}
                       </div>
                     </div>
                   )}
@@ -2425,6 +2429,8 @@ function VueSecretaire({ ventes, ventesToutes = [], moi = null, confirmerPaiemen
 function ContenuMenuDev({ codeOk, setCodeOk, codeSaisi, setCodeSaisi, nouvelAdmin, setNouvelAdmin, comptes, setComptes, fermer, CODE_DEV, dureePublicite = 1, onChangerDuree = () => {}, basculerBlocageCompte = () => {}, supprimerCompte = () => {}, produits = [], boutiquesMasquees = [], basculerVisibiliteBoutique = () => {}, titreSite = "", onChangerTitre = () => {} }) {
   const [erreur, setErreur] = useState("");
   const [pinGenere, setPinGenere] = useState(null); // { nom, pin }
+  const [onglet, setOnglet] = useState("site"); // 🧭 navigation de la page développeur
+
   const reinitialiserPinAdmin = (c) => {
     const nouveau = String(Math.floor(1000 + Math.random() * 9000));
     setComptes(prev => prev.map(x => x.id === c.id ? { ...x, pin: nouveau } : x));
@@ -2452,159 +2458,222 @@ function ContenuMenuDev({ codeOk, setCodeOk, codeSaisi, setCodeSaisi, nouvelAdmi
     });
     return l;
   })();
+  const nbAdmins = (comptes || []).filter(c => c.role === "admin").length;
+  const nbComptes = (comptes || []).filter(c => c.role !== "admin").length;
+
+  // ─── Écran de déverrouillage (code développeur) ───
   if (!codeOk) {
     return (
-      <div className="grid gap-1.5">
-        <DialogHeader><DialogTitle>🔐 Menu développeur</DialogTitle></DialogHeader>
-        <p className="text-xs text-muted-foreground">Entrez le code pour accéder au menu administrateur.</p>
+      <div className="grid gap-2 py-4">
+        <div className="text-center">
+          <div className="text-4xl">🛠️</div>
+          <DialogTitle className="text-lg font-bold mt-1">Espace Développeur</DialogTitle>
+          <p className="text-xs text-muted-foreground">Page réservée au développeur du site. Entrez votre code pour continuer.</p>
+        </div>
         <Input type="password" autoFocus value={codeSaisi} onChange={e => setCodeSaisi(e.target.value)} placeholder="Code développeur" />
         <Button className="bg-blue-600 hover:bg-blue-700 text-white h-11 text-base"
           onClick={() => setCodeOk(codeSaisi === CODE_DEV)}>Valider</Button>
       </div>
     );
   }
+
+  // ─── La PAGE développeur : tableau de bord organisé ───
+  const Onglets = [{ id: "site", label: "⚙️ Réglages du site" }, { id: "admins", label: `👑 Administrateurs (${nbAdmins})` }, { id: "magasins", label: `🏪 Magasins (${boutiquesDev.length})` }, { id: "comptes", label: `👥 Tous les comptes (${nbComptes})` }];
+
   return (
-    <div className="grid gap-1.5">
-      <DialogHeader><DialogTitle>👑 Comptes administrateurs</DialogTitle></DialogHeader>
+    <div className="space-y-4">
+      {/* En-tête de la page */}
+      <div className="flex items-center justify-between gap-3 border-b pb-3">
+        <div>
+          <DialogTitle className="text-lg font-bold flex items-center gap-2">🛠️ Espace Développeur</DialogTitle>
+          <p className="text-[11px] text-muted-foreground mt-0.5">Tous les réglages du site et des comptes, organisés en une seule page.</p>
+        </div>
+        <Button size="sm" variant="outline" onClick={fermer}>✕ Fermer</Button>
+      </div>
 
-      {/* v68 : la durée des publicités est décidée uniquement par le développeur.
-          Par défaut une publicité dure 24 heures ; c'est ici qu'on peut la faire durer plus longtemps. */}
-      {/* 🏍️ Titre de la barre du haut : réservé au DÉVELOPPEUR uniquement.
-          Personne d'autre ne peut modifier ce titre. */}
-      <div className="pt-1 pb-2 border-b">
-        <Label>🏍️ Titre de la barre du haut</Label>
-        <p className="text-[11px] text-muted-foreground mt-1">C'est le nom affiché tout en haut, dans la barre noire, pour tout le monde. Toi seul (développeur) peux le modifier.</p>
-        <div className="flex items-center gap-2 mt-2">
-          <input type="text" value={titreSite}
-            onChange={e => onChangerTitre(e.target.value)}
-            placeholder="Ex : MotoPièces"
-            className="flex-1 border border-zinc-300 rounded px-2 py-1 text-base" />
-          <button type="button" onClick={() => onChangerTitre("")}
-            className="text-xs border rounded px-2 py-1 hover:bg-zinc-100">Réinitialiser</button>
+      {/* Tableau de bord : chiffres clés */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        <div className="border rounded-lg p-3 bg-blue-50 border-blue-200 text-center">
+          <div className="text-xl font-bold text-blue-700">{nbAdmins}</div>
+          <div className="text-[10px] text-muted-foreground">👑 Administrateurs</div>
+        </div>
+        <div className="border rounded-lg p-3 bg-green-50 border-green-200 text-center">
+          <div className="text-xl font-bold text-green-700">{nbComptes}</div>
+          <div className="text-[10px] text-muted-foreground">👤 Comptes inscrits</div>
+        </div>
+        <div className="border rounded-lg p-3 bg-amber-50 border-amber-200 text-center">
+          <div className="text-xl font-bold text-amber-700">{boutiquesDev.length}</div>
+          <div className="text-[10px] text-muted-foreground">🏪 Magasins</div>
+        </div>
+        <div className="border rounded-lg p-3 bg-purple-50 border-purple-200 text-center">
+          <div className="text-xl font-bold text-purple-700">{dureePublicite}</div>
+          <div className="text-[10px] text-muted-foreground">⏱️ Jours par publicité</div>
         </div>
       </div>
 
-      <div className="pt-1 pb-2 border-b">
-        <Label>⏱️ Durée des publicités (jours)</Label>
-        <p className="text-[11px] text-muted-foreground mt-1">Par défaut, une publicité dure 24 heures puis disparaît. Si tu veux que les publicités durent plus longtemps, change le nombre de jours ici. Ce réglage vaut pour tout le monde.</p>
-        <div className="flex items-center gap-2 mt-2">
-          <input type="number" min="1" max="365" value={dureePublicite}
-            onChange={e => onChangerDuree(parseInt(e.target.value) || 1)}
-            className="w-20 border border-zinc-300 rounded px-2 py-1 text-base" />
-          <span className="text-sm text-muted-foreground">jours</span>
-        </div>
+      {/* Navigation par onglets */}
+      <div className="flex flex-wrap gap-2">
+        {Onglets.map(o => (
+          <Button key={o.id} size="sm" variant={onglet === o.id ? "default" : "outline"}
+            className={onglet === o.id ? "ring-2 ring-blue-600 ring-offset-1 font-bold" : ""}
+            onClick={() => setOnglet(o.id)}>{o.label}</Button>
+        ))}
       </div>
 
-      <Label>Nom complet</Label>
-      <Input value={nouvelAdmin.nom} onChange={e => setNouvelAdmin({ ...nouvelAdmin, nom: e.target.value })} placeholder="Ex : Oumar Sekongo" />
-      <Label className="pt-2">Téléphone</Label>
-      <Input value={nouvelAdmin.tel} onChange={e => setNouvelAdmin({ ...nouvelAdmin, tel: e.target.value })} placeholder="+225 07 00 00 00 00" />
-      <Label className="pt-2">Code PIN (4 chiffres)</Label>
-      <Input type="password" inputMode="numeric" maxLength={4} value={nouvelAdmin.pin || ""}
-        onChange={e => setNouvelAdmin({ ...nouvelAdmin, pin: e.target.value.replace(/\D/g, "") })} placeholder="••••" />
-      <Button className="bg-blue-600 hover:bg-blue-700 text-white h-11 text-base mt-2"
-        disabled={!nouvelAdmin.nom.trim() || (nouvelAdmin.pin || "").length < 4}
-        onClick={() => {
-          const tel = nouvelAdmin.tel.trim();
-          if (tel && comptes.some(c => (c.tel || "").trim() === tel)) {
-            setErreur("Ce numéro de téléphone a déjà un compte. Un numéro = un seul compte.");
-            return;
-          }
-          setErreur("");
-          const comp = { id: Date.now(), nom: nouvelAdmin.nom.trim(), tel, pin: nouvelAdmin.pin, role: "admin" };
-          setComptes(prev => [...prev, comp]);
-          synchroniserCompteSupabase(comp);
-          setNouvelAdmin({ nom: "", tel: "", pin: "" });
-          fermer();
-        }}>Créer le compte administrateur</Button>
-      {erreur && <p className="text-red-600 text-sm mt-1">{erreur}</p>}
-
-      {comptes.filter(c => c.role === "admin").length > 0 && (
-        <div className="pt-3 mt-2 border-t">
-          <Label>Suppression — réservée au développeur uniquement :</Label>
-          {comptes.filter(c => c.role === "admin").map(c => (
-            <div key={c.id} className="mt-2">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-sm font-medium">
-                  👑 {c.nom} — {c.tel} {c.bloque && <Badge className="bg-red-100 text-red-700 border border-red-300 ml-1">🚫 Bloqué</Badge>}
-                </span>
-                <div className="flex items-center gap-2">
-                  <Button size="sm" variant="outline" className="border-amber-300 text-amber-700 hover:bg-amber-50"
-                    onClick={() => reinitialiserPinAdmin(c)}>🔑 Réinitialiser PIN</Button>
-                  <Button size="sm" variant="outline"
-                    className={c.bloque ? "border-green-300 text-green-700 hover:bg-green-50" : "border-amber-300 text-amber-700 hover:bg-amber-50"}
-                    onClick={() => basculerBlocageCompte(c)}>
-                    {c.bloque ? "🔓 Débloquer" : "🔒 Bloquer"}
-                  </Button>
-                  <BoutonSupprimer label="🗑️ Supprimer"
-                    onSupprimer={() => supprimerCompte(c)} />
-                </div>
+      {/* ═══ Onglet : Réglages du site ═══ */}
+      {onglet === "site" && (
+        <div className="grid gap-3">
+          <Card className="border-blue-200">
+            <CardHeader className="pb-2"><CardTitle className="text-sm">🏍️ Titre de la barre du haut</CardTitle></CardHeader>
+            <CardContent className="space-y-2">
+              <p className="text-[11px] text-muted-foreground">C'est le nom affiché tout en haut, dans la barre noire, pour tout le monde. Vous seul (développeur) pouvez le modifier. Le changement part aussitôt sur tous les téléphones.</p>
+              <div className="flex items-center gap-2">
+                <Input type="text" value={titreSite}
+                  onChange={e => onChangerTitre(e.target.value)}
+                  placeholder="Ex : MotoPièces" />
+                <Button size="sm" variant="outline" onClick={() => onChangerTitre("")}>Réinitialiser</Button>
               </div>
-            </div>
-          ))}
-          {pinGenere && (
-            <Card className="bg-amber-50 border-amber-300 mt-3">
-              <CardContent className="p-3 text-center">
-                <div className="text-xs text-muted-foreground">Nouveau code PIN de {pinGenere.nom} (à communiquer en privé) :</div>
-                <div className="text-2xl font-bold tracking-widest">{pinGenere.pin}</div>
-              </CardContent>
-            </Card>
-          )}
+            </CardContent>
+          </Card>
+
+          <Card className="border-purple-200">
+            <CardHeader className="pb-2"><CardTitle className="text-sm">⏱️ Durée des publicités (jours)</CardTitle></CardHeader>
+            <CardContent className="space-y-2">
+              <p className="text-[11px] text-muted-foreground">Par défaut, une publicité dure 24 heures puis disparaît. Ce réglage vaut pour tout le monde.</p>
+              <div className="flex items-center gap-2">
+                <Input type="number" min="1" max="365" value={dureePublicite}
+                  onChange={e => onChangerDuree(parseInt(e.target.value) || 1)}
+                  className="w-24" />
+                <span className="text-sm text-muted-foreground">jours</span>
+              </div>
+            </CardContent>
+          </Card>
         </div>
       )}
 
-      {/* 🏪 Magasins — visibilité des marchandises (déplacé ici depuis l'espace administrateur) */}
-      <div className="pt-3 mt-2 border-t">
-        <Label>🏪 Magasins — visibilité des marchandises</Label>
-        <p className="text-[11px] text-muted-foreground mt-1">
-          Masquez ou réaffichez les marchandises d'un magasin pour les clients. Maintenez le bouton <strong>5 secondes</strong> pour changer la visibilité.
-        </p>
-        {boutiquesDev.length === 0 && (
-          <p className="text-muted-foreground text-sm mt-2">Aucune marchandise enregistrée pour le moment.</p>
-        )}
-        {boutiquesDev.map(b => {
-          const estMasquee = boutiquesMasquees.includes(b.nom);
-          return (
-            <div key={b.nom + "|" + b.equipe} className="mt-2 p-2 border rounded-lg flex items-center justify-between gap-2 bg-zinc-50">
-              <div className="text-sm">
-                <span className="font-medium">🏪 {b.nom}</span>
-                {" "}👑 {b.admin || "—"}
-                <div className="mt-1">
-                  {estMasquee
-                    ? <Badge className="bg-red-600 text-white text-[10px]">Privée 🙈</Badge>
-                    : <Badge className="bg-green-600 text-white text-[10px]">Visible 👁️</Badge>}
-                </div>
+      {/* ═══ Onglet : Administrateurs ═══ */}
+      {onglet === "admins" && (
+        <div className="grid gap-3">
+          <Card className="border-blue-200">
+            <CardHeader className="pb-2"><CardTitle className="text-sm">➕ Créer un compte administrateur</CardTitle></CardHeader>
+            <CardContent className="grid gap-2">
+              <div className="grid sm:grid-cols-3 gap-2">
+                <Input value={nouvelAdmin.nom} onChange={e => setNouvelAdmin({ ...nouvelAdmin, nom: e.target.value })} placeholder="Nom complet" />
+                <Input value={nouvelAdmin.tel} onChange={e => setNouvelAdmin({ ...nouvelAdmin, tel: e.target.value })} placeholder="+225 07 00 00 00 00" />
+                <Input type="password" inputMode="numeric" maxLength={4} value={nouvelAdmin.pin || ""}
+                  onChange={e => setNouvelAdmin({ ...nouvelAdmin, pin: e.target.value.replace(/\D/g, "") })} placeholder="Code PIN (4 chiffres)" />
               </div>
-              <BoutonSupprimer
-                label={estMasquee ? "👁️ Réafficher (maintenir 5s)" : "🙈 Masquer (maintenir 5s)"}
-                duree={5000}
-                boutonClass={estMasquee ? "bg-green-600 hover:bg-green-700 text-white text-xs font-semibold" : "bg-red-600 hover:bg-red-700 text-white text-xs font-semibold"}
-                onSupprimer={() => basculerVisibiliteBoutique(b.nom)} />
-            </div>
-          );
-        })}
-      </div>
+              <Button className="bg-blue-600 hover:bg-blue-700 text-white"
+                disabled={!nouvelAdmin.nom.trim() || (nouvelAdmin.pin || "").length < 4}
+                onClick={() => {
+                  const tel = nouvelAdmin.tel.trim();
+                  if (tel && comptes.some(c => (c.tel || "").trim() === tel)) {
+                    setErreur("Ce numéro de téléphone a déjà un compte. Un numéro = un seul compte.");
+                    return;
+                  }
+                  setErreur("");
+                  const comp = { id: Date.now(), nom: nouvelAdmin.nom.trim(), tel, pin: nouvelAdmin.pin, role: "admin" };
+                  setComptes(prev => [...prev, comp]);
+                  synchroniserCompteSupabase(comp);
+                  setNouvelAdmin({ nom: "", tel: "", pin: "" });
+                }}>Créer le compte administrateur</Button>
+              {erreur && <p className="text-red-600 text-sm">{erreur}</p>}
+            </CardContent>
+          </Card>
 
-      {/* TOUS les comptes : le développeur voit tout le monde et peut bloquer n'importe qui à distance */}
-      <div className="pt-3 mt-2 border-t">
-        <Label>👥 Tous les comptes inscrits ({comptes.filter(c => c.role !== "admin").length}) — blocage à distance :</Label>
-        <p className="text-[11px] text-muted-foreground mt-1">Tous les clients et tout le personnel apparaissent ici, même ceux créés par d'autres administrateurs. Le blocage part aussitôt vers le serveur.</p>
-        {comptes.filter(c => c.role !== "admin").map(c => (
-          <div key={c.id} className="mt-2 flex items-center justify-between gap-2">
-            <span className="text-sm font-medium">
-              {c.role === "client" ? "🛍️" : c.role === "vendeur" ? "👤" : c.role === "secretaire" ? "👩‍💼" : "👤"} {c.nom} — {c.tel} {c.bloque && <Badge className="bg-red-100 text-red-700 border border-red-300 ml-1">🚫 Bloqué</Badge>}
-            </span>
-            <Button size="sm" variant="outline"
-              className={c.bloque ? "border-green-300 text-green-700 hover:bg-green-50" : "border-amber-300 text-amber-700 hover:bg-amber-50"}
-              onClick={() => bloquerCompteADistance(c)}>
-              {c.bloque ? "🔓 Débloquer" : "🔒 Bloquer"}
-            </Button>
-          </div>
-        ))}
-        {comptes.filter(c => c.role !== "admin").length === 0 && (
-          <p className="text-muted-foreground text-sm mt-2">Aucun compte inscrit pour le moment.</p>
-        )}
-      </div>
+          <Card className="border-amber-200">
+            <CardHeader className="pb-2"><CardTitle className="text-sm">👑 Comptes administrateurs — gestion (réservée au développeur)</CardTitle></CardHeader>
+            <CardContent className="space-y-2">
+              {nbAdmins === 0 && <p className="text-sm text-muted-foreground">Aucun administrateur pour le moment.</p>}
+              {comptes.filter(c => c.role === "admin").map(c => (
+                <div key={c.id} className="p-2 border rounded-lg bg-zinc-50 flex items-center justify-between gap-2 flex-wrap">
+                  <span className="text-sm font-medium">
+                    👑 {c.nom} — {c.tel} {c.bloque && <Badge className="bg-red-100 text-red-700 border border-red-300 ml-1">🚫 Bloqué</Badge>}
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <Button size="sm" variant="outline" className="border-amber-300 text-amber-700 hover:bg-amber-50"
+                      onClick={() => reinitialiserPinAdmin(c)}>🔑 Réinitialiser PIN</Button>
+                    <Button size="sm" variant="outline"
+                      className={c.bloque ? "border-green-300 text-green-700 hover:bg-green-50" : "border-amber-300 text-amber-700 hover:bg-amber-50"}
+                      onClick={() => basculerBlocageCompte(c)}>
+                      {c.bloque ? "🔓 Débloquer" : "🔒 Bloquer"}
+                    </Button>
+                    <BoutonSupprimer label="🗑️ Supprimer"
+                      onSupprimer={() => supprimerCompte(c)} />
+                  </div>
+                </div>
+              ))}
+              {pinGenere && (
+                <Card className="bg-amber-50 border-amber-300">
+                  <CardContent className="p-3 text-center">
+                    <div className="text-xs text-muted-foreground">Nouveau code PIN de {pinGenere.nom} (à communiquer en privé) :</div>
+                    <div className="text-2xl font-bold tracking-widest">{pinGenere.pin}</div>
+                  </CardContent>
+                </Card>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* ═══ Onglet : Magasins ═══ */}
+      {onglet === "magasins" && (
+        <Card className="border-amber-200">
+          <CardHeader className="pb-2"><CardTitle className="text-sm">🏪 Magasins — visibilité des marchandises</CardTitle></CardHeader>
+          <CardContent className="space-y-2">
+            <p className="text-[11px] text-muted-foreground">
+              Masquez ou réaffichez les marchandises d'un magasin pour les clients. Maintenez le bouton <strong>5 secondes</strong> pour changer la visibilité.
+            </p>
+            {boutiquesDev.length === 0 && (
+              <p className="text-muted-foreground text-sm">Aucune marchandise enregistrée pour le moment.</p>
+            )}
+            {boutiquesDev.map(b => {
+              const estMasquee = boutiquesMasquees.includes(b.nom);
+              return (
+                <div key={b.nom + "|" + b.equipe} className="p-2 border rounded-lg flex items-center justify-between gap-2 bg-zinc-50 flex-wrap">
+                  <div className="text-sm">
+                    <span className="font-medium">🏪 {b.nom}</span>
+                    {" "}👑 {b.admin || "—"}
+                    <div className="mt-1">
+                      {estMasquee
+                        ? <Badge className="bg-red-600 text-white text-[10px]">Privée 🙈</Badge>
+                        : <Badge className="bg-green-600 text-white text-[10px]">Visible 👁️</Badge>}
+                    </div>
+                  </div>
+                  <BoutonSupprimer
+                    label={estMasquee ? "👁️ Réafficher (maintenir 5s)" : "🙈 Masquer (maintenir 5s)"}
+                    duree={5000}
+                    boutonClass={estMasquee ? "bg-green-600 hover:bg-green-700 text-white text-xs font-semibold" : "bg-red-600 hover:bg-red-700 text-white text-xs font-semibold"}
+                    onSupprimer={() => basculerVisibiliteBoutique(b.nom)} />
+                </div>
+              );
+            })}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* ═══ Onglet : Tous les comptes ═══ */}
+      {onglet === "comptes" && (
+        <Card className="border-green-200">
+          <CardHeader className="pb-2"><CardTitle className="text-sm">👥 Tous les comptes inscrits ({nbComptes}) — blocage à distance</CardTitle></CardHeader>
+          <CardContent className="space-y-2">
+            <p className="text-[11px] text-muted-foreground">Tous les clients et tout le personnel apparaissent ici, même ceux créés par d'autres administrateurs. Le blocage part aussitôt vers le serveur.</p>
+            {nbComptes === 0 && <p className="text-muted-foreground text-sm">Aucun compte inscrit pour le moment.</p>}
+            {comptes.filter(c => c.role !== "admin").map(c => (
+              <div key={c.id} className="p-2 border rounded-lg bg-zinc-50 flex items-center justify-between gap-2 flex-wrap">
+                <span className="text-sm font-medium">
+                  {c.role === "client" ? "🛍️" : c.role === "vendeur" ? "👤" : c.role === "secretaire" ? "👩‍💼" : "👤"} {c.nom} — {c.tel} {c.bloque && <Badge className="bg-red-100 text-red-700 border border-red-300 ml-1">🚫 Bloqué</Badge>}
+                </span>
+                <Button size="sm" variant="outline"
+                  className={c.bloque ? "border-green-300 text-green-700 hover:bg-green-50" : "border-amber-300 text-amber-700 hover:bg-amber-50"}
+                  onClick={() => bloquerCompteADistance(c)}>
+                  {c.bloque ? "🔓 Débloquer" : "🔒 Bloquer"}
+                </Button>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }
@@ -2723,6 +2792,8 @@ function VueAdmin({
   const genererCle = (c) => {
     const cle = String(Math.floor(100000 + Math.random() * 900000));
     setComptes(prev => prev.map(x => x.id === c.id ? { ...x, cle } : x));
+    // La clé part aussitôt sur le serveur : sinon le vendeur ne pourrait pas la valider depuis son téléphone
+    try { synchroniserCompteSupabase({ ...c, cle }); } catch {}
     setCleAffichee({ nom: c.nom, tel: c.tel, cle });
   };
 
@@ -3532,7 +3603,7 @@ function VueAdmin({
           <FiltreCalendrier valeur={jourVentesAdmin} onChange={setJourVentesAdmin} label="Ventes : voir par jour" />
           {ventesJourAdmin.length === 0 ? <p className="text-muted-foreground">{jourVentesAdmin ? `Aucune vente le ${isoVersJour(jourVentesAdmin)}.` : "Aucune vente."}</p> : ventesJourAdmin.map(v => (
             <div key={v.id}>
-              <LigneVente v={v} onAnnuler={annulerVente} />
+              <LigneVente v={v} onAnnuler={annulerVente} peutAnnuler />
               <div className="px-3 pb-2 flex justify-end">
                 <Button size="sm" variant="outline" onClick={() => setFacture(v)}>🧾 Facture</Button>
                 <Button size="sm" variant="outline" className="ml-2" onClick={() => setRecuVente(v)}>🧾 Reçu</Button>
@@ -6202,6 +6273,8 @@ export default function App() {
     if (!c.cle || c.cle !== oubliCle.trim()) { setErreurLogin("Clé de réinitialisation incorrecte. Demandez-la à l'administrateur."); return; }
     if (oubliPin.length < 4 || oubliPin !== oubliPin2) { setErreurLogin("Les deux codes PIN doivent être identiques (4 chiffres)."); return; }
     setComptes(prev => prev.map(x => x.id === c.id ? { ...x, pin: oubliPin, cle: null } : x));
+    // Le nouveau PIN est enregistré sur le serveur (sinon il reviendrait à l'ancien au prochain rafraîchissement)
+    try { synchroniserCompteSupabase({ ...c, pin: oubliPin, cle: null }); } catch {}
     setSuccesMsg("Code PIN modifié avec succès ! Connectez-vous avec votre nouveau PIN.");
     setOubli(false); setOubliEtape(1); setOubliTel(""); setOubliCle(""); setOubliPin(""); setOubliPin2(""); setErreurLogin("");
   };
@@ -6437,7 +6510,7 @@ export default function App() {
 
       {/* Menu développeur (accessible en maintenant le logo 10 secondes) */}
       <Dialog open={menuDev} onOpenChange={o => { setMenuDev(o); if (!o) { setCodeOk(false); setCodeSaisi(""); } }}>
-        <DialogContent className="bg-white text-zinc-900 rounded-lg p-4 border shadow-xl" style={{position:"fixed",left:"50%",top:"50%",transform:"translate(-50%,-50%)",maxWidth:"300px",width:"90%",zIndex:60}}>
+        <DialogContent className="bg-white text-zinc-900 rounded-lg p-4 border shadow-2xl" style={{position:"fixed",left:"50%",top:"50%",transform:"translate(-50%,-50%)",maxWidth:"980px",width:"94%",maxHeight:"92vh",overflowY:"auto",zIndex:60}}>
           <ContenuMenuDev codeOk={codeOk} setCodeOk={setCodeOk} codeSaisi={codeSaisi} setCodeSaisi={setCodeSaisi}
             nouvelAdmin={nouvelAdmin} setNouvelAdmin={setNouvelAdmin}
             comptes={comptes} setComptes={setComptes}

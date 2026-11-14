@@ -6,9 +6,17 @@ import { lireImageMistralOCR } from "./mistral.js";
  * (ex: ART-001, CG125, HJ110-3, 428H, etc.)
  */
 export function extraireReferences(texte) {
-  const refRegex = /\b(ART-\d{3}|CG\d+|HJ\d+[-]?\d*|X-1|GN|110|125|150|180|428H|[A-Z0-9]{4,12})\b/gi;
-  const correspondances = (texte || "").match(refRegex) || [];
-  return Array.from(new Set(correspondances));
+  const brut = (texte || "").match(/[A-Za-z0-9][A-Za-z0-9-]{2,14}/g) || [];
+  const codes = [];
+  const marques = [];
+  brut.forEach(m => {
+    const t = m.replace(/-+$/, "");
+    if (t.length < 3) return;
+    if (/\d/.test(t) && /[A-Za-z]/.test(t) || /^\d{3,4}$/.test(t)) codes.push(t);          // ex. CG125, HJ110-3, 428H, 125
+    else if (/^[A-Z]{4,}$/.test(t)) marques.push(t);                                      // ex. HONDA, YAMAHA (écrit en majuscules)
+  });
+  // Les vrais codes passent en premier : c'est le premier qui sert de mot-clé du nouvel article
+  return Array.from(new Set([...codes, ...marques]));
 }
 
 /**
@@ -22,6 +30,32 @@ const versDataUrl = (fichier) => new Promise((res, rej) => {
 });
 
 /**
+ * Réduit une photo (max 1600 px, JPEG) : les photos de téléphone font plusieurs Mo,
+ * trop lourdes et trop lentes à envoyer. En cas de souci, on garde l'image d'origine.
+ */
+const reduireImage = (dataUrl, maxCote = 1600, qualite = 0.85) => new Promise((resolve) => {
+  try {
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const echelle = Math.min(1, maxCote / Math.max(img.naturalWidth || img.width, img.naturalHeight || img.height));
+        if (echelle >= 1 && dataUrl.length < 1500000) return resolve(dataUrl);
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round((img.naturalWidth || img.width) * echelle));
+        canvas.height = Math.max(1, Math.round((img.naturalHeight || img.height) * echelle));
+        const ctx = canvas.getContext("2d");
+        ctx.fillStyle = "#fff";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL("image/jpeg", qualite));
+      } catch (e) { resolve(dataUrl); }
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  } catch (e) { resolve(dataUrl); }
+});
+
+/**
  * Extrait automatiquement le texte et les références de pièces d'une photo/image.
  * 1) 🔍 OCR MISTRAL (mistral-ocr-latest) : la lecture est faite par l'API de Mistral AI,
  *    rapide et sans aucun téléchargement de modèle sur le téléphone.
@@ -31,13 +65,15 @@ const versDataUrl = (fichier) => new Promise((res, rej) => {
  */
 export async function extraireTexteImage(imageSource) {
   // 🔍 1) D'ABORD L'OCR DE MISTRAL
+  let raisonMistral = "";
   try {
     let dataUrl = imageSource;
     if (imageSource && typeof imageSource !== "string") {
       dataUrl = await versDataUrl(imageSource);
     }
     if (typeof dataUrl === "string" && dataUrl.startsWith("data:")) {
-      const resMistral = await lireImageMistralOCR(dataUrl);
+      const petite = await reduireImage(dataUrl);
+      const resMistral = await lireImageMistralOCR(petite);
       if (resMistral && resMistral.success && resMistral.text) {
         return {
           success: true,
@@ -45,16 +81,19 @@ export async function extraireTexteImage(imageSource) {
           references: extraireReferences(resMistral.text),
         };
       }
+      raisonMistral = (resMistral && resMistral.message) || "";
     }
   } catch (error) {
     console.warn("Avertissement OCR Mistral:", error);
   }
 
-  // 2) SECOURS : OCR TESSERACT LOCAL
+  // 2) SECOURS : OCR TESSERACT LOCAL (limité à 30 s pour ne jamais bloquer l'écran)
+  let worker = null;
   try {
-    const worker = await createWorker("fra");
-    const { data } = await worker.recognize(imageSource);
-    await worker.terminate();
+    worker = await createWorker("fra");
+    const lecture = worker.recognize(imageSource);
+    const delai = new Promise((_, rejeter) => setTimeout(() => rejeter(new Error("Lecture trop longue")), 30000));
+    const { data } = await Promise.race([lecture, delai]);
 
     const textNettoye = (data.text || "").trim();
     return {
@@ -68,8 +107,10 @@ export async function extraireTexteImage(imageSource) {
       success: false,
       text: "",
       references: [],
-      error: error?.message || "Erreur de lecture de l'image",
+      error: raisonMistral || error?.message || "Erreur de lecture de l'image",
     };
+  } finally {
+    try { if (worker) await worker.terminate(); } catch (e) {}
   }
 }
 
