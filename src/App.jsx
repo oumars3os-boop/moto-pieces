@@ -13,6 +13,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/context/AuthContext";
 import { supabase, synchroniserCompteSupabase, supprimerCompteSupabase, enregistrerVenteSupabase, majVenteSupabase, chargerVentesSupabase, sauvegarderProduitsSupabase, chargerProduitsSupabase, chargerTousProduitsSupabase, abonnerProduitsTempsReel, chargerPublicitesSupabase, ajouterPubliciteSupabase, supprimerPubliciteSupabase, abonnerPublicitesTempsReel, chargerDureePubliciteSupabase, sauvegarderDureePubliciteSupabase, abonnerComptesTempsReel, abonnerVentesTempsReel, abonnerParametresTempsReel, sauvegarderReglagesSupabase, chargerReglagesSupabase, chargerTousReglagesSupabase, abonnerReglagesTempsReel } from "@/lib/supabase";
 import { extraireTexteImage, faireCorrespondreOCR } from "@/lib/ocr";
+import { reconnaitreArticle } from "@/lib/reconnaissance";
 import { demanderAssistantMistral } from "@/lib/mistral";
 import { verifierQualiteImage } from "@/lib/imageProcessor";
 import ModeRech from "@/components/ModeRech";
@@ -862,14 +863,17 @@ function VueClient({ produits, marques, creerVente, ventes = [], photosCategorie
     setChargementPhoto(true);
     const r = new FileReader();
     r.onload = async () => {
-      await chercherParImage(r.result);
-      setChargementPhoto(false);
+      try { await chercherParImage(r.result); }
+      catch (err) { console.warn("Recherche par photo:", err); setMessageRecherche("⚠️ L'analyse a échoué. Réessaie."); setOcrEffectue(true); }
+      finally { setChargementPhoto(false); }
     };
     r.readAsDataURL(f);
     e.target.value = "";
   };
 
   const [ocrEffectue, setOcrEffectue] = useState(false);
+  const [messageRecherche, setMessageRecherche] = useState("");   // « Aucun article… » ou erreur claire
+  const [rechercheSure, setRechercheSure] = useState(true);       // l'IA est sûre (article reconnu) ou propose seulement (à vérifier)
   // 🔍 Recherche par image (OCR corrigé) : 3 étapes dans l'ordre —
   // 1. photo IDENTIQUE → l'article sort directement
   // 2. OCR : le texte lu sur la pièce correspond fortement (score ≥ 50) → l'article sort
@@ -879,6 +883,8 @@ function VueClient({ produits, marques, creerVente, ventes = [], photosCategorie
     setPhotoRecherche(null);
     setResultatsImage([]);
     setOcrEffectue(false);
+    setMessageRecherche("");
+    setRechercheSure(true);
     try {
       // 1. Photo identique : reconnaissance immédiate
       const articleIdentique = await trouverPhotoIdentique(src, produits);
@@ -890,38 +896,22 @@ function VueClient({ produits, marques, creerVente, ventes = [], photosCategorie
       }
     } catch (e) { console.warn("Comparaison image client:", e); }
 
-    // 2. OCR : lecture du texte écrit sur la pièce (code, marque, référence)
+    // 2. Reconnaissance par IA : elle regarde la photo comme une personne, puis cherche dans les articles enregistrés.
+    //    Si l'objet n'existe pas dans la base : AUCUN article (jamais un article choisi au hasard).
     try {
-      const resOCR = await extraireTexteImage(src);
-      if (resOCR && resOCR.success) {
-        const matchs = faireCorrespondreOCR(resOCR.text, resOCR.references, produits);
-        const forts = matchs.filter(m => m.score >= 50);
-        if (forts.length) {
-          setPhotoRecherche(src);
-          setResultatsImage(forts.map(m => m.p));
-          setOcrEffectue(true);
-          return;
-        }
-      }
-    } catch (e) { console.warn("Analyse OCR client:", e); }
-
-    // 3. Ressemblance visuelle : la même pièce prise sous un autre angle
-    try {
-      const sig = await sigImage(src);
-      const dists = await Promise.all(produits.filter(p => p.photo).map(async p => ({
-        p, d: distanceSig(sig, await sigImage(p.photo))
-      })));
-      dists.sort((a, b) => a.d - b.d);
-      const proches = dists.filter(x => x.d < 0.22).slice(0, 3);
-      if (proches.length) {
+      const res = await reconnaitreArticle(src, produits);
+      if (res.trouves.length) {
         setPhotoRecherche(src);
-        setResultatsImage(proches.map(x => x.p));
-        setOcrEffectue(true);
-        return;
+        setResultatsImage(res.trouves);
+        setRechercheSure(!!res.sur);
+        setMessageRecherche("");
+      } else {
+        setMessageRecherche(res.statut === "erreur" ? "⚠️ " + res.message : res.message);
       }
-    } catch (e) { console.warn("Ressemblance image client:", e); }
-
-    // Rien trouvé : aucun article ne sort
+    } catch (e) {
+      console.warn("Reconnaissance client:", e);
+      setMessageRecherche("⚠️ L'analyse a échoué. Réessaie.");
+    }
     setOcrEffectue(true);
   };
 
@@ -1034,8 +1024,9 @@ function VueClient({ produits, marques, creerVente, ventes = [], photosCategorie
               setChargementPhoto(true);
               const r = new FileReader();
               r.onload = async () => {
-                await chercherParImage(r.result);
-                setChargementPhoto(false);
+                try { await chercherParImage(r.result); }
+                catch (err) { console.warn("Recherche par photo:", err); setMessageRecherche("⚠️ L'analyse a échoué. Réessaie."); setOcrEffectue(true); }
+                finally { setChargementPhoto(false); }
               };
               r.readAsDataURL(file);
             }}
@@ -1044,19 +1035,19 @@ function VueClient({ produits, marques, creerVente, ventes = [], photosCategorie
 
           <p className="text-[11px] text-zinc-400 mt-2 text-center leading-relaxed">
             🔍 <b>Reconnaissance automatique</b> : pointez la caméra sur la pièce, la capture se fait toute seule.
-            L'article sort si sa photo est identique OU si le texte lu (code, référence) correspond à l'article.
+            L'IA regarde la photo comme une personne et cherche dans les articles enregistrés : s'il n'existe pas, aucun article ne s'affiche.
           </p>
 
           {chargementPhoto && (
             <div className="p-3 mt-3 bg-amber-500/20 border border-amber-500/50 rounded-lg text-xs font-semibold text-amber-200 animate-pulse flex items-center justify-center gap-2">
-              <span>🔍 Comparaison de la photo avec les articles en cours...</span>
+              <span>🔍 Analyse de la photo en cours… (quelques secondes)</span>
             </div>
           )}
 
           {photoRecherche && (
             <div className="mt-3 flex items-center gap-2 bg-zinc-800 p-2 rounded-lg border border-zinc-700">
               <img src={photoRecherche} alt="" className="w-12 h-12 rounded border object-contain bg-black" />
-              <span className="text-xs text-zinc-300">Article reconnu & correspondances :</span>
+              <span className="text-xs text-zinc-300">{rechercheSure ? "✅ Article reconnu :" : "🤔 Articles possibles (à vérifier) :"}</span>
             </div>
           )}
 
@@ -1072,7 +1063,9 @@ function VueClient({ produits, marques, creerVente, ventes = [], photosCategorie
               </button>
             ))}
             {ocrEffectue && resultatsImage.length === 0 && !chargementPhoto && (
-              <p className="text-xs text-zinc-400 p-2 text-center">Aucun article reconnu : ni la photo, ni le texte lu sur la pièce ne correspondent à un article enregistré. Rapprochez la caméra du code/référence écrit sur la pièce, ou essayez la recherche par nom.</p>
+              <p className="text-xs text-zinc-300 p-2 text-center">
+                {messageRecherche || "Aucun article enregistré ne correspond à cette photo."}
+              </p>
             )}
           </div>
         </div>
@@ -1240,7 +1233,7 @@ function VueVendeur({ produits, ventes, creerVente, ventesToutes = [], moi = nul
     }))).then(srcs => {
       setPhotos(prev => {
         const base = prev.length;
-        const next = [...prev, ...srcs.map(src => ({ src, article: null, qte: 1, reconnu: false }))];
+        const next = [...prev, ...srcs.map(src => ({ src, article: null, qte: 1, reconnu: false, analyse: true }))];
         // Reconnaissance automatique de chaque photo
         srcs.forEach((src, k) => reconnaitre(src, base + k));
         return next;
@@ -1251,56 +1244,34 @@ function VueVendeur({ produits, ventes, creerVente, ventesToutes = [], moi = nul
     e.target.value = "";
   };
 
-  // Reconnaissance automatique dès la capture photo. 🧿 RÈGLE :
-  // l'article sort SEULEMENT si la photo scannée est IDENTIQUE à la photo
-  // enregistrée. Tant que l'image n'est pas identique, aucun article ne sort.
+  // Reconnaissance automatique dès la capture photo :
+  //  1. photo IDENTIQUE à une photo enregistrée → reconnu
+  //  2. sinon l'IA regarde la photo comme une personne et cherche dans les articles enregistrés :
+  //     sûre → reconnu ; pas sûre → seulement des suggestions que le vendeur choisit lui-même ; rien → « non reconnu ».
   const reconnaitre = async (src, index) => {
+    const fini = (modif) => setPhotos(prev => prev.map((ph, j) => j === index ? { ...ph, analyse: false, ...modif } : ph));
     const candidats = produits;
-    if (!candidats.length) return;
-
-    // 🔍 ÉTAPE 1 : photo IDENTIQUE → l'article est reconnu directement
+    if (!candidats.length) { fini({ message: "Aucun article enregistré pour le moment." }); return; }
     try {
-      const identique = await trouverPhotoIdentique(src, candidats);
-      if (identique) {
-        setPhotos(prev => prev.map((ph, j) => j === index
-          ? { ...ph, article: identique, reconnu: true, candidats: [] } : ph));
+      try {
+        const identique = await trouverPhotoIdentique(src, candidats);
+        if (identique) { fini({ article: identique, reconnu: true, candidats: [], message: "" }); return; }
+      } catch (errId) { console.warn("Comparaison photo identique:", errId); }
+
+      const res = await reconnaitreArticle(src, candidats);
+      if (res.trouves.length && res.sur) {
+        fini({ article: res.trouves[0], reconnu: true, candidats: res.trouves.map(p => ({ p })), message: "" });
         return;
       }
-    } catch (errId) { console.warn("Comparaison photo identique:", errId); }
-
-    // 🔍 ÉTAPE 2 : OCR — le texte lu correspond fortement (score ≥ 50) → reconnu
-    let suggestions = [];
-    try {
-      const resOCR = await extraireTexteImage(src);
-      if (resOCR && resOCR.success) {
-        const matchs = faireCorrespondreOCR(resOCR.text, resOCR.references, candidats);
-        if (matchs.length && matchs[0].score >= 50) {
-          setPhotos(prev => prev.map((ph, j) => j === index
-            ? { ...ph, article: matchs[0].p, reconnu: true, candidats: matchs.slice(0, 3) } : ph));
-          return;
-        }
-        if (matchs.length) suggestions = matchs.slice(0, 3);
-      }
-    } catch (eOCR) { console.warn("Analyse OCR:", eOCR); }
-
-    // 🔍 ÉTAPE 3 : photo RESSEMBLANTE (même pièce, autre angle) → reconnue
-    try {
-      const sig = await sigImage(src);
-      const dists = await Promise.all(candidats.filter(p => p.photo).map(async p => ({
-        p, d: distanceSig(sig, await sigImage(p.photo))
-      })));
-      dists.sort((x, y) => x.d - y.d);
-      if (dists[0] && dists[0].d < 0.22) {
-        setPhotos(prev => prev.map((ph, j) => j === index
-          ? { ...ph, article: dists[0].p, reconnu: true } : ph));
+      if (res.trouves.length) {
+        fini({ reconnu: false, candidats: res.trouves.map(p => ({ p })), message: "" });
         return;
       }
-    } catch (errRes) { console.warn("Ressemblance photo:", errRes); }
-
-    // Rien de sûr : pas de reconnaissance automatique, seulement des suggestions
-    // que le vendeur choisira lui-même.
-    setPhotos(prev => prev.map((ph, j) => j === index
-      ? { ...ph, reconnu: false, candidats: suggestions } : ph));
+      fini({ reconnu: false, candidats: [], message: res.statut === "erreur" ? "⚠️ " + res.message : res.message });
+    } catch (e) {
+      console.warn("Reconnaissance photo:", e);
+      fini({ message: "⚠️ Analyse impossible : " + ((e && e.message) || e) });
+    }
   };
 
   // Articles identifiables manuellement : uniquement ceux qui ont une photo enregistrée
@@ -1608,7 +1579,7 @@ function VueVendeur({ produits, ventes, creerVente, ventesToutes = [], moi = nul
                   {enAnalyse && (
                     <div className="text-center space-y-1 border rounded-md p-4 bg-zinc-50">
                       <div className="text-2xl animate-pulse">🔎</div>
-                      <div className="text-sm font-medium">Lecture du texte par l'OCR Mistral…</div>
+                      <div className="text-sm font-medium">Analyse de la photo…</div>
                     </div>
                   )}
 
@@ -1634,9 +1605,13 @@ function VueVendeur({ produits, ventes, creerVente, ventesToutes = [], moi = nul
                                     {ph.article.prix > 0 ? ph.article.prix.toLocaleString("fr-FR") + " FCFA" : "Prix à définir"}
                                   </div>
                                 </div>
+                              ) : ph.analyse ? (
+                                <div className="flex-1 text-xs bg-blue-50 border border-blue-200 rounded-md p-2 animate-pulse">
+                                  ⏳ Reconnaissance en cours… (quelques secondes)
+                                </div>
                               ) : ph.candidats && ph.candidats.length ? (
                                 <div className="flex-1 text-xs space-y-1 bg-blue-50 border border-blue-200 rounded-md p-2">
-                                  <div>🔍 L'OCR a lu la pièce — sélectionnez la marchandise correspondante :</div>
+                                  <div>🤔 Articles possibles (à vérifier) — sélectionnez la bonne marchandise :</div>
                                   {ph.candidats.map(m => (
                                     <button key={m.p.id} onClick={() => identifier(i, m.p)}
                                       className="w-full text-left border rounded p-1.5 hover:bg-blue-100 flex justify-between items-center gap-2">
@@ -1651,6 +1626,7 @@ function VueVendeur({ produits, ventes, creerVente, ventesToutes = [], moi = nul
                                 </div>
                               ) : (
                                 <div className="flex-1 text-xs space-y-1 bg-amber-50 border border-amber-200 rounded-md p-2">
+                                  {ph.message && <div className="text-amber-900 font-medium">{ph.message}</div>}
                                   <div>❓ Non reconnu — tapez le mot écrit sur la pièce (ex : « Papa ») :</div>
                                   <Input className="h-7 text-xs" placeholder="Mot écrit…"
                                     onChange={e => identifierParMot(i, e.target.value)} />

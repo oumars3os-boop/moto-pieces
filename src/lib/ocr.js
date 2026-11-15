@@ -33,7 +33,7 @@ const versDataUrl = (fichier) => new Promise((res, rej) => {
  * Réduit une photo (max 1600 px, JPEG) : les photos de téléphone font plusieurs Mo,
  * trop lourdes et trop lentes à envoyer. En cas de souci, on garde l'image d'origine.
  */
-const reduireImage = (dataUrl, maxCote = 1600, qualite = 0.85) => new Promise((resolve) => {
+export const reduireImage = (dataUrl, maxCote = 1600, qualite = 0.85) => new Promise((resolve) => {
   try {
     const img = new Image();
     img.onload = () => {
@@ -120,7 +120,7 @@ export async function extraireTexteImage(imageSource) {
  * de chaque article de la boutique ; renvoie les meilleures correspondances,
  * triées par score décroissant : [{ p, score }].
  */
-export function faireCorrespondreOCR(texte, references, produits, seuil = 10) {
+export function faireCorrespondreOCR(texte, references, produits, seuil = 10, max = 5) {
   const normaliser = (t) => (t == null ? "" : String(t))
     .toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
     .replace(/[^a-z0-9]+/g, " ").trim();
@@ -212,5 +212,5 @@ export function faireCorrespondreOCR(texte, references, produits, seuil = 10) {
     if (score >= seuil) resultats.push({ p, score });
   });
   resultats.sort((x, y) => y.score - x.score);
-  return resultats.slice(0, 5);
+  return resultats.slice(0, max);
 }
