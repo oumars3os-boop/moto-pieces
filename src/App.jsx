@@ -23,7 +23,6 @@ function memoriserScan(src, motCle) {
   try { localStorage.setItem("motopieces_dernier_scan", JSON.stringify({ photo: src, motCle: motCle || "", date: new Date().toISOString() })); } catch (e) {}
 }
 import HistoriqueGlobal from "@/components/HistoriqueGlobal";
-import { analyserImageGemini } from "@/lib/gemini";
 
 // ---------- Données ----------
 
