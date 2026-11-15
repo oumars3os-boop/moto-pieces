@@ -1,9 +1,9 @@
 import { createClient } from "@supabase/supabase-js";
 
 // Valeurs de secours si les variables d'environnement ne sont pas encore configurées
-const supabaseUrl =
+export const supabaseUrl =
   import.meta.env.VITE_SUPABASE_URL || "https://ikgsdrjgrvrymwnwzltu.supabase.co";
-const supabaseAnonKey =
+export const supabaseAnonKey =
   import.meta.env.VITE_SUPABASE_ANON_KEY || "sb_publishable_PyeqRFOgHo1aomCeP9CEiQ_gPx3jLrE";
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {

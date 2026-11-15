@@ -1,0 +1,4 @@
+# Déploiement avec la ligne de commande Supabase (supabase functions deploy mistral-proxy).
+# L'application utilise la nouvelle clé « sb_publishable_… » : le contrôle de clé est fait DANS la fonction.
+[functions.mistral-proxy]
+verify_jwt = false

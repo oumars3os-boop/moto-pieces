@@ -223,6 +223,32 @@ const ROLES = [
 const fmt = (n) => (n > 0 ? n.toLocaleString("fr-FR") + " FCFA" : "Prix à définir");
 
 // Reconnaissance par photo : signature visuelle (moyenne de couleurs en 8×8)
+// ---------- Outils de synchronisation et de saisie de montants ----------
+// Texte « canonique » d'un objet : mêmes champs dans le même ordre, quel que soit l'ordre renvoyé par la base
+// (la base réordonne les champs : sans ça, la synchronisation se croyait toujours différente et réécrivait en boucle).
+const canon = (v) => {
+  if (Array.isArray(v)) return "[" + v.map(canon).join(",") + "]";
+  if (v && typeof v === "object") return "{" + Object.keys(v).filter(k => v[k] !== undefined).sort().map(k => JSON.stringify(k) + ":" + canon(v[k])).join(",") + "}";
+  return JSON.stringify(v === undefined ? null : v);
+};
+// Fusionne deux listes d'éléments qui ont un « id » (ex. crédits) sans rien perdre : on garde le plus avancé (payé, plus de versements).
+const fusionnerParId = (local, serveur) => {
+  const rang = (c) => (c.statut === "payé" ? 1000 : 0) + (Array.isArray(c.versements) ? c.versements.length : 0);
+  const map = new Map();
+  (serveur || []).forEach(c => { if (c && c.id != null) map.set(String(c.id), c); });
+  (local || []).forEach(c => {
+    if (!c || c.id == null) return;
+    const k = String(c.id); const s = map.get(k);
+    if (!s || rang(c) > rang(s)) map.set(k, c);
+  });
+  return Array.from(map.values()).sort((x, y) => (Number(y.id) || 0) - (Number(x.id) || 0));
+};
+// Montant saisi par une personne : accepte « 10 000 », « 10000 », « 2500,50 »
+const lireMontant = (v) => {
+  const n = Number(String(v == null ? "" : v).replace(/[\s\u00a0\u202f]/g, "").replace(",", "."));
+  return Number.isFinite(n) ? n : 0;
+};
+
 const sigImage = (src) => new Promise(resolve => {
   const img = new Image();
   img.onload = () => {
@@ -901,7 +927,7 @@ function VueClient({ produits, marques, creerVente, ventes = [], photosCategorie
     try {
       const res = await reconnaitreArticle(src, produits);
       if (res.trouves.length) {
-        setPhotoRecherche(src);
+        setPhotoRecherche(res.image || src);   // l'objet isolé (sans arrière-plan) quand c'est possible
         setResultatsImage(res.trouves);
         setRechercheSure(!!res.sur);
         setMessageRecherche("");
@@ -1999,14 +2025,14 @@ function GestionCredits({ credits, ajouterCredit, ajouterVersement, validerCredi
 
   const enregistrer = () => {
     const nom = form.nom.trim();
-    const montant = Number(form.montant) || 0;
+    const montant = lireMontant(form.montant);
     if (!nom || !(montant > 0)) return;
     ajouterCredit({ type: vue, nom, tel: form.tel.trim(), montant });
     setForm({ nom: "", tel: "", montant: "" });
   };
 
   const verser = (c) => {
-    const montant = Number(saisie[c.id]) || 0;
+    const montant = lireMontant(saisie[c.id]);
     if (!(montant > 0)) return;
     ajouterVersement(c.id, montant);
     // Si le versement solde le crédit, il passe automatiquement en "Payé ✅"
@@ -2046,7 +2072,7 @@ function GestionCredits({ credits, ajouterCredit, ajouterVersement, validerCredi
           <Input placeholder="Nom de la personne" value={form.nom} onChange={e => setForm({ ...form, nom: e.target.value })} />
           <Input placeholder="Téléphone (optionnel)" value={form.tel} onChange={e => setForm({ ...form, tel: e.target.value })} />
           <Input type="number" placeholder="Montant total (FCFA)" value={form.montant} onChange={e => setForm({ ...form, montant: e.target.value })} />
-          <Button className="h-10" disabled={!form.nom.trim() || !(Number(form.montant) > 0)} onClick={enregistrer}>💾 Enregistrer le crédit</Button>
+          <Button className="h-10" disabled={!form.nom.trim() || !(lireMontant(form.montant) > 0)} onClick={enregistrer}>💾 Enregistrer le crédit</Button>
         </div>
         {alerteDoublon && (
           <p className="text-xs text-amber-600">⚠️ Cette personne a déjà un crédit en cours. Vous pouvez quand même enregistrer, mais pensez à solder l'ancien.</p>
@@ -6302,11 +6328,12 @@ export default function App() {
   };
   const dernierEnvoiRef = useRef("");          // dernier contenu envoyé/reçu : évite les boucles d'envoi
   const [majReglages, setMajReglages] = useState(0);
+  const modifRef = useRef(0);                 // heure de la dernière modification faite sur CE téléphone (pas encore sûre d'être enregistrée)
   const [infosBoutiques, setInfosBoutiques] = useState({}); // ℹ️ Infos individuelles de chaque magasin (nom, contact, matériel), par numéro d'admin
 
   const appliquerReglages = (r) => {
     if (!r || typeof r !== "object") return;
-    dernierEnvoiRef.current = JSON.stringify(r);
+    dernierEnvoiRef.current = canon(r);
     if (Array.isArray(r.marques)) setMarques(r.marques);
     if (Array.isArray(r.categories) && r.categories.length > 0) setCategories(r.categories);
     if (r.photosCategories && typeof r.photosCategories === "object") setPhotosCategories(r.photosCategories);
@@ -6316,7 +6343,7 @@ export default function App() {
     // on ne laisse PAS le serveur écraser sa saisie en cours.
     if (r.entreprise && typeof r.entreprise === "object"
       && Date.now() - derniereModifEntrepriseRef.current > 8000) setEntreprise(prev => ({ ...prev, ...r.entreprise }));
-    if (Array.isArray(r.credits)) setCredits(r.credits);
+    if (Array.isArray(r.credits)) setCredits(prev => fusionnerParId(prev, r.credits));   // fusion : un crédit tout juste saisi n'est jamais écrasé
     if (Array.isArray(r.boutiquesMasquees)) setBoutiquesMasquees(r.boutiquesMasquees);
     if (Array.isArray(r.transfertsStock)) setTransfertsStock(r.transfertsStock);
     if (r.modePrix) setModePrix(r.modePrix);
@@ -6328,6 +6355,11 @@ export default function App() {
   // Chargement à la connexion et à chaque changement envoyé par le serveur
   useEffect(() => {
     if (userActif) {} else { reglagesPretsRef.current = false; }
+    // Une modification vient d'être faite sur ce téléphone : on laisse d'abord partir l'enregistrement, puis on recharge
+    if (reglagesPretsRef.current && Date.now() - modifRef.current < 4000) {
+      const reessai = setTimeout(() => setMajReglages(v => v + 1), 2500);
+      return () => clearTimeout(reessai);
+    }
     let annule = false;
     (async () => {
       try {
@@ -6375,7 +6407,7 @@ export default function App() {
       // On ignore l'écho de notre propre envoi
       try {
         const nouveau = payload?.new?.contenu;
-        if (nouveau && JSON.stringify(nouveau) === dernierEnvoiRef.current) return;
+        if (nouveau && canon(nouveau) === dernierEnvoiRef.current) return;
       } catch (e) {}
       clearTimeout(minuteur);
       minuteur = setTimeout(() => setMajReglages(v => v + 1), 500);
@@ -6388,8 +6420,9 @@ export default function App() {
   useEffect(() => {
     if (!userActif || role === "client" || !cleProduits || !reglagesPretsRef.current) return;
     const contenu = { marques, categories, photosCategories, photosMarques, cases, entreprise, credits, boutiquesMasquees, transfertsStock, modePrix, ventePhotoActive, titreSite };
-    const texte = JSON.stringify(contenu);
+    const texte = canon(contenu);
     if (texte === dernierEnvoiRef.current) return;
+    modifRef.current = Date.now();
     const minuteur = setTimeout(async () => {
       dernierEnvoiRef.current = texte;
       const res = await sauvegarderReglagesSupabase(cleProduits, contenu);
@@ -6560,19 +6593,18 @@ export default function App() {
   };
 
   const confirmerPaiement = async (id) => {
-    let venteValidee = null;
-    setVentes(prev => prev.map(v => {
-      if (v.id !== id) return v;
-      const total = v.items.reduce((s, it) => s + (it.prixLigne ?? (it.p ? it.p.prix : it.prix)) * (it.qte || 1), 0);
-      const maintenantPaye = new Date();
-      venteValidee = { ...v, statut: "payée", total,
-        encaissePar: userActif?.nom || "—", // 💰 qui a encaissé l'argent (pour la caisse de la secrétaire)
-        datePaiement: maintenantPaye.toLocaleDateString("fr-FR") + " à " + maintenantPaye.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }) };
-      return venteValidee;
-    }));
+    // On part de la vente telle qu'elle est MAINTENANT (et non d'une valeur remplie plus tard par React)
+    const v0 = (ventes || []).find(v => v.id === id);
+    if (!v0 || v0.statut === "payée") return;   // déjà payée : rien à refaire (évite les doubles versements)
+    const total = v0.items.reduce((s, it) => s + (it.prixLigne ?? (it.p ? it.p.prix : it.prix)) * (it.qte || 1), 0);
+    const maintenantPaye = new Date();
+    const venteValidee = { ...v0, statut: "payée", total,
+      encaissePar: userActif?.nom || "—", // 💰 qui a encaissé l'argent (pour la caisse de la secrétaire)
+      datePaiement: maintenantPaye.toLocaleDateString("fr-FR") + " à " + maintenantPaye.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }) };
+    setVentes(prev => prev.map(v => v.id === id ? venteValidee : v));
 
     // Vente à crédit : si la secrétaire confirme le paiement total, le crédit lié se solde aussi
-    if (venteValidee?.creditId) {
+    if (venteValidee.creditId) {
       const maintenant = new Date();
       const dateValidation = maintenant.toLocaleDateString("fr-FR") + " à " + maintenant.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
       setCredits(prev => prev.map(c => {
@@ -6586,10 +6618,8 @@ export default function App() {
       }));
     }
 
-    if (venteValidee) {
-      // Mise à jour de la vente en ligne (prix réels + statut payée) — plus de doublon à 0 FCFA
-      await majVenteSupabase(venteValidee);
-    }
+    // Mise à jour de la vente en ligne (prix réels + statut payée) — plus de doublon à 0 FCFA
+    await majVenteSupabase(venteValidee);
   };
 
   // ---------- Marchandises ajoutées par le vendeur ----------
@@ -6639,21 +6669,16 @@ export default function App() {
   const validerCredit = (idCredit) => {
     const mtn = new Date();
     const dateValidation = mtn.toLocaleDateString("fr-FR") + " à " + mtn.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
-    let venteALier = null;
-    setCredits(prev => prev.map(c => {
-      if (c.id !== idCredit) return c;
-      if (c.venteId) venteALier = c.venteId;
-      return { ...c, statut: "payé", dateValidation };
-    }));
-    // Vente à crédit soldée : la commande liée passe en « payée » aussi (côté local + serveur)
-    if (venteALier != null) {
-      let venteMaj = null;
-      setVentes(prev => prev.map(v => {
-        if (v.id !== venteALier) return v;
-        venteMaj = { ...v, statut: "payée" };
-        return venteMaj;
-      }));
-      if (venteMaj) majVenteSupabase(venteMaj);
+    const credit = (credits || []).find(c => c.id === idCredit);
+    setCredits(prev => prev.map(c => c.id === idCredit ? { ...c, statut: "payé", dateValidation } : c));
+    // Vente à crédit soldée : la commande liée passe en « payée » aussi (côté local + serveur) — calculé tout de suite, sans attendre
+    if (credit && credit.venteId != null) {
+      const v = (ventes || []).find(x => x.id === credit.venteId);
+      if (v && v.statut !== "payée") {
+        const venteMaj = { ...v, statut: "payée" };
+        setVentes(prev => prev.map(x => x.id === credit.venteId ? venteMaj : x));
+        majVenteSupabase(venteMaj);
+      }
     }
   };
 

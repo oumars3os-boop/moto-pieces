@@ -1,4 +1,5 @@
 // 👁️ RECONNAISSANCE D'ARTICLE PAR PHOTO — comme une personne :
+//   0) l'arrière-plan est retiré automatiquement : seul l'OBJET est analysé (fond blanc, photo rognée) ;
 //   1) l'IA regarde la photo et dit quels articles ENREGISTRÉS sont le même type d'objet (ou aucun) ;
 //   2) chaque réponse de l'IA est contrôlée (l'identifiant existe, la description colle à l'article) ;
 //   3) si l'IA est injoignable, on lit le texte écrit sur la pièce (règle stricte) ;
@@ -6,6 +7,7 @@
 // L'analyse ne peut JAMAIS rester bloquée : limite de temps sur chaque appel et sur l'ensemble.
 import { extraireTexteImage, faireCorrespondreOCR, reduireImage } from "./ocr";
 import { analyserObjetMistral } from "./mistral";
+import { isolerObjet } from "./objet";
 
 const nettoyer = (t, n = 90) => String(t == null ? "" : t).replace(/[\r\n|]+/g, " ").replace(/\s+/g, " ").trim().slice(0, n);
 const ligneCatalogue = (p) => [p.id, nettoyer(p.nom), nettoyer(p.marque, 30), nettoyer(p.cat || p.categorie, 30), nettoyer(p.motcle, 40)].join(" | ");
@@ -17,10 +19,18 @@ const aucun = (objet, extra = {}) => ({
 
 async function reconnaitreInterne(src, produits) {
   const liste = (produits || []).filter(p => p && p.id != null && p.nom);
-  if (!liste.length) return { trouves: [], sur: false, statut: "aucun", objet: "", source: "", message: "Aucun article enregistré pour le moment." };
+  if (!liste.length) return { trouves: [], sur: false, statut: "aucun", objet: "", source: "", message: "Aucun article enregistré pour le moment.", image: null };
 
   const petite = await reduireImage(src, 1024, 0.82);
 
+  // L'arrière-plan est retiré automatiquement : on ne garde que l'objet (si le fond est trop chargé, photo d'origine + consigne d'ignorer le décor)
+  let iso = null;
+  try { iso = await isolerObjet(petite); } catch (e) { iso = null; }
+  const resultat = await decider(iso ? iso.dataUrl : petite, liste);
+  return { ...resultat, image: iso ? iso.dataUrl : null };
+}
+
+async function decider(petite, liste) {
   // ---------- A) L'IA regarde la photo ----------
   let candidats = liste;
   let vision = null;
