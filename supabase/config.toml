@@ -2,3 +2,6 @@
 # L'application utilise la nouvelle clé « sb_publishable_… » : le contrôle de clé est fait DANS la fonction.
 [functions.mistral-proxy]
 verify_jwt = false
+
+[functions.ice-servers]
+verify_jwt = false

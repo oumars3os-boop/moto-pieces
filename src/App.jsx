@@ -11,7 +11,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/context/AuthContext";
-import { supabase, synchroniserCompteSupabase, supprimerCompteSupabase, enregistrerVenteSupabase, majVenteSupabase, chargerVentesSupabase, sauvegarderProduitsSupabase, chargerProduitsSupabase, chargerTousProduitsSupabase, abonnerProduitsTempsReel, chargerPublicitesSupabase, ajouterPubliciteSupabase, supprimerPubliciteSupabase, abonnerPublicitesTempsReel, chargerDureePubliciteSupabase, sauvegarderDureePubliciteSupabase, abonnerComptesTempsReel, abonnerVentesTempsReel, abonnerParametresTempsReel, sauvegarderReglagesSupabase, chargerReglagesSupabase, chargerTousReglagesSupabase, abonnerReglagesTempsReel } from "@/lib/supabase";
+import { supabase, synchroniserCompteSupabase, supprimerCompteSupabase, enregistrerVenteSupabase, majVenteSupabase, chargerVentesSupabase, sauvegarderProduitsSupabase, chargerProduitsSupabase, chargerTousProduitsSupabase, abonnerProduitsTempsReel, chargerPublicitesSupabase, ajouterPubliciteSupabase, supprimerPubliciteSupabase, abonnerPublicitesTempsReel, chargerDureePubliciteSupabase, sauvegarderDureePubliciteSupabase, abonnerComptesTempsReel, abonnerVentesTempsReel, abonnerParametresTempsReel, sauvegarderReglagesSupabase, chargerReglagesSupabase, chargerTousReglagesSupabase, abonnerReglagesTempsReel, supabaseUrl, supabaseAnonKey } from "@/lib/supabase";
+import { GestionnaireAppel, chargerServeursIce } from "@/lib/appels";
 import { extraireTexteImage, faireCorrespondreOCR } from "@/lib/ocr";
 import { reconnaitreArticle } from "@/lib/reconnaissance";
 import { demanderAssistantMistral } from "@/lib/mistral";
@@ -247,6 +248,17 @@ const fusionnerParId = (local, serveur) => {
 const lireMontant = (v) => {
   const n = Number(String(v == null ? "" : v).replace(/[\s\u00a0\u202f]/g, "").replace(",", "."));
   return Number.isFinite(n) ? n : 0;
+};
+
+// Notification du téléphone / de l'ordinateur (seulement si la page est en arrière-plan et si la personne l'a autorisée)
+const notifierSysteme = (titre, corps) => {
+  try {
+    if (typeof Notification === "undefined" || Notification.permission !== "granted" || !document.hidden) return;
+    new Notification(titre, { body: corps, tag: "motopieces-" + titre });
+  } catch (e) { /* ignoré */ }
+};
+const demanderPermissionNotifications = () => {
+  try { if (typeof Notification !== "undefined" && Notification.permission === "default") Notification.requestPermission(); } catch (e) { /* ignoré */ }
 };
 
 const sigImage = (src) => new Promise(resolve => {
@@ -4714,6 +4726,24 @@ function MessagerieEquipe({ role, userActif, comptes }) {
   const annulerVocalRef = useRef(false);
   const debutVocalRef = useRef(0);
   const departXRef = useRef(0);
+
+  // ===== Présence « en ligne », « écrit… », accusés de lecture et appels audio / vidéo =====
+  const [enLigne, setEnLigne] = useState(() => new Set());   // téléphones des personnes connectées en ce moment
+  const [ecritPar, setEcritPar] = useState({});               // { téléphone: heure } : qui est en train d'écrire
+  const [appel, setAppel] = useState(null);                   // appel en cours (null = aucun)
+  const [tickAppel, setTickAppel] = useState(0);
+  const [toastAppel, setToastAppel] = useState("");
+  const canalChatRef = useRef(null);
+  const gestAppelRef = useRef(null);
+  const envoyerSignalRef = useRef(null);
+  const traceAppelRef = useRef(null);
+  const dernierEcritRef = useRef(0);
+  const luEnvoyeRef = useRef({});
+  const iceRef = useRef({ serveurs: null, turn: false, t: 0 });
+  const notifieIdRef = useRef("");
+  const audioDistantRef = useRef(null);
+  const videoDistantRef = useRef(null);
+  const videoLocaleRef = useRef(null);
   const [recherche, setRecherche] = useState("");
   const [photoPleine, setPhotoPleine] = useState(null);
   const messagesRef = useRef([]);
@@ -4742,6 +4772,7 @@ function MessagerieEquipe({ role, userActif, comptes }) {
   useEffect(() => {
     const ouvrir = (e) => {
       const tel = (e?.detail?.tel || "").trim();
+      demanderPermissionNotifications();
       if (tel) { setCanal(tel); setVue("chat"); }
       setNonLus(0); setNotification(null); setOuvert(true);
     };
@@ -4817,6 +4848,10 @@ function MessagerieEquipe({ role, userActif, comptes }) {
           setMessages(prev => [...prev, ...nouveaux].sort((a, b) => (a.id || 0) - (b.id || 0)));
           // Notification en haut de l'écran pour les messages REÇUS (pas les miens)
           const recus = nouveaux.filter(n => !n.moi);
+          if (recus.length > 0) {
+            const d = recus[recus.length - 1];
+            notifierSysteme("💬 " + (d.nom || "Nouveau message"), d.type === "texte" ? String(d.contenu || "").slice(0, 80) : d.type === "appel" ? "📞 Appel" : d.type === "photo" ? "📷 Photo" : d.type === "video" ? "🎬 Vidéo" : "🎤 Vocal");
+          }
           if (recus.length > 0 && !ouvert) {
             const dernier = recus[recus.length - 1];
             setNotification({ nom: dernier.nom || dernier.de || "Quelqu'un", type: dernier.type });
@@ -5099,6 +5134,167 @@ function MessagerieEquipe({ role, userActif, comptes }) {
 
   const messagesDuCanal = messages.filter(m => m.destinataire === idDuCanal(canal));
 
+  // ---------- Connexion en direct : « en ligne », « écrit… », « lu » et signalisation des appels ----------
+  envoyerSignalRef.current = (versTel, msg) => {
+    try { canalChatRef.current && canalChatRef.current.send({ type: "broadcast", event: "sig", payload: { ...msg, vers: versTel, de: monTel, nom: monNom } }); } catch (e) { /* ignoré */ }
+  };
+  const marquerLu = (telAutre, jusquA) => {
+    const max = Number(jusquA) || 0;
+    if (!max) return;
+    const idc = canalIdPerso(telAutre);
+    const aMarquer = messagesRef.current.filter(m => m.destinataire === idc && (m.moi || m.de === monTel) && !m.lu && Number.isFinite(Number(m.id)) && Number(m.id) < 1e11 && Number(m.id) <= max);
+    if (aMarquer.length === 0) return;
+    aMarquer.forEach(m => { idbMettre({ ...m, lu: true, livre: true }).catch(() => {}); });
+    const cles = new Set(aMarquer.map(m => m.cle));
+    setMessages(prev => prev.map(m => cles.has(m.cle) ? { ...m, lu: true, livre: true } : m));
+  };
+  const signalerEcriture = () => {
+    if (!canalChatRef.current || convActive.groupe) return;
+    const t = Date.now();
+    if (t - dernierEcritRef.current < 2500) return;
+    dernierEcritRef.current = t;
+    try { canalChatRef.current.send({ type: "broadcast", event: "ecrit", payload: { de: monTel, vers: canal } }); } catch (e) { /* ignoré */ }
+  };
+
+  useEffect(() => {
+    if (!monTel) return;
+    const canalTr = supabase.channel("motopieces-chat", { config: { presence: { key: monTel }, broadcast: { self: false } } });
+    canalChatRef.current = canalTr;
+    canalTr
+      .on("presence", { event: "sync" }, () => { try { setEnLigne(new Set(Object.keys(canalTr.presenceState()))); } catch (e) { /* ignoré */ } })
+      .on("broadcast", { event: "sig" }, ({ payload }) => { if (payload && payload.vers === monTel && gestAppelRef.current) gestAppelRef.current.recevoir(payload); })
+      .on("broadcast", { event: "ecrit" }, ({ payload }) => { if (payload && payload.vers === monTel && payload.de) setEcritPar(p => ({ ...p, [payload.de]: Date.now() })); })
+      .on("broadcast", { event: "lu" }, ({ payload }) => { if (payload && payload.vers === monTel && payload.de) marquerLu(payload.de, payload.jusquA); })
+      .subscribe(async (statut) => { if (statut === "SUBSCRIBED") { try { await canalTr.track({ tel: monTel, nom: monNom }); } catch (e) { /* ignoré */ } } });
+    return () => { canalChatRef.current = null; try { supabase.removeChannel(canalTr); } catch (e) { /* ignoré */ } };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [monTel]);
+
+  // « écrit… » disparaît tout seul après 4,5 secondes
+  useEffect(() => {
+    const t = setInterval(() => setEcritPar(p => {
+      const maintenant = Date.now(); const suite = {}; let change = false;
+      Object.keys(p).forEach(k => { if (maintenant - p[k] < 4500) suite[k] = p[k]; else change = true; });
+      return change ? suite : p;
+    }), 1500);
+    return () => clearInterval(t);
+  }, []);
+
+  // Accusé de lecture : quand j'ouvre une discussion et que je vois les messages de l'autre, il est prévenu (✓✓ bleus)
+  useEffect(() => {
+    if (!ouvert || vue !== "chat" || !canalChatRef.current || convActive.groupe) return;
+    const maxId = messagesDuCanal.filter(m => !(m.moi || m.de === monTel) && m.type !== "appel").reduce((mx, m) => Math.max(mx, Number(m.id) || 0), 0);
+    if (!maxId || maxId <= (luEnvoyeRef.current[canal] || 0)) return;
+    luEnvoyeRef.current[canal] = maxId;
+    try { canalChatRef.current.send({ type: "broadcast", event: "lu", payload: { de: monTel, vers: canal, jusquA: maxId } }); } catch (e) { /* ignoré */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ouvert, vue, canal, messages]);
+
+  // Trace d'un appel dans la conversation (écrite par l'appelant ; l'autre personne la reçoit comme un message)
+  traceAppelRef.current = async ({ avec, media, statut, duree }) => {
+    const msg = { destinataire: canalIdPerso(avec.tel), de: monTel, nom: monNom, type: "appel", contenu: JSON.stringify({ m: media, s: statut, d: duree || 0 }), date: new Date().toISOString(), telecharges: monTel + "," };
+    try {
+      let r = await supabase.from("messages").insert(msg).select("id").single();
+      if (r.error) { const { telecharges: _t, ...sans } = msg; r = await supabase.from("messages").insert(sans).select("id").single(); }
+      if (r.error || !r.data) return;
+      const local = { cle: msg.destinataire + "#" + r.data.id, id: r.data.id, ...msg, moi: true };
+      await idbMettre(local);
+      connusRef.current.add(local.cle);
+      setMessages(prev => [...prev, local].sort((x, y) => (x.id || 0) - (y.id || 0)));
+    } catch (e) { /* ignoré */ }
+  };
+
+  // Le moteur d'appels (un seul pour toute la durée de la connexion)
+  useEffect(() => {
+    if (!monTel) return;
+    const gest = new GestionnaireAppel({
+      monTel, monNom,
+      envoyer: (vers, msg) => envoyerSignalRef.current && envoyerSignalRef.current(vers, msg),
+      obtenirIce: async () => {
+        const c = iceRef.current;
+        if (c.serveurs && Date.now() - c.t < 10 * 60 * 1000) return c.serveurs;
+        const r = await chargerServeursIce(String(supabaseUrl).replace(/\/+$/, "") + "/functions/v1/ice-servers", supabaseAnonKey);
+        iceRef.current = { serveurs: r.serveurs, turn: r.turn, t: Date.now() };
+        return r.serveurs;
+      },
+      obtenirMedia: async ({ video, facingMode, sansAudio }) => {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { const e = new Error("pas de média"); e.name = "NO_MEDIA"; throw e; }
+        return navigator.mediaDevices.getUserMedia({
+          audio: sansAudio ? false : { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+          video: video ? { facingMode: { ideal: facingMode || "user" }, width: { ideal: 640 }, height: { ideal: 480 } } : false,
+        });
+      },
+      creerPeer: (cfg) => new RTCPeerConnection(cfg),
+      surChangement: (etat) => {
+        setAppel(etat.phase === "repos" ? null : { ...etat });
+        if (etat.phase === "entrant" && notifieIdRef.current !== etat.id) {
+          notifieIdRef.current = etat.id;
+          notifierSysteme("📞 Appel " + (etat.media === "video" ? "vidéo" : "audio") + " entrant", (etat.avec && etat.avec.nom) || "");
+        }
+        if (etat.phase === "fin" && etat.sens === "entrant" && ["manque-local", "annule-distant", "manque-distant"].includes(etat.raison)) {
+          const nom = (etat.avec && etat.avec.nom) || "quelqu'un";
+          setToastAppel("📵 Appel manqué de " + nom);
+          setTimeout(() => setToastAppel(""), 7000);
+          notifierSysteme("📵 Appel manqué", nom);
+        }
+      },
+      surJournal: (entree) => traceAppelRef.current && traceAppelRef.current(entree),
+    });
+    gestAppelRef.current = gest;
+    return () => { try { gest.detruire(); } catch (e) { /* ignoré */ } gestAppelRef.current = null; setAppel(null); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [monTel]);
+
+  const lancerAppel = async (media) => {
+    const cv = convActive;
+    if (!cv || cv.groupe || !gestAppelRef.current) return;
+    if (typeof RTCPeerConnection === "undefined") { setInfo("⚠️ Ce navigateur ne gère pas les appels. Utilise Chrome, Edge, Firefox ou Safari récent."); return; }
+    if (!enLigne.has(cv.key)) { setInfo("📵 " + cv.titre + " n'est pas en ligne en ce moment."); setTimeout(() => setInfo(""), 4000); return; }
+    const r = await gestAppelRef.current.appeler(cv.key, cv.titre, media);
+    if (!r.ok) { setInfo("⚠️ " + r.erreur); setTimeout(() => setInfo(""), 6000); }
+  };
+
+  // Sonnerie : appel entrant (sonnerie + vibration) ou appel sortant (tonalité d'attente)
+  useEffect(() => {
+    const phase = appel && appel.phase;
+    if (phase !== "entrant" && phase !== "sortant") return;
+    const entrant = phase === "entrant";
+    let ctx = null;
+    try { const AC = window.AudioContext || window.webkitAudioContext; ctx = AC ? new AC() : null; } catch (e) { ctx = null; }
+    const bipSonnerie = () => {
+      if (!ctx) return;
+      try {
+        const o = ctx.createOscillator(); const g = ctx.createGain();
+        o.type = "sine"; o.frequency.value = entrant ? 480 : 425; g.gain.value = entrant ? 0.18 : 0.08;
+        o.connect(g); g.connect(ctx.destination); o.start(); o.stop(ctx.currentTime + (entrant ? 0.5 : 0.9));
+      } catch (e) { /* ignoré */ }
+    };
+    try { if (ctx && ctx.state === "suspended") ctx.resume().catch(() => {}); } catch (e) { /* ignoré */ }
+    bipSonnerie();
+    const vibrer = () => { try { if (entrant && navigator.vibrate) navigator.vibrate([400, 200, 400]); } catch (e) { /* ignoré */ } };
+    vibrer();
+    const t = setInterval(() => { bipSonnerie(); vibrer(); }, entrant ? 1600 : 3000);
+    return () => { clearInterval(t); try { ctx && ctx.close(); } catch (e) { /* ignoré */ } try { navigator.vibrate && navigator.vibrate(0); } catch (e) { /* ignoré */ } };
+  }, [appel && appel.phase]);
+
+  // Compteur de durée de l'appel
+  useEffect(() => {
+    if (!appel || appel.phase !== "actif") return;
+    const t = setInterval(() => setTickAppel(x => x + 1), 1000);
+    return () => clearInterval(t);
+  }, [appel && appel.phase]);
+
+  // Branche les flux audio / vidéo sur l'écran
+  useEffect(() => {
+    if (!appel) return;
+    const a2 = audioDistantRef.current, v = videoDistantRef.current, l = videoLocaleRef.current;
+    if (appel.fluxDistant) {
+      if (a2 && a2.srcObject !== appel.fluxDistant) { a2.srcObject = appel.fluxDistant; a2.play && a2.play().catch(() => {}); }
+      if (v && v.srcObject !== appel.fluxDistant) { v.srcObject = appel.fluxDistant; v.play && v.play().catch(() => {}); }
+    }
+    if (l && appel.fluxLocal && l.srcObject !== appel.fluxLocal) l.srcObject = appel.fluxLocal;
+  });
+
   // Chronomètre du vocal pendant qu'on maintient le micro
   useEffect(() => {
     if (!enVocal) { setDureeVocal(0); return; }
@@ -5142,7 +5338,7 @@ function MessagerieEquipe({ role, userActif, comptes }) {
       {cv.photo ? <img src={cv.photo} alt="" className="w-full h-full object-cover" /> : (cv.icone || String(cv.titre || "?").trim().charAt(0).toUpperCase())}
     </div>
   );
-  const apercu = (m) => m.type === "photo" ? "📷 Photo" : m.type === "video" ? "🎬 Vidéo" : m.type === "audio" ? "🎤 Vocal" : (m.contenu || "");
+  const apercu = (m) => m.type === "photo" ? "📷 Photo" : m.type === "video" ? "🎬 Vidéo" : m.type === "audio" ? "🎤 Vocal" : m.type === "appel" ? "📞 Appel" : (m.contenu || "");
   const libelleJour = (iso) => {
     const d = new Date(iso); if (isNaN(d.getTime())) return "";
     const auj = new Date(); const hier = new Date(); hier.setDate(auj.getDate() - 1);
@@ -5160,6 +5356,7 @@ function MessagerieEquipe({ role, userActif, comptes }) {
   const fermer = () => { arreterLecture(); arreterVocal(); finirBarre(); setPhotoPleine(null); setOuvert(false); };
   const retourListe = () => { arreterLecture(); arreterVocal(); setPhotoPleine(null); setVue("liste"); };
   const ouvrirMessagerie = () => {
+    demanderPermissionNotifications();
     setNonLus(0); setNotification(null);
     if (convsBase.length === 1) { setCanal(convsBase[0].key); setVue("chat"); } else { setVue("liste"); }
     setOuvert(true);
@@ -5249,6 +5446,73 @@ function MessagerieEquipe({ role, userActif, comptes }) {
         </button>
       )}
 
+      {/* Appel manqué */}
+      {toastAppel && (
+        <div className="fixed top-2 left-1/2 -translate-x-1/2 z-[75] bg-red-600 text-white rounded-xl shadow-2xl px-4 py-3 text-sm font-bold" onClick={() => setToastAppel("")}>{toastAppel}</div>
+      )}
+
+      {/* Écran d'appel audio / vidéo */}
+      {appel && (() => {
+        void tickAppel;
+        const cvAppel = (convsBase || []).find(c => c.key === (appel.avec && appel.avec.tel)) || { key: appel.avec && appel.avec.tel, titre: (appel.avec && appel.avec.nom) || "", groupe: false };
+        const video = appel.media === "video";
+        const secondes = appel.debut ? Math.max(0, Math.floor((Date.now() - appel.debut) / 1000)) : 0;
+        const statut = appel.phase === "entrant" ? ("Appel " + (video ? "vidéo" : "audio") + " entrant…")
+          : appel.phase === "sortant" ? "Appel en cours… ça sonne"
+          : appel.phase === "connexion" ? "Connexion…"
+          : appel.phase === "actif" ? (formaterDuree(secondes) + (appel.connexion === "Reconnexion…" ? " · Reconnexion…" : ""))
+          : appel.erreur ? appel.erreur
+          : appel.raison === "refuse" || appel.raison === "refuse-local" ? "Appel refusé"
+          : appel.raison === "occupe" ? "Ligne occupée"
+          : appel.raison === "manque" || appel.raison === "manque-local" || appel.raison === "manque-distant" ? "Pas de réponse"
+          : appel.raison === "annule" || appel.raison === "annule-distant" ? "Appel annulé"
+          : "Appel terminé" + (appel.duree > 0 ? " · " + formaterDuree(appel.duree) : "");
+        const enCours = appel.phase === "sortant" || appel.phase === "connexion" || appel.phase === "actif";
+        const bouton = "w-14 h-14 rounded-full text-2xl flex items-center justify-center shadow-lg active:scale-95 transition";
+        return (
+          <div className="fixed inset-0 z-[80] bg-zinc-900 text-white flex flex-col">
+            {video && appel.phase !== "entrant"
+              ? <video ref={videoDistantRef} autoPlay playsInline className="absolute inset-0 w-full h-full object-cover bg-black" />
+              : <audio ref={audioDistantRef} autoPlay playsInline />}
+            {video && appel.fluxLocal && appel.phase !== "entrant" && (
+              <video ref={videoLocaleRef} autoPlay playsInline muted
+                className="absolute top-20 right-3 w-28 h-40 rounded-xl object-cover border border-white/40 bg-black z-10"
+                style={{ transform: appel.face === "user" ? "scaleX(-1)" : "none", opacity: appel.camera ? 1 : 0.3 }} />
+            )}
+            <div className="relative z-10 flex flex-col items-center pt-16 px-4 text-center" style={{ textShadow: video ? "0 1px 6px rgba(0,0,0,.8)" : "none" }}>
+              {(!video || !appel.fluxDistant || appel.phase === "entrant") && <div className="mb-4">{avatar(cvAppel, 112)}</div>}
+              <div className="text-2xl font-semibold">{(appel.avec && appel.avec.nom) || ""}</div>
+              <div className="text-sm text-white/80 mt-1">{statut}</div>
+              {appel.phase === "actif" && iceRef.current.turn === false && (
+                <div className="text-[10px] text-amber-300 mt-2">Connexion directe (sans relais) : la qualité peut varier selon les réseaux.</div>
+              )}
+            </div>
+            <div className="flex-1" />
+            <div className="relative z-10 pb-10 px-6">
+              {appel.phase === "entrant" ? (
+                <div className="flex items-center justify-around">
+                  <div className="flex flex-col items-center gap-1">
+                    <button className={bouton + " bg-red-600"} onClick={() => gestAppelRef.current && gestAppelRef.current.refuser()} aria-label="Refuser">✖</button>
+                    <span className="text-xs">Refuser</span>
+                  </div>
+                  <div className="flex flex-col items-center gap-1">
+                    <button className={bouton + " bg-green-600 animate-pulse"} onClick={async () => { const r = gestAppelRef.current && await gestAppelRef.current.accepter(); if (r && !r.ok) { setInfo("⚠️ " + r.erreur); setTimeout(() => setInfo(""), 6000); } }} aria-label="Accepter">{video ? "🎥" : "📞"}</button>
+                    <span className="text-xs">Accepter</span>
+                  </div>
+                </div>
+              ) : enCours ? (
+                <div className="flex items-center justify-center gap-4">
+                  <button className={bouton + (appel.micro ? " bg-white/20" : " bg-white text-zinc-900")} onClick={() => gestAppelRef.current && gestAppelRef.current.basculerMicro()} aria-label={appel.micro ? "Couper le micro" : "Réactiver le micro"}>{appel.micro ? "🎤" : "🔇"}</button>
+                  {video && <button className={bouton + (appel.camera ? " bg-white/20" : " bg-white text-zinc-900")} onClick={() => gestAppelRef.current && gestAppelRef.current.basculerCamera()} aria-label={appel.camera ? "Couper la caméra" : "Activer la caméra"}>{appel.camera ? "📹" : "🚫"}</button>}
+                  {video && <button className={bouton + " bg-white/20"} onClick={() => gestAppelRef.current && gestAppelRef.current.changerCamera()} aria-label="Changer de caméra">🔄</button>}
+                  <button className={bouton + " bg-red-600"} onClick={() => gestAppelRef.current && gestAppelRef.current.terminer()} aria-label="Raccrocher">📵</button>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Bouton flottant de la messagerie médias */}
       {!ouvert && (
         <button
@@ -5303,7 +5567,10 @@ function MessagerieEquipe({ role, userActif, comptes }) {
                   <button key={cv.key}
                     className="w-full flex items-center gap-3 px-3 py-2.5 border-b border-zinc-100 text-left hover:bg-zinc-50 active:bg-zinc-100"
                     onClick={() => { setCanal(cv.key); setVue("chat"); }}>
-                    {avatar(cv, 50)}
+                    <div className="relative shrink-0">
+                      {avatar(cv, 50)}
+                      {!cv.groupe && enLigne.has(cv.key) && <span className="absolute bottom-0 right-0 w-3.5 h-3.5 rounded-full bg-[#25d366] border-2 border-white" title="En ligne" />}
+                    </div>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-baseline justify-between gap-2">
                         <span className="font-semibold text-[15px] text-zinc-900 truncate">{cv.titre}</span>
@@ -5343,8 +5610,14 @@ function MessagerieEquipe({ role, userActif, comptes }) {
                 {avatar(convActive, 38)}
                 <div className="min-w-0 flex-1">
                   <div className="font-semibold truncate leading-tight">{convActive.titre}</div>
-                  <div className="text-[11px] text-white/80 truncate">{convActive.sous}</div>
+                  <div className="text-[11px] text-white/80 truncate">{(!convActive.groupe && ecritPar[convActive.key] && Date.now() - ecritPar[convActive.key] < 4500) ? "✍️ écrit…" : (!convActive.groupe && enLigne.has(convActive.key)) ? "🟢 en ligne" : convActive.sous}</div>
                 </div>
+                {!convActive.groupe && (
+                  <>
+                    <button className="text-white/90 text-xl px-2 disabled:opacity-40" onClick={() => lancerAppel("audio")} disabled={!!appel} aria-label="Appel audio" title="Appel audio">📞</button>
+                    <button className="text-white/90 text-xl px-2 disabled:opacity-40" onClick={() => lancerAppel("video")} disabled={!!appel} aria-label="Appel vidéo" title="Appel vidéo">🎥</button>
+                  </>
+                )}
                 <button className="text-white/90 text-xl px-2" onClick={fermer} aria-label="Fermer">✕</button>
               </div>
 
@@ -5362,6 +5635,35 @@ function MessagerieEquipe({ role, userActif, comptes }) {
                   const cleM = m.cle || String(m.id);
                   const enCoursDeLecture = lecture && lecture.cle === cleM;
                   const nouveauJour = i === 0 || new Date(m.date).toDateString() !== new Date(messagesDuCanal[i - 1].date).toDateString();
+                  if (m.type === "appel") {
+                    let info = {}; try { info = JSON.parse(m.contenu) || {}; } catch (e) { info = {}; }
+                    const aud = info.m === "video" ? "vidéo" : "audio";
+                    const s = info.s;
+                    const txt = s === "termine" ? "Appel " + aud + (info.d > 0 ? " · " + formaterDuree(info.d) : "")
+                      : s === "manque" ? (moi ? "Appel " + aud + " sans réponse" : "Appel " + aud + " manqué")
+                      : s === "refuse" ? "Appel " + aud + " refusé"
+                      : s === "occupe" ? (moi ? "Ligne occupée" : "Appel " + aud + " manqué (tu étais en appel)")
+                      : s === "annule" ? (moi ? "Appel " + aud + " annulé" : "Appel " + aud + " manqué")
+                      : "Appel " + aud + " interrompu";
+                    const rate = !moi && (s === "manque" || s === "annule" || s === "occupe");
+                    return (
+                      <div key={cleM}>
+                        {nouveauJour && (
+                          <div className="flex justify-center my-2">
+                            <span className="bg-white/90 text-zinc-600 text-[11px] px-3 py-1 rounded-lg shadow-sm capitalize">{libelleJour(m.date)}</span>
+                          </div>
+                        )}
+                        <div className="flex justify-center my-1">
+                          <div className="bg-white/95 rounded-lg px-3 py-1.5 text-xs flex items-center gap-2 shadow-sm">
+                            <span>{info.m === "video" ? "🎥" : "📞"}</span>
+                            <span className={rate ? "text-red-600 font-semibold" : "text-zinc-700"}>{txt}</span>
+                            <span className="text-zinc-400">{heureDe(m)}</span>
+                            {!convActive.groupe && <button className="text-[#00a884] font-semibold" onClick={() => lancerAppel(info.m === "video" ? "video" : "audio")} disabled={!!appel}>Rappeler</button>}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  }
                   return (
                     <div key={cleM}>
                       {nouveauJour && (
@@ -5402,7 +5704,7 @@ function MessagerieEquipe({ role, userActif, comptes }) {
                             <BoutonSupprimer label="🗑️" boutonClass="text-[10px] h-5 px-1 opacity-60" onSupprimer={() => supprimerMessage(m)} />
                             <div className="flex items-center gap-1 text-[10.5px] text-zinc-500">
                               <span>{heureDe(m)}</span>
-                              {moi && <span className="text-[12px] leading-none" title={m.livre ? "Reçu par tout le monde" : "Envoyé"}>{m.livre ? "✓✓" : "✓"}</span>}
+                              {moi && <span className={"text-[12px] leading-none " + (m.lu ? "text-sky-500 font-bold" : "")} title={m.lu ? "Lu" : m.livre ? "Reçu" : "Envoyé"}>{m.livre || m.lu ? "✓✓" : "✓"}</span>}
                             </div>
                           </div>
                         </div>
@@ -5453,7 +5755,7 @@ function MessagerieEquipe({ role, userActif, comptes }) {
                         className="flex-1 min-w-0 bg-transparent outline-none text-[15px] py-2"
                         placeholder="Message"
                         value={texte}
-                        onChange={e => setTexte(e.target.value)}
+                        onChange={e => { setTexte(e.target.value); signalerEcriture(); }}
                         onKeyDown={e => { if (e.key === "Enter") { envoyer("texte", texte); setTexte(""); } }}
                       />
                       <button className="text-xl px-1.5 text-zinc-500" onClick={() => inputFichierImportRef.current?.click()} aria-label="Joindre une photo ou une vidéo">📎</button>
